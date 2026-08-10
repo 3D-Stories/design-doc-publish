@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="design-doc-publish">
-<title>Implementation plan for packaging as a plugin</title>
+<title>Migrating the billing service to the new ledger</title>
 <style>
 :root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
 --line:#2a353c;--accent:#2dd4bf;--code:#232d34}
@@ -345,36 +345,43 @@ color:var(--ink-3);background:var(--code)}
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">design artifact · updated 2026-08-10 16:10 MDT</div>
-<h1>Implementation plan for packaging as a plugin</h1>
+<div class="eyebrow">design artifact · updated 2026-08-10 16:18 MDT</div>
+<h1>Migrating the billing service to the new ledger</h1>
 
 </header>
 <main>
-<h1>Implementation plan — #2 package as an installable plugin</h1>
-<p>Design: <code>docs/planning/2026-08-10-2-package-as-plugin.md</code> (including its post-gate amendments) · Base <code>e733007</code> · Baseline <code>2257 passed, 4 skipped, exit 0</code></p>
-<p>Verification strategy: red before green per task wherever a test can express the change. The guard in T6 is written FIRST and fails until T1 and T2 land. Scoped suites during iteration. The full suite runs once at Step 9, diffed against the baseline above.</p>
-<table>
-<thead><tr><th>#</th><th>Task</th><th>riskLevel</th><th>Verification</th></tr></thead>
+<p>A worked example, written to be rendered. It is deliberately ordinary markdown — no styling, no HTML — so that what you see in the rendered page comes from the renderer and not from the source.</p>
+<section class="mstone rm-epic"><h3>Why this is happening <span class="chip c-plan">—</span></h3><p>The billing service writes to two places that disagree. Reconciliation runs nightly and papers over the difference, which means every disagreement is invisible for up to a day, and the fix is always retrospective.</p>
+<p>The new ledger makes one of those two places authoritative. That is the whole change. Everything below is the sequencing needed to do it without a night where money is unaccounted for.</p></section>
+<section class="mstone rm-epic"><h3>Phases <span class="chip c-conf">DONE</span></h3><table>
+<thead><tr><th>Phase</th><th>State</th><th>Detail</th></tr></thead>
 <tbody>
-<tr><td>T6</td><td>New guard <code>scripts/tests/test_plugin_packaging.py</code>, written red: manifest carries the eight fields, marketplace lists the skill, <code>SKILL.md</code> uses <code>${CLAUDE_PLUGIN_ROOT}</code>, no <code>~/.claude/skills/</code>-rooted path survives, no unlicensed vendored set present, zero dangling <code>nsmith-html</code> references outside the notices</td><td>medium</td><td>the guard, red first then green</td></tr>
-<tr><td>T1</td><td><code>.claude-plugin/plugin.json</code> (concrete content in design item 11) and <code>.claude-plugin/marketplace.json</code> (<code>source: &quot;./&quot;</code>, <code>strict: true</code>, <code>skills: [&quot;./skills/design-doc-publish&quot;]</code>)</td><td>medium</td><td>T6</td></tr>
-<tr><td>T2</td><td>Move <code>SKILL.md</code> → <code>skills/design-doc-publish/SKILL.md</code>. Rewrite lines 12, 42, 81 to <code>${CLAUDE_PLUGIN_ROOT}/</code></td><td><strong>high</strong></td><td>T6</td></tr>
-<tr><td>T3</td><td>Repoint four SKILL.md locators: <code>test_style_reachability.py:29</code>, <code>test_chip_vocabulary_is_documented.py:38</code>, <code>test_publish_doc.py:927</code>, <code>:1230</code></td><td>low</td><td>those suites, scoped</td></tr>
-<tr><td>T4</td><td>Rewrite three install-shape assertions in <code>test_publish_doc.py</code> (<code>:1084</code>, <code>:1088</code>, <code>:1092</code>). The last pinned the checkout directory NAME — replace with an existence check relative to the package root</td><td>medium</td><td><code>pytest scripts/tests/test_publish_doc.py</code></td></tr>
-<tr><td>T5</td><td>Delete <code>references/nsmith-html/</code> (20 templates + <code>LICENSE-upstream.txt</code>). Update <code>tests/test_vendored_references.py</code>, <code>references/README.md</code>, <code>references/manifest.json</code>, and the nine <code>scripts/render/templates/*.py</code> comments. Record the removal and pinned upstream commit in <code>docs/third-party-notices.md</code></td><td><strong>high</strong></td><td><code>pytest tests/</code>, plus T6&#x27;s referential-integrity assertion</td></tr>
-<tr><td>T7</td><td>Remove <code>docs/vercel-account.md</code> from this repo (owner decision D13 — it documents one account, not the tool)</td><td>medium</td><td>T6 asserts it is absent from the shipped tree</td></tr>
-<tr><td>T10</td><td><code>README.md</code> install section: <code>claude plugin marketplace add</code> then <code>claude plugin install</code>, in that order. The human-facing command must NOT use <code>${CLAUDE_PLUGIN_ROOT}</code>, which no shell expands</td><td>low</td><td>scoped doc guards</td></tr>
-<tr><td>T11</td><td>Live verification. Install the real plugin, assert the resolved skill root is under <code>~/.claude/plugins/cache/</code> and NOT the legacy symlink, render one real <code>.md</code> end to end through the installed copy with all 7 stages OK, confirm a genuinely fresh session can invoke it, then uninstall AND remove the orphaned version directory, asserting both settings and cache path are gone</td><td><strong>high</strong></td><td>AC3, AC4, AC6 — evidence captured verbatim</td></tr>
+<tr><td>Shadow writes</td><td>done</td><td>Write to both, compare, alert on drift. No behaviour change.</td></tr>
+<tr><td>Drift burn-down</td><td>active</td><td>Fix every mismatch the comparison finds, until a week reads clean.</td></tr>
+<tr><td>Cutover</td><td>planned</td><td>Ledger becomes authoritative. The old table becomes a mirror.</td></tr>
+<tr><td>Remove the mirror</td><td>planned</td><td>Only after a full billing cycle with no reconciliation delta.</td></tr>
 </tbody>
-</table>
-<p>Three tasks are <code>riskLevel: high</code> (T2, T5, T11), so <strong>Step 8a per-task review is mandatory</strong> as one accumulated wave over their commits.</p>
-<section class="mstone rm-epic"><h3>Deferred verification <span class="chip c-plan">—</span></h3><p>None planned. T11 is the live check and runs in-run. If the fresh-session half (AC3) cannot be completed from inside this session, it is recorded as a deferral carrying its local proxy and its target check, never silently dropped.</p></section>
-<section class="mstone rm-epic"><h3>Sequencing <span class="chip c-plan">—</span></h3><p>T6 (red) → T1 → T2 → T3 → T4 → T5 → T7 → T10 → T11. T3 and T4 both edit <code>test_publish_doc.py</code>, so they run adjacent and in that order.</p></section>
-<section class="mstone rm-epic"><h3>Scope note <span class="chip c-plan">—</span></h3><p>T7 removes <code>docs/vercel-account.md</code>, which stays in #2 because it is about what the plugin ships.</p>
-<p>The setup flow does NOT ship here. Owner decision D14 split it into its own child, <a href="https://github.com/3D-Stories/design-doc-publish/issues/9">#9</a>, which now carries the setup entry point and the retirement of the hardcoded <code>~/rawgentic/.rawgentic_workspace.json</code> default at <code>scripts/publish_doc.py:134</code> and <code>index/build_index.py:75</code>. #9 depends on #2 and is in this run&#x27;s queue. So #2 stays inside its six original acceptance criteria.</p></section>
+</table></section>
+<section class="mstone rm-epic"><h3>What could go wrong <span class="chip c-plan">—</span></h3><table>
+<thead><tr><th>Risk</th><th>Level</th><th>Mitigation</th></tr></thead>
+<tbody>
+<tr><td>A drift class we have not seen yet</td><td>bug:must</td><td>Burn-down does not end on a timer, it ends on a clean week.</td></tr>
+<tr><td>Cutover during a billing run</td><td>crit</td><td>Cutover is gated to the quiet window, and refuses outside it.</td></tr>
+<tr><td>The mirror is removed too early</td><td>warn</td><td>One full cycle, measured, not estimated.</td></tr>
+<tr><td>Reporting queries still read the old table</td><td>feature:should</td><td>Inventory every reader before cutover.</td></tr>
+</tbody>
+</table></section>
+<section class="mstone rm-epic"><h3>The one thing to get right <span class="chip c-plan">—</span></h3><p><strong>The cutover is reversible for exactly as long as the mirror exists.</strong> That is why removing the mirror is its own phase, after a full cycle, rather than a tidy-up at the end of the cutover. A rollback after the mirror is gone is a restore from backup, which is a different and much worse conversation.</p></section>
+<section class="mstone rm-epic"><h3>Open questions <span class="chip c-plan">—</span></h3><ol>
+<li>Does the nightly reconciliation job need to keep running during burn-down, or does the comparison</li>
+</ol>
+<p>   already cover it? Leaning yes to keeping it, because it is cheap and it is the thing that would    catch a mistake in the comparison itself.</p>
+<ol start="2">
+<li>Who owns the quiet-window definition? It is currently a constant in two services.</li>
+</ol></section>
 
 </main>
-<footer>Last updated: 2026-08-10 16:10 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-08-10 16:18 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>

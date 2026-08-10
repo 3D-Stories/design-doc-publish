@@ -8,13 +8,16 @@ it directly, and everything below is a command you can paste into a terminal.
 
 ## What the output looks like
 
-![A rendered roadmap page: dark background, an eyebrow line reading DESIGN ARTIFACT, a large title,
-and a table of tasks with risk levels and inline code
-spans](docs/examples/example-roadmap.png)
+![A rendered page on a dark background: an eyebrow line reading DESIGN ARTIFACT with a timestamp, a
+large title, then sectioned cards with a green left edge. One card header carries a small green DONE
+chip, and the cards hold tables of phases and
+risks](docs/examples/example-roadmap.png)
 
-That page is committed at [`docs/examples/example-roadmap.html`](docs/examples/example-roadmap.html)
-— open it in a browser and it is exactly what you see above. It was produced by the command in the
-next section from an ordinary markdown file, with no styling in the source.
+Both halves of that are committed, so neither can rot into a promise:
+[`docs/examples/example-source.md`](docs/examples/example-source.md) is the ordinary markdown that
+went in — no styling, no HTML — and
+[`docs/examples/example-roadmap.html`](docs/examples/example-roadmap.html) is the page that came out.
+Open the HTML in a browser and it is exactly what you see above.
 
 ## Install it
 
