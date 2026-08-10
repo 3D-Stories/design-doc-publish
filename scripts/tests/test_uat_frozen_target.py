@@ -5,7 +5,7 @@ it has some of the right elements — checkboxes, comment boxes, a report you pa
 made it the closest of the ten and still not close.
 
 The target is `docs/planning/shots/target-uat-checklist.png` and `-items.png`, captured from
-`https://saystory-uat-checklist.vercel.app/`. **The capture is the spec, not the URL.** Its five
+a deployed UAT checklist page. **The capture is the spec, not the URL.** Its five
 signature devices, and what each test below is holding in place:
 
 1. a two-tone display headline, phrases alternating ink and accent, as the first-read element

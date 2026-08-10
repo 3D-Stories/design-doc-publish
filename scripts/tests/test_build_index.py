@@ -42,9 +42,9 @@ LS_JSON = (FIXTURES / "vercel_project_ls.json").read_text(encoding="utf-8")
 # not-JSON tests feed.
 LS_TABLE = (FIXTURES / "vercel_project_ls.txt").read_text(encoding="utf-8")
 
-EXPECTED = ["saystory-avx512-floor", "rawgentic-analysis-756-spikes",
-            "claude-skills-plan-786", "claude-skills-design-templates",
-            "saystory-uat-checklist"]
+EXPECTED = ["example-alpha-spike", "example-analysis-412",
+            "claude-skills-plan-786", "example-design-templates",
+            "example-uat-checklist"]
 
 
 def _index_module():
@@ -486,7 +486,7 @@ class TestDocumentLinksOpenInANewTab:
             {"name": "claude-skills-design-130", "url": "https://claude-skills-design-130.vercel.app",
              "title": "First read device", "group": "claude-skills", "chip": "design",
              "updated": datetime(2026, 8, 5, 6, 0, tzinfo=timezone.utc), "updated_src": "page"},
-            {"name": "saystory-avx512-floor", "url": "https://saystory-avx512-floor.vercel.app",
+            {"name": "example-alpha-spike", "url": "https://example-alpha-spike.vercel.app",
              "title": "AVX512 floor", "group": "saystory", "chip": "analysis",
              "updated": datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc), "updated_src": "deploy"},
         ]

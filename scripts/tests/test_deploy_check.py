@@ -61,7 +61,7 @@ class TestItFindsThePageNobodyDeployed:
         assert deploy_check.undeployed(tmp_path) == [tmp_path / "plan.html"]
 
     def test_a_rendered_page_whose_markdown_links_it_is_quiet(self, tmp_path):
-        _doc(tmp_path, "plan", md="# Plan\n\n· [live](https://claude-skills-plan.vercel.app)\n")
+        _doc(tmp_path, "plan", md="# Plan\n\n· [live](https://example-plan-118.vercel.app)\n")
         assert deploy_check.undeployed(tmp_path) == []
 
     def test_a_live_link_inside_the_html_also_counts(self, tmp_path):
