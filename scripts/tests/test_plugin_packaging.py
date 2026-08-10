@@ -58,11 +58,31 @@ def _in_a_git_repo() -> bool:
     """These tests SHIP inside the plugin, and an installed copy has no `.git` — measured:
     an install copies working-tree files and leaves `.git` behind. So anything that shells
     out to git must ask first, or a stranger running the suite from their install gets
-    failures that say nothing about their install."""
-    return subprocess.run(
-        ["git", "-C", str(ROOT), "rev-parse", "--git-dir"],
-        capture_output=True,
-    ).returncode == 0
+    failures that say nothing about their install.
+
+    Two traps here, both raised by the Step-8a review and both real:
+
+    - `rev-parse --git-dir` WALKS UP. If the install sits anywhere beneath an unrelated
+      repository it answers yes, and the source-only guards then scan that foreign repo,
+      find nothing, and pass vacuously — a silent false green, which is worse than the
+      failure it replaced. So resolve the top level and require it to be exactly ROOT.
+    - If `git` is not installed at all, `subprocess.run` raises `FileNotFoundError`. This
+      runs at import, so that would abort COLLECTION rather than produce the promised
+      skips. Catch it.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        return Path(result.stdout.strip()).resolve() == ROOT.resolve()
+    except OSError:
+        return False
 
 
 HAS_GIT = _in_a_git_repo()
@@ -101,6 +121,40 @@ class TestTheManifest:
         data = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
         missing = REQUIRED_MANIFEST_KEYS - set(data)
         assert not missing, f"plugin.json is missing required keys: {sorted(missing)}"
+
+    def test_every_required_field_holds_a_usable_VALUE(self):
+        """Step-8a review: checking key PRESENCE lets `author: null`, an empty repository or a
+        string-valued `keywords` through, while the guard claims to pin the manifest. Presence
+        is not the property anyone cares about — a usable value is."""
+        data = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
+        for field in ("name", "version", "description", "homepage", "repository", "license"):
+            value = data[field]
+            assert isinstance(value, str) and value.strip(), (
+                f"{field} must be a non-empty string, got {value!r}")
+        author = data["author"]
+        assert isinstance(author, dict), f"author must be an object, got {type(author).__name__}"
+        assert isinstance(author.get("name"), str) and author["name"].strip(), (
+            "author.name must be a non-empty string")
+        keywords = data["keywords"]
+        assert isinstance(keywords, list) and keywords, "keywords must be a non-empty list"
+        assert all(isinstance(k, str) and k.strip() for k in keywords), (
+            "every keyword must be a non-empty string")
+
+    def test_the_description_does_not_promise_what_it_cannot_do(self):
+        """Step-8a review, and the finding was right. The description is the FIRST thing a
+        stranger reads, before any README. It promised a command that deploys and verifies,
+        while publishing actually stops at stage 2 of 7 for anyone but the author — measured:
+        `--project '<name>' is not a rawgentic project in ~/rawgentic/.rawgentic_workspace.json`.
+        A README caveat does not correct a marketplace-facing claim."""
+        for manifest, path in ((json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8")),
+                                "plugin.json"),
+                               (json.loads(MARKETPLACE.read_text(encoding="utf-8"))["plugins"][0],
+                                "marketplace.json")):
+            description = manifest["description"].lower()
+            if "deploy" in description or "publish" in description:
+                assert "not yet available" in description or "requires" in description, (
+                    f"{path}'s description mentions deploying or publishing without saying it "
+                    "is unavailable to other users until #9 lands")
 
     def test_the_name_matches_the_skill_directory(self):
         data = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))
@@ -291,10 +345,12 @@ class TestWhatShipsToAStranger:
         # the SENTENCE that disclosed the posture, not a vocabulary word that appears near it.
         # A guard that fires on correct content teaches people to ignore it.
         markers = ("Advanced Deployment Protection is not enabled",)
-        allowed = {
-            "docs/planning/",   # planning documents record what was removed and why
-            "scripts/tests/test_plugin_packaging.py",
-        }
+        # `docs/planning/` is NOT exempt any more. The Step-8a review caught this document
+        # set reproducing the exact posture sentence that deleting docs/vercel-account.md was
+        # meant to remove — and planning documents ship too, so the exemption made the guard
+        # complicit in the leak it existed to stop. Only this file is exempt, because it must
+        # name the string it hunts.
+        allowed = {"scripts/tests/test_plugin_packaging.py"}
         offenders = []
         for path in _text_files():
             relative = path.relative_to(ROOT).as_posix()

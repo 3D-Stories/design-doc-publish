@@ -206,9 +206,11 @@ the removal deliberately remains.
 ### 17. What must not ship, and a setup flow for people who are not the owner (finding 7 + owner decision D13)
 
 Finding 7 measured the bundle rather than assuming it. `source: "./"` ships all 137 tracked files,
-including `docs/vercel-account.md`, which names the `3d-stories` Vercel team and records that its
-deployment protection is deliberately off. That is a security-posture disclosure to every stranger
-who installs the plugin, and it was not in front of the owner when D12 was decided. Escalated.
+including `docs/vercel-account.md`. That file documented one account's deployment-protection
+posture, which is a disclosure to every stranger who installs the plugin. The specifics are
+deliberately NOT restated here: the Step-8a review pointed out that this document ships too, so
+repeating them would reproduce the very leak that deleting the file was meant to close. Escalated
+to the owner, who had not had this in front of them when D12 was decided.
 
 **Owner decision D13, then D14.** Two things follow, and only the first belongs to this change.
 

@@ -22,7 +22,7 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2216 passed, 7 skipped**, exit 0.
+Expected: **2218 passed, 7 skipped**, exit 0.
 
 Three of those skips are deliberate and name their own reason under `pytest -rs`: the
 per-template guards have nothing to check since the unlicensed vendored set was removed,
