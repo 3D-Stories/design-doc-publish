@@ -39,7 +39,5 @@ conversation.
 
 ## Open questions
 
-1. Does the nightly reconciliation job need to keep running during burn-down, or does the comparison
-   already cover it? Leaning yes to keeping it, because it is cheap and it is the thing that would
-   catch a mistake in the comparison itself.
+1. Does the nightly reconciliation job keep running during burn-down? Leaning yes, because it is cheap and it would catch a mistake in the comparison itself.
 2. Who owns the quiet-window definition? It is currently a constant in two services.

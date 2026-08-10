@@ -129,7 +129,11 @@ def test_readme_advertises_no_token_the_renderer_would_reject():
     section = text[start:end]
     # The bare-token list is the run of single-word backticked spans before the compound prose.
     advertised = {m for m in re.findall(r"`([a-z][a-z-]*)`", section)}
-    known = set(blocks._PHASE_STATES) | set(blocks._PHASE_LEVELS) | set(blocks._PHASE_LABELS)
+    # Validate the BARE list against the bare set only. Unioning in levels and labels was the
+    # review's finding 5, and it was right: a token dropped from _PHASE_STATES while surviving
+    # as a compound label would still have passed, which is precisely the documented-but-
+    # rejected promise this test exists to catch.
+    known = set(blocks._PHASE_STATES)
     # Words the section uses ABOUT the vocabulary rather than as a token.
     prose = {"label", "level", "design-language", "md"}
     unknown = {tok for tok in advertised - known - prose if ":" not in tok}

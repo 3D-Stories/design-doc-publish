@@ -40,10 +40,14 @@ that the path is written out in full: `${CLAUDE_PLUGIN_ROOT}` is expanded by Cla
 skill, and your shell does **not** expand it, so it is no use in a command you paste.
 
 ```bash
-DDP=~/.claude/plugins/cache/design-doc-publish/design-doc-publish/1.0.0
+DDP=$(ls -d ~/.claude/plugins/cache/design-doc-publish/design-doc-publish/*/ | sort -V | tail -1)
 printf '# Hello\n\nA first page.\n\n## A section\n\nSome prose.\n' > hello.md
 python3 "$DDP/scripts/render-doc" --md hello.md --out hello.html --title "Hello"
 ```
+
+The first line finds whichever version you installed, rather than naming one. A literal version
+would break on the next release, and worse, could silently pick up a stale copy that uninstalling
+left behind.
 
 **If you cloned the repo instead**, run it from the checkout:
 
@@ -141,7 +145,7 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2235 passed, 7 skipped**, exit 0.
+Expected: **2238 passed, 7 skipped**, exit 0.
 
 Three of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
 `python3 -m pytest` — on the machine this package came from, the interpreter cannot import pytest
