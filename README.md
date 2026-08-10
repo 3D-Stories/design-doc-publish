@@ -30,7 +30,19 @@ so it will not see a plugin installed after it began.
 
 ## Your first page
 
-This works with nothing configured — no account, no workspace file, no network:
+This works with nothing configured — no account, no workspace file, no network.
+
+**If you installed the plugin**, the scripts live inside the install, so point at them there. Note
+that the path is written out in full: `${CLAUDE_PLUGIN_ROOT}` is expanded by Claude when it loads a
+skill, and your shell does **not** expand it, so it is no use in a command you paste.
+
+```bash
+DDP=~/.claude/plugins/cache/design-doc-publish/design-doc-publish/1.0.0
+printf '# Hello\n\nA first page.\n\n## A section\n\nSome prose.\n' > hello.md
+python3 "$DDP/scripts/render-doc" --md hello.md --out hello.html --title "Hello"
+```
+
+**If you cloned the repo instead**, run it from the checkout:
 
 ```bash
 printf '# Hello\n\nA first page.\n\n## A section\n\nSome prose.\n' > hello.md
