@@ -257,6 +257,60 @@ class TestWhatShipsToAStranger:
             "docs/vercel-account.md documents one account, not the tool, and every install "
             "would copy it")
 
+    @needs_the_source_repo
+    def test_no_account_identifier_ships_under_ANY_filename(self):
+        """Cross-model review, #2: the check above uses one FILENAME as the boundary, so the
+        same disclosure under any other name ships silently. That is a real gap — the review
+        was right — and a filename is the wrong boundary for a content property.
+
+        So this scans CONTENT instead. It is deliberately narrow: it hunts the account
+        identifiers this project actually has, rather than pretending to be a general secret
+        scanner. Step 11.5 runs real scanners. This stops the specific regression that removing
+        docs/vercel-account.md was meant to fix.
+
+        **What this does NOT do, said plainly rather than left to be discovered.** The reviewer's
+        stronger proposal was an allowlist of shipped paths, enforced by packaging from a
+        generated clean subtree. That is the `dist/` design, and the owner declined it as ~115
+        duplicated files in a repo whose own .gitignore argues against committed derived
+        artifacts. So the residual stands: a NEW kind of account-specific content, under a new
+        name and using none of these words, would still ship. This narrows the hole the removed
+        document opened. It does not close the class.
+        """
+        # Deliberately NOT the string "3d-stories". That is also the public GitHub org, so it
+        # appears legitimately in the manifest, the repository URLs and the README. Using it
+        # would make this guard cry wolf on correct content, and a guard nobody believes gets
+        # deleted. What made the removed document a disclosure was its POSTURE claim.
+        #
+        # Known and deliberately out of scope for #2, reported rather than silently passed:
+        #   - scripts/tests/fixtures/vercel_project_ls.* carry real project names from the
+        #     account. That is the sanitisation sweep, issue #4 (its AC6 names exactly this).
+        #   - VERCEL_SCOPE is hardcoded at scripts/publish_doc.py:129 and
+        #     index/build_index.py:39, so the tool targets one team. That is issue #9.
+        # Also NOT "invalid_sso_protection" on its own: that is a public Vercel API error
+        # code, used legitimately as test data in test_deploy_check.py. The marker has to be
+        # the SENTENCE that disclosed the posture, not a vocabulary word that appears near it.
+        # A guard that fires on correct content teaches people to ignore it.
+        markers = ("Advanced Deployment Protection is not enabled",)
+        allowed = {
+            "docs/planning/",   # planning documents record what was removed and why
+            "scripts/tests/test_plugin_packaging.py",
+        }
+        offenders = []
+        for path in _text_files():
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in allowed or any(relative.startswith(a) for a in allowed):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            lowered = text.lower()
+            for marker in markers:
+                if marker.lower() in lowered:
+                    offenders.append(f"{relative} names {marker!r}")
+        assert not offenders, (
+            "an install copies every one of these to every stranger: " + "; ".join(offenders))
+
 
 @pytest.mark.parametrize("relative", ["scripts/publish_doc.py", "scripts/render-doc",
                                       "docs/design-language.md", "index/build_index.py"])

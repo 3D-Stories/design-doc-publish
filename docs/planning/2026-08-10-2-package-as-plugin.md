@@ -122,8 +122,8 @@ genuinely fresh session because a live session holds already-resolved paths.
 | 1 — manifest with 8 fields | Item 11, guard test in item 9 |
 | 2 — description a stranger can act on | Item 1 |
 | 3 — installs, invocable in a fresh session | Verified by install + a genuinely new session |
-| 4 — installed copy renders end to end, 7 stages OK | Verified against the installed copy |
-| 5 — stated version, tagged release | Item 1 + a tag |
+| 4 — installed copy renders end to end, 7 stages OK | **PARTIAL — not verified.** Stages 1/7, 2/7 and 3/7 passed from the installed copy, and a lint message resolved a path inside the install root. Stages 4-7 deploy publicly and were NOT run, so the seven-stage claim is UNSUBSTANTIATED and recorded as a deferral |
+| 5 — stated version, tagged release | **PARTIAL.** The manifest states `1.0.0`. NO tag is created by this change: the cross-model review showed the plugin cannot complete its advertised work for anyone but the author until #9 lands, so tagging a release would publish a claim that is not true yet. #9 is a release prerequisite |
 | 6 — uninstall is clean, no dangling symlink or stale path | Verified against the REAL uninstall
   behavior probed above: the version directory is left behind marked `.orphaned_at`, so "clean"
   is asserted about settings and the skill's availability, and the residue is documented rather

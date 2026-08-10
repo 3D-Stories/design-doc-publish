@@ -22,7 +22,7 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2215 passed, 7 skipped**, exit 0.
+Expected: **2216 passed, 7 skipped**, exit 0.
 
 Three of those skips are deliberate and name their own reason under `pytest -rs`: the
 per-template guards have nothing to check since the unlicensed vendored set was removed,
@@ -61,9 +61,19 @@ Uninstalling deregisters the plugin but leaves its files on disk, in a version d
 `.orphaned_at` under `~/.claude/plugins/cache/design-doc-publish/`. Delete that directory if you
 want the disk back.
 
-**Deploying needs an authenticated Vercel account.** Rendering to HTML does not. Nothing walks you
-through that yet — [#9](https://github.com/3D-Stories/design-doc-publish/issues/9) is the setup
-flow that will.
+### It is not usable end to end yet, and here is exactly where it stops
+
+Installing works. Rendering to HTML works. **Publishing does not work for anyone but the author
+yet**, and it stops in a specific place, measured rather than guessed:
+
+- Stage 1 of 7 renders your markdown to HTML. This works.
+- Stage 2 of 7 refuses: `--project '<name>' is not a rawgentic project in
+  ~/rawgentic/.rawgentic_workspace.json`. That path is hardcoded, and you do not have that file.
+- The Vercel team is hardcoded too, so deploys would target a team you are not in.
+
+[#9](https://github.com/3D-Stories/design-doc-publish/issues/9) is the first-run setup flow that
+fixes both. **No release is tagged until it lands**, because tagging one would advertise something
+that is not true yet.
 
 ## Licence
 
