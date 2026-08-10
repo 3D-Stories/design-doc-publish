@@ -54,8 +54,30 @@ REQUIRED_MANIFEST_KEYS = {
 LEGACY_INSTALL_RE = re.compile(r"(CLAUDE_CONFIG_DIR|\.claude/skills/design-doc-publish)")
 
 
+def _in_a_git_repo() -> bool:
+    """These tests SHIP inside the plugin, and an installed copy has no `.git` — measured:
+    an install copies working-tree files and leaves `.git` behind. So anything that shells
+    out to git must ask first, or a stranger running the suite from their install gets
+    failures that say nothing about their install."""
+    return subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--git-dir"],
+        capture_output=True,
+    ).returncode == 0
+
+
+HAS_GIT = _in_a_git_repo()
+
+needs_the_source_repo = pytest.mark.skipif(
+    not HAS_GIT,
+    reason="this guard asks about the SOURCE repository's shape, and there is no repository "
+           "here. The suite ships inside the plugin, so it also runs from an installed copy, "
+           "where git is absent by design — an install copies working-tree files and leaves "
+           "`.git` behind. Skipping is the honest answer, not a failure.",
+)
+
+
 def _tracked_files() -> list[Path]:
-    """Every file git tracks — which is exactly what an install would copy."""
+    """Every file git tracks — which is what a clone, and therefore a real install, carries."""
     out = subprocess.run(
         ["git", "-C", str(ROOT), "ls-files"],
         capture_output=True, text=True, check=True,
@@ -129,6 +151,7 @@ class TestTheSkillIsPluginRooted:
             "SKILL.md must reach its bundled scripts through ${CLAUDE_PLUGIN_ROOT}, which "
             "the harness expands when it loads skill content")
 
+    @needs_the_source_repo
     def test_no_file_still_points_at_the_old_symlink_install(self):
         """The whole point of the change. A survivor here resolves to nothing once
         installed, and it fails at the moment somebody else first tries the tool."""
@@ -171,6 +194,7 @@ class TestWhatShipsToAStranger:
         assert (kept / "LICENSE-upstream.txt").is_file(), (
             "the upstream notice must travel with the material it covers")
 
+    @needs_the_source_repo
     def test_no_dangling_reference_to_the_removed_set(self):
         """Deleting files is half the job. A comment or fixture still naming them is a
         pointer to nothing, which reads as an answer and delivers none.
@@ -201,6 +225,7 @@ class TestWhatShipsToAStranger:
         assert not offenders, (
             "these still name the removed vendored set: " + ", ".join(offenders))
 
+    @needs_the_source_repo
     def test_private_working_state_can_never_reach_the_distribution_source(self):
         """Measured during #2's live verification, and it was a surprise worth pinning.
 
