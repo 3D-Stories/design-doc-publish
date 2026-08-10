@@ -571,3 +571,56 @@ class TestTheRealChorestoryDeclaration:
         if live is None:
             pytest.skip("chorestory has not declared its block yet; the seed covers it")
         assert live == CHORESTORY_BLOCK
+
+
+# --------------------------------------------------------------------- #9: unconfigured
+
+class TestAnUnconfiguredWorkspaceIsAState:
+    """#9 retires the hardcoded `DEFAULT_WORKSPACE`, so `None` stops being impossible and
+    becomes the ordinary state of a machine that has never run setup.
+
+    The renderer must keep working there. That is the README's first command and the only
+    thing that works for a stranger today, so a colour lookup may degrade to a hash but must
+    never raise — `None.exists()` would be an AttributeError on the default path.
+    """
+
+    def test_pack_for_accepts_none_and_still_returns_a_pack(self):
+        pack = vdl_packs.pack_for("anything", None)
+        assert pack["origin"] == "fallback"
+        assert set(pack["accent"]) == {"light", "dark"}
+
+    def test_a_seeded_project_still_gets_its_seed_without_a_workspace(self):
+        pack = vdl_packs.pack_for("saystory", None)
+        assert pack["origin"] == "seed"
+
+    def test_it_says_nothing_on_stderr(self, capsys):
+        """Absence is the normal first case, so it must be silent. A warning on every render
+        would train people to ignore the warnings that mean something."""
+        vdl_packs.pack_for("anything", None)
+        assert capsys.readouterr().err == ""
+
+    def test_a_workspace_entry_with_no_path_is_silent(self, tmp_path, capsys):
+        """`setup.py --add-project` writes `{"name": ...}` with no `path`, because a project
+        registered by name has no config directory to read. That is absence, and this
+        module's own rule is that only genuine absence is silent."""
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"projects": [{"name": "payments-api"}]}), encoding="utf-8")
+        pack = vdl_packs.pack_for("payments-api", ws)
+        assert pack["origin"] == "fallback"
+        assert capsys.readouterr().err == ""
+
+    def test_a_workspace_entry_with_an_EMPTY_path_still_warns(self, tmp_path, capsys):
+        """Present-but-useless is a different event from absent, and it stays loud."""
+        ws = tmp_path / ".rawgentic_workspace.json"
+        ws.write_text(json.dumps({"projects": [{"name": "widget", "path": ""}]}),
+                      encoding="utf-8")
+        vdl_packs.pack_for("widget", ws)
+        assert "widget" in capsys.readouterr().err
+
+    def test_the_index_and_the_renderer_still_agree_with_no_workspace(self):
+        """The invariant this module exists for: one answer, whoever asks."""
+        index = _index_module()
+        assert index.group_colors("a-brand-new-thing", None) == (
+            vdl_packs.pack_for("a-brand-new-thing", None)["accent"]["dark"],
+            vdl_packs.pack_for("a-brand-new-thing", None)["accent"]["light"],
+        )
