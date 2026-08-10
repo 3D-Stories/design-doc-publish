@@ -924,7 +924,7 @@ class TestGitStaysOut:
 class TestTheSkillCallsTheCommand:
     """AC7. The prose shrinks to judgment: what to write, which type, when to publish."""
 
-    SKILL = SCRIPTS.parent / "SKILL.md"
+    SKILL = SCRIPTS.parent / "skills" / "design-doc-publish" / "SKILL.md"
 
     def _text(self):
         return self.SKILL.read_text(encoding="utf-8")
@@ -1074,23 +1074,28 @@ class TestTheSkillCallsTheCommand:
         than none: it reads as an answer and delivers nothing.
 
         Cross-model review, first pass (gpt-5.6-sol): a repo-relative path was wrong here.
-        This is a USER skill — it installs at `~/.claude/skills/<name>` and runs from
-        whatever project is bound, so `user/design-doc-publish/docs/…` resolves only from
-        this repo's root and nowhere a reader would actually be. The pointer therefore uses
-        the same install-rooted form as the command block above it, and the tail is checked
-        to be a real file rather than a path that merely looks plausible.
+        The skill runs from whatever project is bound, so `docs/…` resolves only from this
+        repo's root and nowhere a reader would actually be. The pointer therefore uses the
+        same install-rooted form as the command block above it, and the tail is checked to
+        be a real file rather than a path that merely looks plausible.
+
+        Updated by #2, when this became a PLUGIN. Two things changed, and both had been
+        pinned here. A plugin skill gets no `~/.claude/skills/<name>` directory at all —
+        verified live against `frontend-design`, which is installed as a plugin and has no
+        such entry — so the old prefix now resolves to nothing. And the previous version of
+        this test asserted the target path ENDED WITH `design-doc-publish/docs/…`, which
+        quietly pinned the checkout directory's NAME. A plugin installs under a version
+        directory, so that assertion would have failed for a reason having nothing to do
+        with what it was trying to check. It is replaced by the existence check it meant.
         """
         text = self._text()
-        tail = "skills/design-doc-publish/docs/design-language.md"
-        assert tail in text, (
-            "SKILL.md must name the component-vocabulary doc install-rooted, not "
-            "repo-relative — a user skill does not run from this repo")
-        assert "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/" + tail in text, (
-            "use the same install root as the runnable command, so one convention holds")
-        target = self.SKILL.parent / "docs" / "design-language.md"
+        tail = "docs/design-language.md"
+        assert "${CLAUDE_PLUGIN_ROOT}/" + tail in text, (
+            "SKILL.md must name the component-vocabulary doc through the plugin root, which "
+            "the harness expands when it loads skill content — a plugin skill does not run "
+            "from this repo and has no ~/.claude/skills path to fall back on")
+        target = SCRIPTS.parent / "docs" / "design-language.md"
         assert target.is_file(), f"SKILL.md points at {target}, which does not exist"
-        assert str(target).endswith("design-doc-publish/docs/design-language.md"), (
-            "the file that exists must be the one the pointer's tail names")
 
     def test_it_contains_exactly_one_runnable_block(self):
         """#19 AC2: zero mechanical steps. One invocation is not a mechanical step — it
@@ -1227,7 +1232,7 @@ class TestTheAssetRuleIsDocumented:
 
     def _skill(self):
         return (Path(publish_doc.__file__).resolve().parent.parent
-                / "SKILL.md").read_text(encoding="utf-8")
+                / "skills" / "design-doc-publish" / "SKILL.md").read_text(encoding="utf-8")
 
     def test_skill_md_states_the_rule_and_the_failure(self):
         text = self._skill()

@@ -37,18 +37,23 @@ Measured at the pinned commits, and pinned by
 | external resource loads in the 20 templates | none |
 | `fetch` / `XHR` / `WebSocket` / `EventSource` / beacon in the templates | none |
 | `javascript:` URLs, inline `on*=` handlers | none |
-| user-clickable `https://ht-ml.app` links | 2 templates — navigation, not automatic traffic |
 | **`@import` of Google Fonts in the themes** | **all 7** |
 
 That is a measurement of this snapshot, not a guarantee. Re-do it on any refresh.
 
 ## Provenance
 
-Vendored 2026-08-02 from `nsmith/html` at commit
-`eece610140a08ebbfdd96938ee1610b19793d1ec` (`assets/templates/*.html`, 20 files), MIT — upstream
-ships **no LICENSE file**, so the evidence for that licence is quoted verbatim in
-`nsmith-html/LICENSE-upstream.txt` rather than retained as a notice. Owner adjudication on
-issue #38, 2026-08-02: MIT, proceed.
+**Removed in issue #2 (2026-08-10): the `nsmith/html` set.** Twenty HTML templates were
+vendored here on 2026-08-02 from commit `eece610140a08ebbfdd96938ee1610b19793d1ec`. Upstream
+ships **no LICENSE file**, and what stood in for one was our own adjudication on issue #38 —
+a decision we made, not a grant the copyright holder gave. Keeping the files in a private repo
+as visual reference was one thing. Shipping them inside a plugin distributed to other people is
+redistribution, and nothing authorised it. So they are gone.
+
+`manifest.json` keeps the removal record and the pinned commit, so restoring the set is one
+command if a real grant is ever established:
+`git checkout eece610140a08ebbfdd96938ee1610b19793d1ec -- references/nsmith-html/`.
+See `docs/third-party-notices.md` before doing that.
 
 Vendored 2026-08-02 from `keepYaoung/artifact-organizer` at commit
 `3e5bc0ef00de784dab48b411b3493c7d72d856ca`
@@ -103,11 +108,13 @@ Using the first would leave exactly the leaked tail this strip exists to remove.
 do not guess — on a missing doctype, a missing `<html>`, an unterminated comment, two sequential
 comment blocks, or any non-whitespace after the terminator.
 
-**Re-validate the licences at the new SHA.** Re-fetch upstream's `LICENSE` (artifact-organizer)
-and the `SKILL.md` frontmatter + `.claude-plugin/plugin.json` declarations (nsmith, which ships
-no `LICENSE`), and update both `LICENSE-upstream.txt` files — including the commit they cite. A
-guard test asserts the nsmith evidence names the same commit the manifest pins, so a refresh
-that advances one without the other fails.
+**Re-validate the licence at the new SHA.** Re-fetch upstream's `LICENSE` (artifact-organizer)
+and update `artifact-organizer/LICENSE-upstream.txt`, including the commit it cites.
+
+**Before vendoring anything new here, establish redistribution rights first.** This directory
+ships inside a distributed plugin, so anything in it is handed to every person who installs.
+That is what removed the previous set. An absent upstream LICENSE is a blocker, not a puzzle to
+adjudicate internally.
 
 Then regenerate `manifest.json`, re-run
 `pytest tests/ -q`, and **review the manifest diff by hand**. Re-do the

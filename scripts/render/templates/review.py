@@ -3,7 +3,7 @@
 First-read element: the verdict headline plus confirmed/refuted counts. Closes with
 `.rv-weakest`, "The claim most likely to be wrong". Keeps `_decorate_severity`.
 
-#40 rebuilt the body against `references/nsmith-html/annotated-pr.html`. Measured, the two
+#40 rebuilt the body against nsmith's `annotated-pr.html`. Measured, the two
 things that page has and we did not are:
 
 * A `.riskmap` — a FLAT list of `.risk-row`s, one per changed file, sitting after the summary
@@ -77,7 +77,7 @@ order, and needs to win on specificity only against a later optional-feature rul
 """
 NAME = "review"
 
-# #76: this style's own page frame. Measured off `references/nsmith-html/annotated-pr.html` by
+# #76: this style's own page frame. Measured off nsmith's `annotated-pr.html` by
 # reading its `<style>` (D66): `.wrap max-width:920px; padding:32px 20px 80px`.
 #
 # 920px sits deliberately between `report`'s 820 and `design`'s 1080. A review is a findings list

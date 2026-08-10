@@ -35,7 +35,7 @@ import pytest  # noqa: E402
 
 from render import blocks  # noqa: E402
 
-SKILL_MD = SCRIPTS.parent / "SKILL.md"
+SKILL_MD = SCRIPTS.parent / "skills" / "design-doc-publish" / "SKILL.md"
 DESIGN_LANGUAGE = SCRIPTS.parent / "docs" / "design-language.md"
 
 

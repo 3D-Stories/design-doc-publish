@@ -3,7 +3,7 @@
 First-read element: the headline of the slide you are on. Nothing else on a slide competes with
 it, which is what makes a deck a deck.
 
-Measured off `references/nsmith-html/slide-deck.html` by reading its `<style>` block (D66):
+Measured off nsmith's `slide-deck.html` by reading its `<style>` block (D66):
 
     .slide  position:absolute; inset:clamp(16px,4vw,56px); max-width:1000px; max-height:640px
     h1      clamp(2.2rem,6vw,4rem); line-height:1.05; letter-spacing:-.02em

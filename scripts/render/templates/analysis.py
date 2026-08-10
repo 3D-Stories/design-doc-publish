@@ -3,7 +3,7 @@
 First-read element: the headline answer, above the index of questions. Each h2 is one
 question; its opening paragraph is the answer and everything after it is the evidence.
 
-#40 rebuilt the body against `references/nsmith-html/concept-explainer.html`. Re-opened and
+#40 rebuilt the body against nsmith's `concept-explainer.html`. Re-opened and
 measured while writing this — and the extraction cross-checked against the raw file, because on
 the previous task a regex silently dropped a section and its output was trusted. That page's
 three prose sections are "How it works", "How it compares" and "Key terms", and the parts this
@@ -105,7 +105,7 @@ NAME = "analysis"
 # could only write `.tpl-analysis .some-widget{…}` and the frame was hardcoded once for everyone.
 # That is why nine styles with 40-67% of their own CSS still read as one page.
 #
-# Measured off `references/nsmith-html/concept-explainer.html` — its `<style>` block read directly,
+# Measured off nsmith's `concept-explainer.html` — its `<style>` block read directly,
 # not a description of it:
 #
 #   .wrap  max-width:880px; padding:48px 24px 96px

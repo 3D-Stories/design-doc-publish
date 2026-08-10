@@ -1,0 +1,22 @@
+{
+  "name": "design-doc-publish",
+  "owner": {
+    "name": "3D-Stories",
+    "url": "https://github.com/3D-Stories"
+  },
+  "metadata": {
+    "description": "Render design and architecture documents from markdown to standalone HTML pages",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "design-doc-publish",
+      "description": "Render a design or architecture document from markdown to a standalone HTML page. Publishing to Vercel is not yet available to anyone but the author: it needs a workspace file and a Vercel team that are still hardcoded, which issue #9 fixes.",
+      "source": "./",
+      "strict": true,
+      "skills": [
+        "./skills/design-doc-publish"
+      ]
+    }
+  ]
+}

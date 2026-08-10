@@ -5,7 +5,7 @@ proportion (`28/44`) draws its own inline bar — §4d's "data tables with inlin
 read through the KPI strip the same sentence specifies, so no new block type is needed.
 Keeps `_decorate_scores`; the closing provenance section is titled "How this was measured".
 
-#40 rebuilt the body against `references/nsmith-html/incident-report.html`. Measured, that page
+#40 rebuilt the body against nsmith's `incident-report.html`. Measured, that page
 is: an at-a-glance `.summary` strip of `.k`/`.v` pairs, a bordered `.panel` for the narrative, a
 `.timeline` whose events hang off coloured `.marker` dots with mono timestamps, and a
 `.checklist` of follow-up `.task`s with an `.owner` chip. The mapping here is
@@ -31,7 +31,7 @@ so a rule here wins on specificity, never on order.
 """
 NAME = "report"
 
-# #76: this style's own page frame. Measured off `references/nsmith-html/incident-report.html` by
+# #76: this style's own page frame. Measured off nsmith's `incident-report.html` by
 # reading its `<style>` block — that file is one of the twelve vendored templates carrying a
 # `<script>`, and the repo's rule is to open those with JavaScript disabled (D66).
 #

@@ -9,7 +9,7 @@ A design doc is done when its `.md` and `.html` are committed **and** the page i
 One command does all of that, and its exit code is the verdict:
 
 ```bash
-"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/design-doc-publish/scripts/publish_doc.py" \
+"${CLAUDE_PLUGIN_ROOT}/scripts/publish_doc.py" \
   --md docs/planning/<doc>.md --title "#<issue> <title>" \
   --project <rawgentic-project> --type design --ref <issue>
 ```
@@ -39,7 +39,7 @@ Every style above is built from **components you have to write** — a compositi
 rail, a timeline, finding cards. Write none, or none of the ones that style **opens with**, and the
 gate refuses it. `--skip-component-checks` (alias `--allow-prose`) skips those two checks, not the
 template-classification one; a re-publish needs `--telemetry <f.json>` or telemetry drops. A sectioned
-style SCANS heading prose for its chip — narrative pages get statuses nobody wrote: `--no-section-chips`. Per style, in full: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/design-doc-publish/docs/design-language.md`.
+style SCANS heading prose for its chip — narrative pages get statuses nobody wrote: `--no-section-chips`. Per style, in full: `${CLAUDE_PLUGIN_ROOT}/docs/design-language.md`.
 
 ## The state cell of a chip is a CLOSED set, not free text
 
@@ -78,7 +78,7 @@ severity word in a new document. Full rules: the design-language.md named above.
   anything interactive. Never judge it by reading the source.
 - **Is it safe in public?** World-readable: secrets by NAME only; strip internal IPs, hostnames and
   hardware identifiers such as drive serials.
-- **Where does it belong, and did the update actually land everywhere?** Some projects keep ONE rolling doc — check for `sharedDoc` first. Updating one is a sweep, not an edit: the same fact sits in a `stats` count, a `phases` row, a `meter` and the prose, and publishing refuses when a phase reads done over children that read open, or when this revision marks something done that another line still calls open (`--ack-stale` to override). It also refuses eight markdown constructs this renderer passes through literally, `~~strikethrough~~` among them. The sweep it cannot do for you, and the eight constructs: `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/design-doc-publish/docs/updating-a-living-document.md`.
+- **Where does it belong, and did the update actually land everywhere?** Some projects keep ONE rolling doc — check for `sharedDoc` first. Updating one is a sweep, not an edit: the same fact sits in a `stats` count, a `phases` row, a `meter` and the prose, and publishing refuses when a phase reads done over children that read open, or when this revision marks something done that another line still calls open (`--ack-stale` to override). It also refuses eight markdown constructs this renderer passes through literally, `~~strikethrough~~` among them. The sweep it cannot do for you, and the eight constructs: `${CLAUDE_PLUGIN_ROOT}/docs/updating-a-living-document.md`.
 - **Committing and reporting.** Never push to main; no blanket `git add`. Stage the `.md` + `.html`
   pair by name under a conventional commit — it rides in the implementing PR when one exists, else a
   standalone `docs:` PR. Check both files are in the diff and it references the issue, then comment

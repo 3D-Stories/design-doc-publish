@@ -3,206 +3,6 @@
   "vendored": "2026-08-02",
   "files": [
     {
-      "path": "nsmith-html/animation-sandbox.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/animation-sandbox.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "9fead4094ecf9448c406c28014a7e6c706124b58",
-      "sha256": "a3bf6ee106213ab74564d1d681680cff8f872302bde790e5624b350d7ca1c509",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/annotated-pr.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/annotated-pr.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "b70507ac669399e024b9ec2b312b2d32f650da06",
-      "sha256": "e169346aeaa5d6a03455c13f667620f5741aa909afca2728c53e87986647c862",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/clickable-flow.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/clickable-flow.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "3d9ce783728274292a8e31996e60104220f7997f",
-      "sha256": "39130bbd34e53344802c51652f8aec57d93cda9531422237ca96a969fb4002be",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/code-approaches.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/code-approaches.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "f48c706de56d376839ff89d87e1ef88cf1746c15",
-      "sha256": "1724cd8ae2953e6872cb35971ceba1c40392bf66f729c3197b7166bb6e7ea377",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/component-variants.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/component-variants.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "76b1ba48c7184b44acda66e4aab0b89434b5542a",
-      "sha256": "0ea8d01fd6908f93964c54430b59e7787e8dcb96deec3497bb5f4299bbdcbd0c",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/concept-explainer.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/concept-explainer.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "b8a7bf1750bed96d0c2f98620a0dde76f0b42ccb",
-      "sha256": "a44e1b79125f6cfe9c5ec570ed916a0252524b39d9e4bcbe05e1bb90ab1eee1b",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/design-system.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/design-system.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "f85ba3cf1d171dd354eefe3511e94246c5c4e0bd",
-      "sha256": "c3c98a35034ca139cf4b57660b4ebdeaf8a3a4be39d5fa8437249e0d38b08d68",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/feature-explainer.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/feature-explainer.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "d4107aac548f0d500df75ed4136df90cfb4ca2fc",
-      "sha256": "3ee09bb0907713252e785d3ddbca90f1e20fc47d33803a6ce8c9d3960310f04c",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/feature-flags.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/feature-flags.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "1465f3ed44fe2beee207e80b7e160393c8532bcb",
-      "sha256": "cfe4e6679c49eabb17b642d59f33f4e0e7f9bd6ed4f8108255fcfce53fcb446f",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/flowchart.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/flowchart.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "a80e58d36b12ed18ee1b8fba96ff2304f15a83a2",
-      "sha256": "990e066f5a621c9792b56cac42050c6c012b5b0be9748a64173f0de0b92f6082",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/implementation-plan.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/implementation-plan.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "b48938a740365ba333e887e7c19850b525e0d11f",
-      "sha256": "a460d856d670c0783d723eb6eccf31377c88dc4dcff35e848476ce1f87529007",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/incident-report.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/incident-report.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "b449430c36310168c9bfd36c5ef42539ba27e797",
-      "sha256": "e4943df4ab1cc4560efe06fadef5f673571e79c425f5b2e4da17736049782b0b",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/module-map.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/module-map.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "d3e4cfbcae3a7cf853acfaeda5f0d912e3b22651",
-      "sha256": "0d0a203fa9e40719842783d53946526a98f02cab94a611918ea8746914fa5d8e",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/pr-writeup.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/pr-writeup.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "0a35c5ad13ddd1393a03a43a2b7f85ee82de49e1",
-      "sha256": "3bbb9a9decbcad06006dcb0f5e1ef7f4b8f375c12f7348717beadae8b2e51955",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/prompt-tuner.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/prompt-tuner.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "87326e9cc312eb79675dbe81f27016e2ac7016aa",
-      "sha256": "4625e67d0170c76cb72abb840b25e094c362fb1c3c590850393cc36b7400771f",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/slide-deck.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/slide-deck.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "5bbd012050b059ac879443b0a17bce28b6d96e2b",
-      "sha256": "df5b74abd5ce1ba85ec9a4ba52efbd4d0bbc583590e488aa683bad9d912dcbac",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/status-report.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/status-report.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "13b3e6e3843ff5f398c8295222f8b74cdb6d5ba9",
-      "sha256": "cfee488614d8fc7a6936e0944569bdb32d140dd07b4eeeb27fc231d7e670a82d",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/svg-figure-sheet.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/svg-figure-sheet.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "6757fbb555f282973b42453b9967b51593844bfd",
-      "sha256": "329b39d84ae6d99534dfa6b5e2aed9928164f01789d321fddf96b9ca41558fac",
-      "transform": "header-comment-stripped",
-      "has_script": false
-    },
-    {
-      "path": "nsmith-html/triage-board.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/triage-board.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "45f50808c95cc9c8f88b3fd8884acbafd9c55278",
-      "sha256": "ce0a867a5d495afd582941e520de6befe099a7de22f36ad1301d31ae3672a6b8",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
-      "path": "nsmith-html/visual-designs.html",
-      "upstream_repo": "nsmith/html",
-      "upstream_path": "assets/templates/visual-designs.html",
-      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
-      "upstream_blob_sha": "a81e9696ad699ce69b59806cf220cd8ff2859568",
-      "sha256": "08183df48b98baa6ac41f268635b6a4b3c4ea1e0a61f1a04f6e048dc8c548bd5",
-      "transform": "header-comment-stripped",
-      "has_script": true
-    },
-    {
       "path": "artifact-organizer/apple.css",
       "upstream_repo": "keepYaoung/artifact-organizer",
       "upstream_path": "plugins/artifact-organizer/themes/apple.css",
@@ -264,6 +64,16 @@
       "upstream_blob_sha": "98f2d9879a72f8895a20c41bee28a7cbb37475bb",
       "sha256": "71452f452bb9f059fcb5c214b2fca03597a3f61e705e1703b2ee502c9af083f6",
       "transform": "verbatim"
+    }
+  ],
+  "removed": [
+    {
+      "path": "nsmith-html/",
+      "upstream_repo": "nsmith/html",
+      "upstream_commit": "eece610140a08ebbfdd96938ee1610b19793d1ec",
+      "file_count": 20,
+      "removed_in": "issue #2",
+      "reason": "no upstream licence grant exists, so shipping it inside a distributed plugin would be redistribution nobody authorised. The commit above is pinned so the set can be restored if a grant is ever established."
     }
   ]
 }

@@ -4,7 +4,7 @@ First-read element: the sticky state bar, then the TL;DR panel. They are two SEP
 consecutive elements, so `.db-tldr` deliberately wraps only the preamble prose — a
 `chips statebar` block authored above it stays outside the panel and stays sticky.
 
-#40 rebuilt the body against `references/nsmith-html/status-report.html`. Re-opened and measured
+#40 rebuilt the body against nsmith's `status-report.html`. Re-opened and measured
 while writing this, not recalled: its sections run HEADER, KEY METRICS, HIGHLIGHTS, VELOCITY
 CHART, WORKSTREAMS, FOOTER, and the three this template takes are
 
@@ -99,7 +99,7 @@ NAME = "dashboard"
 # #69: a dashboard is scanned, not read — its tiles want room to sit side by side rather than
 # stack in a reading column, and its masthead is a status bar rather than a title page.
 # #76 completes what #69 started here — this was one of only two styles with a partial frame.
-# Measured off `references/nsmith-html/status-report.html` by reading its `<style>` (D66):
+# Measured off nsmith's `status-report.html` by reading its `<style>` (D66):
 #
 #   --maxw 880px · .wrap padding:40px 20px 72px
 #   h1     clamp(26px,5vw,38px); line-height:1.12; letter-spacing:-.02em

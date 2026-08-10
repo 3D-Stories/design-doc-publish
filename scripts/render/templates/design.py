@@ -4,7 +4,7 @@ First-read element: `.dz-lead`, the lede naming the single change that makes the
 work. Replaces the one-rule heading underline that was the entire `design` template
 before this wave — the defect the epic was opened for.
 
-#40 rebuilt the body against `references/nsmith-html/code-approaches.html`. Measured, that page
+#40 rebuilt the body against nsmith's `code-approaches.html`. Measured, that page
 is: `.approach` cards stacked FULL WIDTH — not a row of tiles — each with a big mono
 `.approach-num`, a title, and a two-column `.pc` grid of tinted pros/cons panels; then a
 `.recommend` verdict band with an accent border and a gradient wash. No new marker was needed:
@@ -19,7 +19,7 @@ win on specificity. `.tpl-design .dz-options .blk-opt` (0,3,0) beats `.blk-optio
 """
 NAME = "design"
 
-# #76: this style's own page frame. Measured off `references/nsmith-html/code-approaches.html`
+# #76: this style's own page frame. Measured off nsmith's `code-approaches.html`
 # by reading its `<style>` block (D66):
 #
 #   body   radial-gradient(1200px 600px at 50% -10%, rgba(124,156,255,.10), transparent 60%)
