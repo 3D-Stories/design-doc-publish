@@ -22,7 +22,11 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2258 passed, 3 skipped**, exit 0.
+Expected: **2214 passed, 7 skipped**, exit 0.
+
+Three of those skips are deliberate and name their own reason under `pytest -rs`: the
+per-template guards have nothing to check since the unlicensed vendored set was removed,
+and they re-arm automatically if anything is vendored there again.
 
 Use `pytest`, not `python3 -m pytest`. On the machine this package was migrated from the
 interpreter cannot import pytest and only the standalone executable works, so the module form
@@ -32,6 +36,34 @@ count above.
 This same command is declared in `.rawgentic.json` under `testing.frameworks`, and that
 declaration is verified rather than assumed — `capabilities_lib.py derive` reports
 `has_tests: true` with this exact string.
+
+## Installing it
+
+Two commands, and the first is easy to miss — the install cannot resolve the plugin until the
+marketplace is registered:
+
+```bash
+claude plugin marketplace add 3D-Stories/design-doc-publish
+claude plugin install design-doc-publish@design-doc-publish
+```
+
+Then start a **new** session. A running session holds already-resolved paths, so it will not see
+a skill that was installed after it started.
+
+To remove it:
+
+```bash
+claude plugin uninstall design-doc-publish
+claude plugin marketplace remove design-doc-publish
+```
+
+Uninstalling deregisters the plugin but leaves its files on disk, in a version directory marked
+`.orphaned_at` under `~/.claude/plugins/cache/design-doc-publish/`. Delete that directory if you
+want the disk back.
+
+**Deploying needs an authenticated Vercel account.** Rendering to HTML does not. Nothing walks you
+through that yet — [#9](https://github.com/3D-Stories/design-doc-publish/issues/9) is the setup
+flow that will.
 
 ## Licence
 

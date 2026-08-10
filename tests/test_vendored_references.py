@@ -85,6 +85,22 @@ def _load_manifest() -> dict:
     return json.loads(MANIFEST.read_text(encoding="utf-8"))
 
 
+def _template_params() -> list:
+    """Parametrisation for the three per-template guards.
+
+    Empty since #2 removed the unlicensed set, and an empty parametrize list makes pytest
+    emit a bare `[NOTSET]` skip whose reason nobody can read. So the empty case carries an
+    explicit reason instead: a reader running `pytest -rs` learns why, rather than finding
+    three silent skips and wondering what broke.
+    """
+    found = _templates()
+    if found:
+        return found
+    return [pytest.param(None, marks=pytest.mark.skip(
+        reason="no HTML templates are vendored — #2 removed the nsmith set for want of an "
+               "upstream licence grant. These guards re-arm the moment any are vendored again."))]
+
+
 def _templates() -> list[Path]:
     """Empty since #2 removed the unlicensed set. Kept so the header-leak guards below
     stay wired: if a future refresh vendors HTML templates again, they are covered the
@@ -176,13 +192,13 @@ def test_the_expected_counts_are_present() -> None:
         "docs/third-party-notices.md before vendoring it again")
 
 
-@pytest.mark.parametrize("path", _templates(), ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", _template_params(), ids=lambda p: p.stem if p is not None else "none-vendored")
 def test_no_template_leaks_its_header(path: Path) -> None:
     leaks = leaked_comment_fragments(path.read_text(encoding="utf-8"))
     assert not leaks, f"{path.name} leaks comment text onto the page: {leaks[:2]}"
 
 
-@pytest.mark.parametrize("path", _templates(), ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", _template_params(), ids=lambda p: p.stem if p is not None else "none-vendored")
 def test_template_head_is_stripped(path: Path) -> None:
     """AC2's discharge: whitespace only between the doctype and <html> proves the header
     bytes are gone, independent of any tokenizer's comment semantics."""
@@ -260,7 +276,7 @@ def test_theme_external_imports_are_exactly_the_recorded_set() -> None:
     )
 
 
-@pytest.mark.parametrize("path", _templates(), ids=lambda p: p.stem)
+@pytest.mark.parametrize("path", _template_params(), ids=lambda p: p.stem if p is not None else "none-vendored")
 def test_no_template_loads_an_external_resource(path: Path) -> None:
     hit = EXTERNAL_RESOURCE_IN_HTML.search(path.read_text(encoding="utf-8"))
     assert not hit, f"{path.name} loads an external resource: {hit.group(0)!r}"
