@@ -1,0 +1,22 @@
+{
+  "name": "design-doc-publish",
+  "version": "1.0.0",
+  "description": "Render a design or architecture document from markdown to a standalone HTML page and deploy it to Vercel. One command renders, lints, deploys and verifies, and its exit code is the verdict.",
+  "author": {
+    "name": "3D-Stories",
+    "url": "https://github.com/3D-Stories"
+  },
+  "homepage": "https://github.com/3D-Stories/design-doc-publish",
+  "repository": "https://github.com/3D-Stories/design-doc-publish",
+  "license": "MIT",
+  "keywords": [
+    "design-docs",
+    "architecture",
+    "markdown",
+    "html",
+    "vercel",
+    "documentation",
+    "rendering",
+    "publishing"
+  ]
+}

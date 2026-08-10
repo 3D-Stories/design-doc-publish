@@ -26,7 +26,7 @@ sys.path.insert(0, str(SCRIPTS))
 import publish_doc  # noqa: E402
 import render  # noqa: E402
 
-SKILL_MD = SCRIPTS.parent / "SKILL.md"
+SKILL_MD = SCRIPTS.parent / "skills" / "design-doc-publish" / "SKILL.md"
 
 
 def _names_in_skill_md(candidates):
