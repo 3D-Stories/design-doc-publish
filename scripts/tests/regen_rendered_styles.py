@@ -3,7 +3,7 @@
 
 Run from anywhere:
 
-    python3 user/design-doc-publish/scripts/tests/regen_rendered_styles.py
+    python3 scripts/tests/regen_rendered_styles.py
 
 Then commit the result. `test_rendered_styles_current.py` fails until you do.
 

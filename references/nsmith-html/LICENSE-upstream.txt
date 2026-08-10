@@ -62,6 +62,6 @@ Repository owner, 2026-08-02, on issue #38: the licence was found to be MIT and
 vendoring proceeds on that basis. Recorded here rather than only in the issue so
 the decision travels with the material.
 
-Compare: user/design-doc-publish/references/artifact-organizer/LICENSE-upstream.txt
+Compare: references/artifact-organizer/LICENSE-upstream.txt
 holds a real MIT notice, because that upstream ships one. The two files are not
 equivalent and should not be read as if they were.

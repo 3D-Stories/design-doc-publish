@@ -9,12 +9,12 @@ template with a PNG attached to its PR, never with a viewable page in the repo.
 ## What these are
 
 Every style in the registry, rendered from the cross-style fixture
-(`user/design-doc-publish/scripts/tests/fixtures/crossstyle.md`) — one document that exercises every
+(`scripts/tests/fixtures/crossstyle.md`) — one document that exercises every
 typed component block, so each page shows its template's full component set.
 
 ## These are guarded, and that is new (#114)
 
-**`user/design-doc-publish/scripts/tests/test_rendered_styles_current.py` fails when any committed
+**`scripts/tests/test_rendered_styles_current.py` fails when any committed
 page differs from a fresh render of the fixture at the pinned stamp, and when the set of pages does
 not equal the style registry exactly.** So a stale page cannot survive a test run, a newly added
 style cannot silently skip the guard, and a removed style cannot leave a page behind.
@@ -27,7 +27,7 @@ missing entirely. A page that presents itself as current when it is not is worse
 Regenerate after any change that legitimately moves rendered output, then commit the result:
 
 ```bash
-python3 user/design-doc-publish/scripts/tests/regen_rendered_styles.py
+python3 scripts/tests/regen_rendered_styles.py
 ```
 
 That script **owns** the recipe — fixture, title, `--generated-at` stamp, `--doc-id`, style list —

@@ -35,7 +35,7 @@ INSTALLING IT AS A STOP HOOK. The hook config lives in `~/.claude/settings.json`
 repo, so nothing here can install it:
 
     {"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command",
-      "command": "python3 <repo>/user/design-doc-publish/scripts/deploy_check.py <repo>/docs"}]}]}}
+      "command": "python3 <repo>/scripts/deploy_check.py <repo>/docs"}]}]}}
 
 Running it by hand before a PR works just as well and needs no configuration.
 

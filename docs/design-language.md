@@ -1,11 +1,11 @@
 # Rawgentic artifact design language
 
-Every artifact the `render` engine (`user/design-doc-publish/scripts/render/`) renders — a WF1 issue spec, a WF2/WF3 design
+Every artifact the `render` engine (`scripts/render/`) renders — a WF1 issue spec, a WF2/WF3 design
 doc, a WF14 run-feedback report, a campaign dashboard, an adversarial-review report —
 shares ONE visual system: a single palette, one type scale, one set of component badges,
 and one human-first document skeleton. This doc is the reference for that system; the
 values below are read from `render/__init__.py` (the `_STYLE` and `_COMPONENT_STYLE`
-blocks), never invented, and drift-guarded by `user/design-doc-publish/scripts/tests/test_render_artifact.py`.
+blocks), never invented, and drift-guarded by `scripts/tests/test_render_artifact.py`.
 
 ## Tokens
 
@@ -511,9 +511,9 @@ PINNED stamp and the `design` style. Regenerate it with exactly this one-liner (
 the repo root):
 
 ```
-PYTHONPATH="$PWD/user/design-doc-publish/scripts" python3 -m render \
-  --md user/design-doc-publish/docs/design-language-example.md \
-  --out user/design-doc-publish/docs/design-language-example.html \
+PYTHONPATH="$PWD/scripts" python3 -m render \
+  --md docs/design-language-example.md \
+  --out docs/design-language-example.html \
   --title "Design-language exemplar" --style design \
   --generated-at "2026-07-10 12:00 MDT"
 ```

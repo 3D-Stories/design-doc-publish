@@ -30,7 +30,7 @@ exist to convey — but it means **the reference material is not offline-safe**.
 So: **open anything in here with JavaScript disabled and the network blocked.**
 
 Measured at the pinned commits, and pinned by
-`user/design-doc-publish/tests/test_vendored_references.py` so a refresh cannot quietly widen it:
+`tests/test_vendored_references.py` so a refresh cannot quietly widen it:
 
 | surface | finding |
 |---|---|
@@ -110,5 +110,5 @@ guard test asserts the nsmith evidence names the same commit the manifest pins, 
 that advances one without the other fails.
 
 Then regenerate `manifest.json`, re-run
-`pytest user/design-doc-publish/tests/ -q`, and **review the manifest diff by hand**. Re-do the
+`pytest tests/ -q`, and **review the manifest diff by hand**. Re-do the
 external-surface measurement above; do not inherit it.

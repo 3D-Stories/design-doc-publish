@@ -9,7 +9,7 @@ CSS only, no external hosts, always stamped.
 Use the launcher, from anywhere:
 
 ```bash
-user/design-doc-publish/scripts/render-doc --md <in>.md --out <out>.html --title "..." [--style design]
+scripts/render-doc --md <in>.md --out <out>.html --title "..." [--style design]
 ```
 
 `python3 -m render` also works, but only with `cwd` or `PYTHONPATH` pointing at `scripts/`, and it
