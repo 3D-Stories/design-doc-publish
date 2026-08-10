@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Cross-style probe</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-02 00:00 MDT</div>
+<h1>Cross-style probe</h1>
+
+</header>
+<main>
+<p>Lede paragraph before any section, so preamble wrappers engage.</p>
+<h2>First section</h2>
+<p>Body text with <code>code</code>, <strong>bold</strong>, and a MUST that decorators may chip.</p>
+<pre><code>1240 | requests | +12% | 3,5,4,8,7,9
+28/44 | highs confirmed | | | accent</code></pre>
+<pre><code>09:14 | Alert fired | Pager went out. | past
+09:31 | Mitigated | Rolled back. | now</code></pre>
+<pre><code>Inline hook | fewest files | re-runs on every render | chosen
+External lib | battle-tested | a new dependency | rejected</code></pre>
+<pre><code>1 | Fetch the tree | git fetch origin | action
+2 | Verify the base | git log -1 origin/main | check</code></pre>
+<pre><code>high | A thing broke | It broke in the obvious way. | gh api, PR #15
+medium | A smaller thing | Less obvious. |</code></pre>
+<pre><code>R1 | The client MUST retry | Once, with backoff.
+R2 | The client SHOULD log | At debug level.</code></pre>
+<pre><code>1 | Suite green | Whole gate, exit 0.</code></pre>
+<pre><code>today
+  one | the current shape | WAN
+proposed
+  two | the new shape | LAN</code></pre>
+<pre><code>note | We chose B
+Because A costs more.</code></pre>
+<pre><code>main at 3a85cc5 | done
+wave 3 | wip</code></pre>
+<pre><code>confirmed | The claim holds.</code></pre>
+<pre><code>solid | an existing link</code></pre>
+<pre><code>Children merged | 3 | 9</code></pre>
+<pre><code>Measured | 2026-08-02 on main
+Method | whole gate, exit 0</code></pre>
+<h2>Second section</h2>
+<table>
+<thead><tr><th>Column</th><th>Other</th></tr></thead>
+<tbody>
+<tr><td>a</td><td>b</td></tr>
+</tbody>
+</table>
+<blockquote>A quoted line.</blockquote>
+<h2>Third section — the four tags this probe used to miss (#148)</h2>
+<p>Added because a fixture that claims to exercise the component vocabulary was missing four of seventeen tags, and two of those (<code>phases</code>, <code>flow</code>) are first-read devices — so <code>roadmap.html</code> and <code>workflow.html</code> would have failed the #130 gate had anyone published them.</p>
+<pre><code>Windows + GPU | 3 of 12 done | warn
+  FA-1 | Fan curve stalls above 60C | crit
+  FA-2 | Telemetry lands in the ring buffer | ok
+Mac parity | not started | note
+  MP-1 | Metal backend | note</code></pre>
+<pre><code>term | A request arrives
+proc | Validate the token
+dec | Is the token valid?
+proc | Serve the content | yes
+term | Return 401 | no</code></pre>
+<pre><code>critical | 1 | crit
+unresolved | 2 | warn
+ready | 4 | ok</code></pre>
+<pre><code>Does it need a script? | No. Native `&lt;details&gt;`, so it works with JavaScript disabled.
+Can two be open at once? | Yes. Each item is independent — that is the difference from `steprail`.</code></pre>
+
+</main>
+<footer>Last updated: 2026-08-02 00:00 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,873 @@
+#!/usr/bin/env python3
+"""One command from a committed markdown doc to a verified-live page (#12, wave 5).
+
+Design: `docs/planning/2026-08-01-12-publish-pipeline.md` (revision 2, after a Step 4
+gate returned FAIL with six High findings).
+
+Every step here already existed as prose in `SKILL.md`, and the prose had a measured
+failure rate: 37 Vercel projects, junk names like `deploy-713`, three duplicate deploys
+of one page, no index. Prose is re-performed by a model on every publish; a command is
+not. So the exit code is the verdict.
+
+    python3 publish_doc.py --md docs/planning/x.md --project herdr-dashboard \\
+                           --type design --ref 81 --title "#81 The Design"
+
+Seven stages, each able to refuse (exit ``EXIT_BASE + stage``):
+
+    1 render  2 name  3 LINT  4 reuse-or-create  5 deploy  6 verify  7 index
+
+**The gate runs BEFORE the deploy, and that is a correction to the issue's own order.**
+The issue lists deploy → lint → verify, but AC4 requires a lint failure to leave
+"nothing deployed". Those cannot both hold: linting after the deploy means a page with
+an external request or a sub-AA token pair is already public by the time it is caught.
+
+Three things this file is careful about, each because the first draft got it wrong:
+
+* **A name is validated by COMPONENT, never by shape.** `--project deploy --type design
+  --ref 713` yields `deploy-design-713`, which matches the convention's pattern
+  perfectly and is exactly the junk the convention exists to stop.
+* **The deploy is bound to the rendered file**, not to ambient link state — a temp dir
+  holding it as `index.html`, linked in that directory. `vercel deploy --prod` from the
+  wrong directory deploys the repository.
+* **The verifier is written here, not borrowed.** `page_meta()` in `build_index.py`
+  sends no cache-buster, exposes no status code, and collapses every failure into
+  `(name, None)` — so a dead page and a live one are indistinguishable.
+
+Version control and PR sequencing stay OUT of this script (AC6): committing and opening
+a pull request remain the workflows' business, and a test greps this file to keep it so.
+"""
+from __future__ import annotations
+
+import argparse
+import html
+import importlib.util
+import json
+import os
+import random
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+import urllib.error
+import urllib.request
+from pathlib import Path
+from urllib.parse import unquote
+
+HERE = Path(__file__).resolve().parent
+INDEX_SCRIPT = HERE.parent / "index" / "build_index.py"
+
+
+def _load(path: Path, private_name: str):
+    """Load a module from an exact path, under a private name, without consulting
+    ``sys.path``.
+
+    The same guard `render-doc` documents at length: a foreign package named `render`
+    sitting earlier on the path would otherwise be selected AND have its top-level code
+    executed before any check could reject it. Resolving the file we intend to run and
+    loading that file directly removes the choice entirely.
+    """
+    spec = importlib.util.spec_from_file_location(private_name, path)
+    if spec is None or spec.loader is None:
+        sys.exit(f"publish_doc: refusing to run: could not load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[private_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+RENDER = _load(HERE / "render" / "__init__.py", "_publish_doc_render")
+_LINT = _load(HERE / "render" / "lint.py", "_publish_doc_lint")
+SOURCE_LINT = _load(HERE / "render" / "source_lint.py", "_publish_doc_source_lint")
+LINT = _LINT.lint
+# Not part of `lint()` on purpose — see the note above `check_blocks` in lint.py.
+CHECK_BLOCKS = _LINT.check_blocks
+# #130, the strict sibling: `check_blocks` is a floor that one component of any kind clears;
+# this one requires the devices the page's own style opens with. Disjoint by construction —
+# exactly one of the two ever fires.
+CHECK_STYLE_DEVICES = _LINT.check_style_devices
+# The one part of the component policy `--skip-component-checks` does NOT reach — see `gate()`.
+CHECK_TEMPLATE_CLASSIFICATION = _LINT.check_template_classification
+INDEX = _load(INDEX_SCRIPT, "_publish_doc_index")
+VDL = _load(HERE / "vdl_packs.py", "_publish_doc_vdl")
+
+# Offset past argparse's own exit code 2, so a usage error is never mistaken for a
+# stage failure — stage 2 (naming) would otherwise share it.
+EXIT_BASE = 10
+
+# The publication purposes of the {project}-{purpose}-{ref} convention. This is what
+# `--type` names, and it is NOT the template vocabulary — see PURPOSE_STYLE.
+PURPOSES = ("design", "plan", "uat", "audit", "report", "runbook", "analysis", "spec",
+            # #42: the page that documents a project's own design language.
+            "tokens", "map", "deck")
+
+# The only bridge between the two vocabularies (§2b). A purpose says WHY the page
+# exists; a style says how it looks. `plan`/`audit`/`runbook` are not styles, and
+# `roadmap`/`dashboard`/`workflow` are not purposes — a test pins that every value here
+# is a real entry in the renderer's registry, so a renamed template fails loudly.
+PURPOSE_STYLE = {
+    "design": "design",
+    "plan": "roadmap",
+    "uat": "uat",
+    "audit": "review",
+    "report": "report",
+    "runbook": "workflow",
+    "analysis": "analysis",
+    "spec": "spec",
+    "tokens": "design-system",
+    "map": "module-map",
+    "deck": "slide-deck",
+}
+
+# Every Vercel call is pinned to this team. Ambient scope is whatever the last `vercel
+# switch` left behind, so an unpinned deploy can land in a personal account — and the
+# recorded fixture only *mentions* 3d-stories, it does not enforce it. Raised by the
+# security lane on #12 and again on #19.
+VERCEL_SCOPE = "3d-stories"
+
+WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic project
+INDEX_PROJECT = "docs-index"
+MAX_NAME = 100
+DEFAULT_WORKSPACE = Path.home() / "rawgentic" / ".rawgentic_workspace.json"
+
+
+class StageError(Exception):
+    """A stage refused. The process exits ``EXIT_BASE + stage``."""
+
+    def __init__(self, stage: int, message: str):
+        super().__init__(message)
+        self.stage = stage
+        self.message = message
+
+
+# --- stage 1: render -----------------------------------------------------------------
+
+MAX_FETCH = 8_000_000
+
+
+def _check_paths(md_path: Path, out_path: Path) -> None:
+    """Refuse the two path shapes that lose data or leak it.
+
+    A symlinked `--md` is followed like any other file, and the renderer supplies the
+    title and stamp and escapes the body — so a link pointing at a readable secret
+    renders into a page that passes the mechanical gate and is then deployed PUBLICLY.
+    A `--out` equal to `--md` reads the source and overwrites it with HTML, destroying
+    the document and the `.md`/`.html` pair the convention requires.
+    """
+    if md_path.is_symlink():
+        raise StageError(1, f"--md {md_path} is a symlink. These pages are public and "
+                            f"this script follows what it is given, so the source must "
+                            f"be a real file in the repo.")
+    if not md_path.is_file():
+        raise StageError(1, f"--md {md_path} is not a regular file")
+    if out_path.suffix.lower() != ".html":
+        raise StageError(1, f"--out {out_path} must end in .html — it is the committed "
+                            f"half of the pair")
+    if out_path.is_symlink():
+        raise StageError(1, f"--out {out_path} is a symlink; refusing to write through it")
+    try:
+        same = out_path.resolve() == md_path.resolve()
+    except OSError as e:
+        raise StageError(1, f"could not resolve {out_path}: {e}") from e
+    if same:
+        raise StageError(1, f"--out resolves to the same file as --md ({md_path}); that "
+                            f"would overwrite the source with its own rendering")
+
+
+def load_telemetry(path: Path | None) -> dict | None:
+    """#152. The run-telemetry block, read from a JSON file.
+
+    `render_artifact` has always accepted a `telemetry` mapping and rendered a **Run telemetry**
+    section from it; the WF2 design-artifact step passes one. This script never could, so a page
+    created by that step and later re-published HERE silently lost the whole section — measured
+    on `docs/planning/campaign-log.html` during #130, where the only copy of that content lived
+    in the generated file and the records behind it sit in an UNTRACKED store.
+
+    Fails LOUD on anything it cannot use, because a silently dropped section is the entire defect
+    class this closes. Absent stays the default and renders exactly as before.
+    """
+    if path is None:
+        return None
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise StageError(1, f"could not read --telemetry {path}: {e}") from e
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise StageError(1, f"--telemetry {path} is not valid JSON: {e}") from e
+    if not isinstance(value, dict):
+        raise StageError(1, f"--telemetry {path} must hold a JSON object, not "
+                            f"{type(value).__name__} — the renderer reads it as a run-record "
+                            f"mapping (see hooks/work_summary.py for the shape)")
+    # An EMPTY object is deliberately allowed through, and this is worth stating because the
+    # obvious validation is wrong. `render_artifact` branches on `telemetry is not None`, and
+    # `_telemetry_html` renders an explicit `{}` as a visible "telemetry unavailable" placeholder
+    # — "a record present but empty", which its own comment distinguishes from `None` ("no
+    # telemetry"). Rejecting `{}` here would delete that distinction and make this flag unable to
+    # express a state the renderer supports on purpose. Same for a well-formed object with no
+    # recognised run-record fields: the renderer surfaces a placeholder rather than pretending,
+    # which is louder than anything this function could add.
+    return value
+
+
+def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
+           style: str, doc_id: str | None, vdl: dict | None = None,
+           telemetry: dict | None = None, section_chips: bool = True) -> str:
+    """Render to the committed `.html` and return the same string the gate will read."""
+    _check_paths(md_path, out_path)
+    try:
+        markdown = md_path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise StageError(1, f"could not read {md_path}: {e}") from e
+    page = RENDER.render_artifact(markdown, title=title, subtitle=subtitle,
+                                  style=style, doc_id=doc_id, vdl=vdl,
+                                  telemetry=telemetry, section_chips=section_chips)
+    # Cross-model review, and it caught my own claim being overstated: `load_telemetry` validated
+    # only JSON shape, so a typoed record like `{"tsets": {...}}` published happily and rendered
+    # "telemetry unavailable" — a successful exit whose figures were discarded, from a function
+    # whose docstring promised to fail loud on anything it could not use.
+    #
+    # Validated by ASKING THE RENDERER rather than by re-implementing its field predicate here:
+    # `_telemetry_html` already decides what a run-record is, and a second copy of that judgement
+    # is exactly the drift this codebase keeps paying for. A truthy record that renders the
+    # placeholder is a wrong or mistyped file.
+    #
+    # `{}` is exempt on purpose — falsy, and the renderer's own comment calls it "record present
+    # but empty", a state it distinguishes from absent and renders the placeholder for
+    # deliberately.
+    if telemetry and "telemetry unavailable" in page:
+        raise StageError(1, "the --telemetry file parsed as JSON but the renderer recognised no "
+                            "run-record fields in it, so the page would publish with a "
+                            "'telemetry unavailable' placeholder instead of your figures. Check "
+                            "the keys against hooks/work_summary.py's run-record shape (a typo "
+                            "like 'tsets' for 'tests' does this), or omit the flag.")
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(page, encoding="utf-8")
+    except OSError as e:
+        raise StageError(1, f"could not write {out_path}: {e}") from e
+    return page
+
+
+# --- stage 2: the name ---------------------------------------------------------------
+
+_REF_SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_REF_ISSUE = re.compile(r"^[1-9][0-9]*$")   # canonical: `1` is valid, `01` is not
+_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+
+
+def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> str:
+    """`{project}-{purpose}-{ref}` from components each checked against a source of truth.
+
+    Lowercased before assembly because Vercel lowercases anyway, so `Rawgentic` and
+    `rawgentic` must not become two projects. There is deliberately no flag that accepts
+    a name.
+    """
+    project = project.strip().lower()
+    purpose = purpose.strip().lower()
+    ref = ref.strip().lower()
+
+    if purpose not in PURPOSES:
+        raise StageError(2, f"--type {purpose!r} is not a publication purpose "
+                            f"(one of: {', '.join(PURPOSES)})")
+
+    if project != WORKSPACE_BUCKET:
+        known = INDEX.known_projects(Path(workspace_file))
+        if project not in known:
+            raise StageError(
+                2, f"--project {project!r} is not a rawgentic project in "
+                   f"{workspace_file}, and is not the literal {WORKSPACE_BUCKET!r} "
+                   f"bucket. This is the check that refuses 'deploy', 'site' and "
+                   f"'final-final' — names that pass a shape check and mean nothing.")
+
+    if ref in PURPOSES:
+        raise StageError(2, f"--ref {ref!r} is a purpose token, not a reference — "
+                            f"the name would read as two purposes and no subject")
+    # An issue number has its own rule. Under the slug rule alone, issue 1 was
+    # unpublishable (one character) while `01` was accepted — and `-01` and `-1` are two
+    # Vercel projects for one issue, which is the duplication this whole convention exists
+    # to prevent.
+    if ref.isdigit():
+        if not _REF_ISSUE.match(ref):
+            raise StageError(2, f"--ref {ref!r} is not a canonical issue number; use "
+                                f"{ref.lstrip('0') or '0'!r} — a leading zero would mint "
+                                f"a second project for the same issue")
+    elif not 2 <= len(ref) <= 40 or not _REF_SLUG.match(ref):
+        raise StageError(2, f"--ref {ref!r} must be an issue number, or a lowercase "
+                            f"slug of 2-40 chars (letters, digits, single hyphens)")
+
+    name = f"{project}-{purpose}-{ref}"
+    if len(name) > MAX_NAME or not _NAME.match(name):
+        raise StageError(2, f"the derived name {name!r} is not a usable Vercel project "
+                            f"name (lowercase letters, digits and hyphens, "
+                            f"{MAX_NAME} chars max)")
+    return name
+
+
+# --- stage 3: the lint gate ----------------------------------------------------------
+
+def source_gate(md_path: Path, *, allow_unsupported: bool = False,
+                ack_stale: bool = False) -> list[str]:
+    """Check the SOURCE, before anything deploys. Returns the notes worth printing.
+
+    Everything else in this pipeline answers "did the bytes I linted reach the page?" —
+    which was always true on the two live defects that produced this function. Neither was
+    a delivery failure. Both were the markdown not saying what its author meant, and the
+    only place to catch that is here, against the source.
+    """
+    md = md_path.read_text(encoding="utf-8")
+    notes: list[str] = []
+
+    unsupported = SOURCE_LINT.check_unsupported_syntax(md)
+    if unsupported and not allow_unsupported:
+        raise StageError(3, "the source uses markdown this renderer does not implement, so "
+                            "those characters would reach the page literally. Nothing was "
+                            "deployed:\n  - " + "\n  - ".join(unsupported)
+                         + "\n\n  Fix them, or pass --allow-unsupported-markdown if you "
+                           "really mean the literal characters.")
+    if unsupported:
+        notes.append(f"--allow-unsupported-markdown: {len(unsupported)} construct(s) WILL "
+                     f"render as literal source characters")
+
+    # The VCS read lives in `source_lint`, deliberately. AC6 keeps version control out
+    # of THIS script — `TestGitStaysOut` greps it for the word — and that rule is about
+    # the publisher not taking over commit and PR duties. Reading the last committed
+    # text to diff against is neither, but the guard is blunt on purpose, so the read
+    # sits with the other source analysis instead of arguing with it.
+    drift = SOURCE_LINT.check_status_drift(
+        SOURCE_LINT.previous_committed(md_path), md)
+    if drift and not ack_stale:
+        raise StageError(3, "this revision marks something done, but the document still "
+                            "says otherwise elsewhere. A status change to a living document "
+                            "is a sweep, not an edit. Nothing was deployed:\n  - "
+                         + "\n  - ".join(drift)
+                         + "\n\n  Update those lines too, or pass --ack-stale if they are "
+                           "deliberately historical records of what was true then.")
+    if drift:
+        notes.append(f"--ack-stale: {len(drift)} line(s) still read as open and were "
+                     f"published anyway")
+    return notes
+
+
+def gate(page: str, *, skip_component_checks: bool = False) -> None:
+    findings = LINT(page)
+    # UNCONDITIONAL, deliberately: an unknown template class or two `<body>` tags is
+    # structural corruption — a renderer defect or an edited page — not a statement that the
+    # document is prose. Cross-model review caught this sitting inside the flag, where
+    # the flag waved through exactly the inputs the fail-closed rule exists to stop.
+    findings += [f"template: {f}" for f in CHECK_TEMPLATE_CLASSIFICATION(page)]
+    # Scoped to the TWO component checks and nothing else. A flag that turned the whole gate
+    # off would be a worse defect than the one it exists to work around. The two are disjoint,
+    # so at most one of them ever reports.
+    if not skip_component_checks:
+        findings += [f"blocks: {f}" for f in CHECK_BLOCKS(page)]
+        findings += [f"style-devices: {f}" for f in CHECK_STYLE_DEVICES(page)]
+    if findings:
+        raise StageError(3, "the page did not pass the pre-publish lint gate, so "
+                            "nothing was deployed:\n  - " + "\n  - ".join(findings))
+
+
+# --- the Vercel CLI ------------------------------------------------------------------
+
+def _vercel(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    """Every call is given an explicit cwd, and every path used afterwards is absolute —
+    the CLI resets the shell's working directory."""
+    return subprocess.run(["vercel", *args, "--scope", VERCEL_SCOPE], cwd=str(cwd),
+                          capture_output=True, text=True, check=False)
+
+
+def _log(proc: subprocess.CompletedProcess) -> str:
+    """The CLI splits output across both streams, so every consumer here reads the pair.
+
+    `project ls` used to be the example named here. Since #125 it is requested with
+    `--format json` and read from stdout ALONE, by `build_index.vercel_projects` — never through
+    this helper. `link` and `deploy` still come through it, and concatenating both streams is
+    what saves this file from having to know which one each of them picks.
+    """
+    return (proc.stdout or "") + (proc.stderr or "")
+
+
+# --- stage 4: reuse or create --------------------------------------------------------
+
+def resolve_project(name: str, *, new_project: bool, limit: int) -> bool:
+    """True if the project already exists (and is being reused).
+
+    `vercel_projects()` calls `sys.exit()` on CLI failure, so SystemExit is caught here:
+    uncaught, the pipeline would die with the index builder's message instead of a
+    stage verdict.
+    """
+    try:
+        existing = {p["name"] for p in INDEX.vercel_projects(limit)}
+    except SystemExit as e:
+        raise StageError(4, f"could not list Vercel projects: {e}") from e
+
+    exists = name in existing
+    if exists and new_project:
+        raise StageError(4, f"{name} already exists — drop --new-project and it is "
+                            f"reused, which is what keeps its URL stable. Otherwise the "
+                            f"flag becomes the thing people paste to clear the error.")
+    if not exists and not new_project:
+        raise StageError(4, f"no Vercel project named {name}. Reuse is the default; "
+                            f"re-run with --new-project once you are sure this doc has "
+                            f"never been published under another name.")
+    return exists
+
+
+# --- stage 5: the deploy -------------------------------------------------------------
+
+# A COMPLETE host token: the lookahead is what stops `https://old.vercel.app.evil/x`
+# from reading as a vercel.app host, which a trailing `\S*` happily accepted.
+_URL_HOST = re.compile(r"https://([a-z0-9][a-z0-9.-]*\.vercel\.app)(?=[/\s]|$)", re.I)
+
+
+def deployed_hosts(log: str, name: str) -> list[str]:
+    """The hosts in a deploy log that belong to THIS project.
+
+    `vercel deploy` prints the deployment URL (`<name>-<hash>-<team>.vercel.app`) and
+    usually the alias. Accepting any vercel.app URL would accept a log that only ever
+    mentions somebody else's project — which is exactly what a deploy bound to ambient
+    link state looks like.
+    """
+    out = []
+    for host in _URL_HOST.findall(log):
+        h = host.lower()
+        if h == f"{name}.vercel.app" or h.startswith(f"{name}-"):
+            out.append(h)
+    return out
+
+
+# A reference is only shippable if it names one of these. Step 11 found the real hole: with
+# `is_file()` as the only content gate, `![x](.env)` published the file's bytes to a public URL —
+# measured, `AWS_SECRET=hunter2` and a `credentials.json` both shipped. Containment stops a
+# reference LEAVING the document's directory; it says nothing about what sits inside it, and these
+# docs are routinely generated rather than hand-written.
+#
+# An extension allowlist and not an `assets/` subtree rule, deliberately: the one real page in this
+# repo that carries assets references `./shots/*.png`, so a subtree rule would refuse the very
+# document this issue fixes. `.svg` is included because the engine needs it and an `<img src>` is a
+# script-inert context for SVG — but note it is the one entry here that is not inert if a reader
+# navigates to the file directly.
+_ASSET_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".svg",
+})
+
+
+def _asset_target(ref: str) -> str:
+    """The file a reference names: query and fragment dropped, percent-decoding undone.
+
+    `d.png?v=2` and `my%20diagram.png` are references to `d.png` and `my diagram.png`. A cache
+    buster is not part of the filename, and the deploy directory holds real names.
+    """
+    return unquote(ref.split("#", 1)[0].split("?", 1)[0])
+
+
+def stage_assets(page: str, base: Path, workdir: Path) -> list[str]:
+    """Copy every relative file the page fetches into the deploy directory (#121).
+
+    Before this, `deploy()` wrote the page into an empty temporary directory and shipped that, so
+    `![d](diagram.png)` resolved against a host holding only `index.html` and 404d. The failure
+    was SILENT: render, lint and deploy all reported success, and the author saw a working image
+    locally because there the file really is beside the markdown.
+
+    Every reference is REFUSED rather than skipped when it cannot be shipped safely, because a
+    skipped reference is the original defect — a page published with a hole in it. The rules:
+
+    * resolved against the MARKDOWN SOURCE's directory, which is the base an author writes for;
+    * a reference escaping that directory is refused, even via `..` or a symlink, because these
+      pages are public and the neighbour directory is somebody's repo (#121 AC3);
+    * a symlink is refused outright, the same rule `_check_paths` applies to `--md` and for the
+      same reason — this script follows what it is given, and a link can point at a secret;
+    * a missing file is refused, since shipping the page anyway is the 404 this issue is about;
+    * a root-relative `/x.png` is refused, because the deploy root is not the document's
+      directory and guessing which one an author meant would publish a broken page either way;
+    * a suffix outside `_ASSET_SUFFIXES` is refused — containment alone would have published
+      `.env` (Step 11, measured).
+
+    The file is opened ONCE, with `O_NOFOLLOW`, and copied from that descriptor. Checking a path
+    and then reopening it by name is a race: between the two, the final component can become a
+    symlink pointing anywhere, and `copyfile` would follow it into a public deploy (Step 11). What
+    this does NOT close is a swap of a PARENT directory mid-publish, which would need
+    descriptor-relative traversal of every component. That residue is accepted knowingly: it
+    requires write access to the document's own directory while the publish runs, and anyone
+    holding that can simply edit the markdown instead.
+    """
+    staged: list[str] = []
+    base_root = base.resolve()
+    for ref in _LINT.internal_references(page):
+        rel = _asset_target(ref)
+        if not rel:
+            continue
+        if rel.startswith("/"):
+            raise StageError(5, f"the page references {ref!r}, a ROOT-relative path. Assets ship "
+                                f"beside the document, so write it relative to "
+                                f"{base.name}/ instead.")
+        if Path(rel).suffix.lower() not in _ASSET_SUFFIXES:
+            raise StageError(5, f"the page references {ref!r}, which is not a static asset this "
+                                f"publisher will ship. Allowed: "
+                                f"{', '.join(sorted(_ASSET_SUFFIXES))}. This deploy is PUBLIC, so "
+                                f"only declared asset types travel.")
+        src = base / rel
+        if src.is_symlink():
+            raise StageError(5, f"the page references {ref!r}, which is a symlink. These pages "
+                                f"are public and this script follows what it is given, so an "
+                                f"asset must be a real file in the repo.")
+        try:
+            resolved = src.resolve()
+        except OSError as e:
+            raise StageError(5, f"could not resolve the asset {ref!r}: {e}") from e
+        if not resolved.is_relative_to(base_root):
+            raise StageError(5, f"the page references {ref!r}, which resolves to {resolved} — "
+                                f"outside the document's own directory ({base_root}). Refusing: "
+                                f"this deploy is public.")
+        dest = workdir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(src, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except FileNotFoundError:
+            raise StageError(5, f"the page references {ref!r} but {src} does not exist. It would "
+                                f"404 on the published page, so nothing was deployed.") from None
+        except OSError as e:
+            raise StageError(5, f"could not open the asset {ref!r}: {e}") from e
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise StageError(5, f"the page references {ref!r}, which is not a regular file.")
+            with open(fd, "rb", closefd=False) as fh, open(dest, "wb") as out:
+                shutil.copyfileobj(fh, out)
+        finally:
+            os.close(fd)
+        staged.append(rel)
+    return staged
+
+
+def deploy(name: str, page: str, workdir: Path) -> str:
+    """Deploy the LINTED page, bound to `name` (§2a).
+
+    The bytes written here are the string the gate passed — not a re-read of `--out`.
+    Re-reading reopened the gate: this workspace runs concurrent sessions, and anything
+    that rewrote that file between stage 3 and stage 5 would have shipped unlinted HTML
+    to a public URL.
+
+    `vercel link` runs in this same directory, which is what binds the deploy to the
+    derived project rather than to whatever was last linked.
+    """
+    (workdir / "index.html").write_text(page, encoding="utf-8")
+
+    link = _vercel(["link", "--yes", "--project", name], cwd=workdir)
+    if link.returncode != 0:
+        raise StageError(5, f"`vercel link --project {name}` failed:\n{_log(link)}")
+
+    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir)
+    log = _log(dep)
+    if dep.returncode != 0:
+        raise StageError(5, f"`vercel deploy --prod` failed (rc={dep.returncode}):\n{log}")
+    if not deployed_hosts(log, name):
+        raise StageError(5, f"the deploy log names no URL belonging to {name} — the "
+                            f"deploy did not go where the link said it would, and "
+                            f"verifying a guessed alias would paper over it:\n{log}")
+    return log
+
+
+# --- stage 6: verification -----------------------------------------------------------
+
+_TITLE = re.compile(r"<title>(.*?)</title>", re.S | re.I)
+
+
+def _title_of(body: str) -> str:
+    m = _TITLE.search(body)
+    return html.unescape(m.group(1)).strip() if m else ""
+
+
+def _verify_once(url: str, want: bytes, stage: int, timeout: float) -> None:
+    """One cache-busted fetch. Raises StageError on anything short of byte identity."""
+
+    busted = f"{url}?cb={random.randrange(10 ** 9)}"
+    req = urllib.request.Request(
+        busted, headers={"User-Agent": "publish-doc-verifier", "Cache-Control": "no-cache"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            status = getattr(resp, "status", None) or resp.getcode()
+            final = resp.geturl()
+            body = resp.read(MAX_FETCH + 1)
+    except urllib.error.HTTPError as e:
+        raise StageError(stage, f"{busted} returned HTTP {e.code} — not live") from e
+    except OSError as e:
+        raise StageError(stage, f"{busted} could not be fetched: {e}") from e
+
+    if status != 200:
+        raise StageError(stage, f"{busted} returned HTTP {status} — not live")
+    if final != busted:
+        raise StageError(stage, f"{busted} redirected to {final}. The URL itself is not "
+                                f"serving the page — a login wall answers 200 too.")
+    if len(body) > MAX_FETCH:
+        raise StageError(stage, f"{busted} returned more than {MAX_FETCH} bytes")
+    if body != want:
+        got = _title_of(body.decode("utf-8", "replace"))
+        title_note = ("its <title> matches, so this is a DIFFERENT version of the same "
+                      "page — most likely a stale deployment"
+                      if got == _title_of(want.decode("utf-8", "replace"))
+                      else f"its <title> is {got!r}")
+        raise StageError(stage, f"{busted} returned 200 but not the bytes just published "
+                                f"({len(body)} bytes vs {len(want)}); {title_note}")
+
+
+# A fresh deploy is not instantly live at its alias. `vercel deploy` prints "Aliased" as
+# its LAST line, and the pipeline's first real run fetched the URL before that alias was
+# serving the new page: the deploy was perfect and stage 6 refused. Measured on that run —
+# the same check passed on a manual retry moments later.
+VERIFY_ATTEMPTS = 6
+VERIFY_DELAY = 5.0
+
+
+def verify_live(url: str, expected: str, stage: int = 6, timeout: float = 20.0) -> None:
+    """The URL must serve EXACTLY the bytes just published (AC5).
+
+    A title match is not enough, and that was the gap two reviewers found independently.
+    An updated document normally keeps its title, so a stale prior deployment, or an
+    alias still pointing at the old one, answers 200 with the right title and reads as a
+    successful publish. `vercel project rename` not moving the `<name>.vercel.app` domain
+    is exactly that shape, and it has bitten this account before.
+
+    So the assertion is byte identity against what was deployed. A cache-buster defeats a
+    CDN copy; identity defeats everything else, including a page that merely looks right.
+    Redirects are refused rather than followed — `urlopen` follows them silently, and the
+    documented SSO wall is a 302 to a login page that answers 200.
+
+    The check is retried on a BOUNDED budget, because the alias swap is not instant. It
+    is bounded rather than patient because an alias that never updates is precisely the
+    failure this stage exists to catch — waiting forever would convert the check back
+    into the reassurance it replaced.
+
+    Raises rather than degrading to a plausible-looking value: that degradation is the
+    exact behaviour that makes `page_meta()` in build_index.py unusable for this.
+    """
+    want = expected.encode("utf-8")
+    last = None
+    for attempt in range(VERIFY_ATTEMPTS):
+        if attempt:
+            time.sleep(VERIFY_DELAY)
+        try:
+            _verify_once(url, want, stage, timeout)
+            return
+        except StageError as e:
+            last = e
+    waited = int((VERIFY_ATTEMPTS - 1) * VERIFY_DELAY)
+    raise StageError(stage, f"{url} still does not serve what was just published, after "
+                            f"{VERIFY_ATTEMPTS} attempts over ~{waited}s. "
+                            f"Last: {last.message if last else 'unknown'}")
+
+
+# --- stage 7: the docs index ---------------------------------------------------------
+
+def refresh_index(workdir: Path, workspace_file: Path) -> None:
+    """Rebuild the index from `vercel project ls`, deploy it, and prove it went live.
+
+    The generated page is a build artifact: it is written into a temp directory and
+    never into the repository, whose ignore rules exist precisely to keep the shared
+    mutable file — and its lost-row race — from coming back.
+
+    The deploy's return code is not proof. Stage 6 learned that on the document; the
+    index earns the same treatment, so a publish that leaves the index stale — which is
+    the failure that made the index worth deriving at all — cannot report OK.
+    """
+    out = workdir / "index.html"
+    build = subprocess.run(
+        [sys.executable, str(INDEX_SCRIPT), "--out", str(out),
+         "--workspace-file", str(workspace_file)],
+        capture_output=True, text=True, check=False)
+    if build.returncode != 0:
+        raise StageError(7, f"could not rebuild the docs index:\n{_log(build)}")
+    try:
+        built = out.read_text(encoding="utf-8")
+    except OSError as e:
+        raise StageError(7, f"the index builder reported success but wrote no page: {e}") from e
+
+    link = _vercel(["link", "--yes", "--project", INDEX_PROJECT], cwd=workdir)
+    if link.returncode != 0:
+        raise StageError(7, f"could not link {INDEX_PROJECT}:\n{_log(link)}")
+    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir)
+    if dep.returncode != 0:
+        raise StageError(7, f"could not deploy {INDEX_PROJECT}:\n{_log(dep)}")
+    if not deployed_hosts(_log(dep), INDEX_PROJECT):
+        raise StageError(7, f"the index deploy log names no {INDEX_PROJECT} URL:\n{_log(dep)}")
+
+    verify_live(f"https://{INDEX_PROJECT}.vercel.app/", built, stage=7)
+
+    # Byte identity proves the page we built is the page that is live. It does NOT prove
+    # the page is CURRENT: two publishers interleaving — A builds N rows, B publishes and
+    # refreshes to N+1, A deploys last — leaves A's stale N-row index passing its own
+    # byte check. The original prose rule was "the page's computed count equals
+    # `vercel project ls` minus one", and it is the only thing that catches that race.
+    try:
+        live_count = len(INDEX.vercel_projects(100))
+    except SystemExit as e:
+        raise StageError(7, f"could not re-list projects to check the index: {e}") from e
+    shown = built.count('<li><a href="https://')
+    if shown < live_count:
+        raise StageError(7, f"the index went live with {shown} pages but the account now "
+                            f"has {live_count} — another publish landed while this one was "
+                            f"building. Re-run to pick it up; nothing is lost.")
+
+
+# --- the CLI -------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    ap = argparse.ArgumentParser(
+        prog="publish_doc.py",
+        description="Render, lint, deploy and verify one design doc. The exit code is "
+                    "the verdict; no stage is skippable.")
+    ap.add_argument("--md", required=True, help="the committed markdown source")
+    ap.add_argument("--project", required=True,
+                    help="the rawgentic project this doc belongs to, or the literal "
+                         f"{WORKSPACE_BUCKET!r} for a cross-project doc. Validated "
+                         "against the workspace file, which is what makes a junk name "
+                         "impossible.")
+    ap.add_argument("--type", required=True, choices=PURPOSES, dest="purpose",
+                    help="the publication PURPOSE. Not a template — see --style.")
+    ap.add_argument("--ref", required=True,
+                    help="the issue/epic number, or a short lowercase slug")
+    ap.add_argument("--title", required=True,
+                    help="the page title; the renderer requires one and the lint gate "
+                         "refuses a placeholder")
+    ap.add_argument("--out", help="rendered HTML path (default: --md with .html)")
+    ap.add_argument("--style", choices=tuple(RENDER._TEMPLATES),
+                    help="template override. The default comes from --type; these are a "
+                         "different vocabulary from the purposes.")
+    ap.add_argument("--subtitle", default="")
+    ap.add_argument("--doc-id", dest="doc_id",
+                    help="stable identity for a uat page (its localStorage namespace)")
+    ap.add_argument("--new-project", action="store_true",
+                    help="mint a new Vercel project. Reuse is the default; passing this "
+                         "when the project already exists is itself an error.")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="render, name and lint, then stop — no network call at all")
+    # #151. `--allow-prose` named ONE check honestly until #130 put a second behind it: "this
+    # page carries components, but not the ones its style opens with" is not a statement about
+    # prose. The old name is kept as a working ALIAS, not deprecated with a warning — it appears
+    # in committed docs, in docs/planning/, and in this repo's own history, so breaking it costs
+    # something and buys nothing. Note what is deliberately NOT behind either name:
+    # `check_template_classification`, because structural corruption is not a prose decision.
+    ap.add_argument("--allow-unsupported-markdown", action="store_true",
+                    help="publish even though the source uses syntax this renderer passes "
+                         "through as literal characters (strikethrough, task lists, "
+                         "footnotes, autolinks...). You are asserting you meant the "
+                         "literal text.")
+    ap.add_argument("--ack-stale", action="store_true",
+                    help="publish even though this revision marks something done while "
+                         "other lines still read as open. Use when those lines are "
+                         "deliberately historical records of what was true then.")
+    ap.add_argument("--no-section-chips", action="store_true",
+                    help="suppress the per-section status chip on sectioned styles "
+                         "(roadmap/dashboard/analysis). For NARRATIVE pages whose prose "
+                         "discusses completion words as subject matter — the scanner "
+                         "reads 'who may declare done' as a DONE nobody wrote, and no "
+                         "document-side rewording fixes that without lying. Default "
+                         "behavior is unchanged.")
+    ap.add_argument("--skip-component-checks", "--allow-prose", action="store_true",
+                    dest="skip_component_checks",
+                    help="skip BOTH component checks: publish a styled page that carries "
+                         "no components at all, or that carries some but not the ones its "
+                         "style opens with. Does NOT skip the template-classification check. "
+                         "Reach for the components first — the refusal names the file that "
+                         "lists them, by absolute path. (--allow-prose is an alias.)")
+    ap.add_argument("--telemetry", default=None,
+                    help="path to a JSON object rendered as the page's Run telemetry section, "
+                         "the same one the WF2 design-artifact step injects (#152). Omitted by "
+                         "default; malformed input is a loud stage-1 failure, never a silently "
+                         "dropped section.")
+    ap.add_argument("--workspace-file", default=str(DEFAULT_WORKSPACE))
+    ap.add_argument("--limit", type=int, default=100,
+                    help="`vercel project ls` page size (it paginates at 20 without one)")
+    return ap
+
+
+def default_out(args) -> Path:
+    return Path(args.out) if args.out else Path(args.md).with_suffix(".html")
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    out_path = default_out(args)
+    style = args.style or PURPOSE_STYLE[args.purpose]
+    url = ""
+    stage = 1   # so an UNEXPECTED failure is still attributed to the stage it happened in
+
+    try:
+        # #14: the page wears its project's colour. Resolved through the shared
+        # module the index also calls, so the two cannot drift.
+        pack = VDL.pack_for(args.project, Path(args.workspace_file))
+        page = render(Path(args.md), out_path, title=args.title, subtitle=args.subtitle,
+                      style=style, doc_id=args.doc_id, vdl=pack,
+                      telemetry=load_telemetry(Path(args.telemetry) if args.telemetry else None),
+                      section_chips=not args.no_section_chips)
+        print(f"publish_doc: 1/7 rendered {out_path} ({style} template, "
+              f"{pack['origin']} palette {pack['accent']['light']})")
+
+        stage = 2
+        name = derive_name(args.project, args.purpose, args.ref, Path(args.workspace_file))
+        print(f"publish_doc: 2/7 name {name}")
+
+        stage = 3
+        for note in source_gate(Path(args.md),
+                                allow_unsupported=args.allow_unsupported_markdown,
+                                ack_stale=args.ack_stale):
+            print(f"publish_doc: {note}")
+        gate(page, skip_component_checks=args.skip_component_checks)
+        # Said out loud, every run. A skipped check that reports nothing is how a page with
+        # no components reaches a public URL looking like it passed.
+        print("publish_doc: 3/7 lint gate passed"
+              + (" (--skip-component-checks: BOTH component checks were SKIPPED)"
+                 if args.skip_component_checks else ""))
+
+        if args.dry_run:
+            print("publish_doc: --dry-run, stopping before the first network call")
+            return 0
+
+        stage = 4
+        reused = resolve_project(name, new_project=args.new_project, limit=args.limit)
+        print(f"publish_doc: 4/7 {'reusing' if reused else 'creating'} {name}")
+
+        stage = 5
+        with tempfile.TemporaryDirectory(prefix="publish-doc-") as tmp:
+            # #121: assets go in BEFORE the deploy, because a deploy ships the directory. Any
+            # reference that cannot ship safely raises here, so nothing is published — a page
+            # with a hole in it is the defect, not the fallback.
+            assets = stage_assets(page, Path(args.md).parent, Path(tmp))
+            if assets:
+                print(f"publish_doc: 5/7 packaging {len(assets)} asset(s): "
+                      f"{', '.join(assets)}")
+            log = deploy(name, page, Path(tmp))
+        print(f"publish_doc: 5/7 deployed\n{log.strip()}")
+
+        stage = 6
+        url = f"https://{name}.vercel.app/"
+        verify_live(url, page)
+        print(f"publish_doc: 6/7 verified live — {url} serves exactly what was linted")
+
+        stage = 7
+        with tempfile.TemporaryDirectory(prefix="publish-index-") as tmp:
+            refresh_index(Path(tmp), Path(args.workspace_file))
+        print(f"publish_doc: 7/7 index refreshed and verified — "
+              f"https://{INDEX_PROJECT}.vercel.app")
+    except StageError as e:
+        print(f"publish_doc: FAILED at stage {e.stage}: {e.message}", file=sys.stderr)
+        return EXIT_BASE + e.stage
+    except Exception:
+        # A missing `vercel` binary raises FileNotFoundError, not SystemExit. Without
+        # this the process exits 1 with a traceback and no stage — the one thing the
+        # exit-code contract promises never to do. The traceback is still printed,
+        # because an unexpected error is a bug here, not a verdict.
+        traceback.print_exc()
+        print(f"publish_doc: FAILED at stage {stage}: unexpected error, traceback above",
+              file=sys.stderr)
+        return EXIT_BASE + stage
+
+    print(f"publish_doc: OK — {url}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

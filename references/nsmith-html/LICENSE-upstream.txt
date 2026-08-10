@@ -1,0 +1,67 @@
+LICENCE EVIDENCE — nsmith/html
+================================================================================
+
+This is NOT an MIT notice. Upstream ships no LICENSE file, so there is no notice
+text to retain. What follows is the whole of the licence evidence that exists,
+quoted verbatim, so that a later audit can weigh it without re-fetching.
+
+Source repo   : https://github.com/nsmith/html
+Pinned commit : eece610140a08ebbfdd96938ee1610b19793d1ec
+Vendored      : 2026-08-02
+Material      : assets/templates/*.html (20 files)
+
+--------------------------------------------------------------------------------
+Evidence 1 — SKILL.md frontmatter, at the pinned commit
+  blob path: SKILL.md
+--------------------------------------------------------------------------------
+
+    ---
+    name: html
+    ...
+    license: MIT
+    metadata:
+      ...
+      author: "Nathan Smith"
+      license: "MIT"
+      ...
+    ---
+
+--------------------------------------------------------------------------------
+Evidence 2 — .claude-plugin/plugin.json, at the pinned commit, verbatim
+--------------------------------------------------------------------------------
+
+    {
+      "name": "html",
+      "description": "Publish single-page HTML to the public web instantly via ht-ml.app — create, update, upload assets, optional password protection, and 20 ready-made page templates.",
+      "version": "1.0.0",
+      "author": { "name": "Nathan Smith" },
+      "homepage": "https://ht-ml.app",
+      "repository": "https://github.com/nsmith/html",
+      "license": "MIT"
+    }
+
+--------------------------------------------------------------------------------
+What the evidence does and does not establish
+--------------------------------------------------------------------------------
+
+DOES : the author, Nathan Smith, declares the work MIT in two separate manifest
+       files at the pinned commit.
+
+DOES NOT : supply the MIT notice text or a copyright line. GitHub's licence API
+       reports "none" for this repository precisely because no LICENSE file
+       exists. The usual step for vendored material in this repo — retaining the
+       upstream notice, as done in user/dataviz-extras/data/LICENSE-upstream.txt
+       and user/frontend-design-extras/data/LICENSE-upstream.txt — cannot be
+       performed here, because there is no notice to retain.
+
+--------------------------------------------------------------------------------
+Adjudication
+--------------------------------------------------------------------------------
+
+Repository owner, 2026-08-02, on issue #38: the licence was found to be MIT and
+vendoring proceeds on that basis. Recorded here rather than only in the issue so
+the decision travels with the material.
+
+Compare: references/artifact-organizer/LICENSE-upstream.txt
+holds a real MIT notice, because that upstream ships one. The two files are not
+equivalent and should not be read as if they were.

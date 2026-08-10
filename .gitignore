@@ -5,6 +5,9 @@ __pycache__/
 # Runtime working state (campaign driver state, session notes). Never committed.
 claude_docs/
 
+# Reserved-prefix workflow artifacts (review results, consult payloads). Never committed.
+.rawgentic-*
+
 # index/index.html is a BUILD ARTIFACT, derived from `vercel project ls` by
 # index/build_index.py. Committing it would recreate the shared mutable file
 # whose lost-row race motivated deriving it (owner decision 2026-08-01).

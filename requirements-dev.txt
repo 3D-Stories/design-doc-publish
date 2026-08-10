@@ -1,0 +1,21 @@
+# Development requirements for the test gate.
+#
+# Pinned at the versions that produced the recorded baseline of
+# 2258 passed, 3 skipped, exit 0 on Python 3.12.3 (2026-08-10).
+#
+# The gate command is `pytest`, never `python3 -m pytest`: on the machine this
+# package was migrated from, the interpreter cannot import pytest and only the
+# standalone executable works. A pin makes that reproducible on another host
+# instead of depending on whatever happens to be on PATH.
+pytest==9.0.3
+
+# Transitive, pinned deliberately rather than left to the resolver.
+#
+# pytest declares an unpinned `pygments` floor, and a dependency audit resolves an
+# unpinned requirement to its MINIMUM satisfying version — 2.9.0 — which carries
+# PYSEC-2023-117 (fixed in 2.15.1) and PYSEC-2026-2987 (fixed in 2.20.0). Installing
+# without this line actually gives 2.20.0, so the exposure was theoretical, but an
+# audit reading this file could not know that and blocked on it. Pinning the version
+# that is genuinely installed makes the file describe reality: `osv-scanner` reports
+# no issues for 2.20.0.
+pygments==2.20.0

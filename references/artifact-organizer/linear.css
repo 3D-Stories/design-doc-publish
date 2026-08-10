@@ -1,0 +1,187 @@
+/* ===== Linear theme — strictly per Linear DESIGN.md ===== */
+/*
+ *   Source: getdesign.md/linear.app/design-md (extracted from getdesign npm v0.6.9)
+ *   Radii:  GitHub-style 4 / 6 / 6 / 6 / 12 (user preference, aligns with DESIGN.md
+ *           which calls for 6px buttons / 8px cards — slight unification on 6).
+ *   Fonts:  Inter Variable + cv01,ss03 OpenType — non-negotiable per DESIGN.md.
+ *   Weights: 400 / 510 / 590 only. NEVER 600+ (DESIGN.md explicitly forbids).
+ *   Linear is dark-mode-native; light mode uses DESIGN.md's "Light Mode Neutrals" set.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+[data-theme="linear"] {
+  /* === LIGHT MODE — DESIGN.md "Light Mode Neutrals" set === */
+  --op-color-fg: #0c0d0e;
+  --op-color-bg: #ffffff;
+  --op-color-surface: #ffffff;
+  --op-color-surface-alt: #f5f6f7;                   /* DESIGN.md light surface */
+  --op-color-surface-dark: #08090a;                  /* DESIGN.md marketing black */
+
+  --op-color-fg-muted: #62666d;                      /* DESIGN.md quaternary as readable secondary */
+  --op-color-fg-placeholder: #8a8f98;
+
+  /* Brand Indigo (background) + Accent Violet (interactive) — distinct per DESIGN.md */
+  --op-color-accent: #5e6ad2;                        /* Brand Indigo */
+  --op-color-accent-active: #7170ff;                 /* Accent Violet */
+  --op-color-navy: #232940;
+  --op-color-purple: #5e6ad2;
+  --op-color-pink: #eb5688;
+  --op-color-teal: #02b8cc;
+  --op-color-brown: #94704c;
+  --op-color-focus: #5e6ad2;
+  --op-color-badge-bg: rgba(94, 106, 210, 0.10);
+  --op-color-badge-text: #5e6ad2;
+  --op-color-success: #10b981;                       /* DESIGN.md emerald */
+  --op-color-warn: #f2994a;
+
+  /* Light mode: a single 1px ring — "borders are the depth signal" */
+  --op-border-whisper: 1px solid #e6e6e6;            /* DESIGN.md light border alt */
+  --op-shadow-card: rgba(0, 0, 0, 0.06) 0 0 0 1px;
+  --op-shadow-deep: rgba(0, 0, 0, 0.06) 0 0 0 1px,
+                    rgba(0, 0, 0, 0.08) 0 8px 24px -8px;
+
+  /* GitHub-clean radii — supersedes DESIGN.md's 6/8/12 mix */
+  --op-radius-micro:   4px;
+  --op-radius-subtle:  6px;
+  --op-radius-std:     6px;
+  --op-radius-comfort: 6px;
+  --op-radius-large:   12px;
+
+  /* Inter Variable + Berkeley Mono — DESIGN.md exact fallback chain */
+  --op-font-sans: "Inter", "Inter Variable", "SF Pro Display", -apple-system,
+                  system-ui, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell,
+                  "Open Sans", "Helvetica Neue", sans-serif;
+  --op-font-display: "Inter", "Inter Variable", -apple-system, system-ui, sans-serif;
+  --op-font-mono: "Berkeley Mono", "JetBrains Mono", ui-monospace, "SF Mono",
+                  Menlo, monospace;
+
+  /* Restrained tints — indigo channel for info, success/warn/danger semantic only */
+  --op-tone-info-bg:    rgba(94, 106, 210, 0.08);
+  --op-tone-info-fg:    #4f5ac0;
+  --op-tone-warn-bg:    rgba(242, 153, 74, 0.10);
+  --op-tone-warn-fg:    #b86c14;
+  --op-tone-success-bg: rgba(16, 185, 129, 0.10);
+  --op-tone-success-fg: #2f8855;
+  --op-tone-danger-bg:  rgba(235, 87, 87, 0.08);
+  --op-tone-danger-fg:  #b13333;
+
+  --op-note-bg:     rgba(94, 106, 210, 0.06);
+  --op-note-border: #5e6ad2;
+  --op-note-text:   #2c3478;
+}
+
+[data-theme="linear"][data-mode="dark"] {
+  /* === DARK MODE — Linear's native habitat (DESIGN.md primary canvas) === */
+  --op-color-fg: #f7f8f8;                            /* Primary white, never #ffffff */
+  --op-color-bg: #08090a;                            /* Marketing black */
+  --op-color-surface: #0f1011;                       /* Panel dark */
+  --op-color-surface-alt: #191a1b;                   /* Level 3 surface */
+  --op-color-surface-dark: #010102;
+
+  --op-color-fg-muted: #8a8f98;                      /* Tertiary gray */
+  --op-color-fg-placeholder: #62666d;                /* Quaternary gray */
+
+  --op-color-accent: #7170ff;                        /* Accent Violet — DESIGN.md interactive */
+  --op-color-accent-active: #828fff;                 /* Accent Hover */
+  --op-color-focus: #7170ff;
+  --op-color-badge-bg: rgba(113, 112, 255, 0.16);
+  --op-color-badge-text: #828fff;
+  --op-color-success: #10b981;
+  --op-color-warn: #f5b06a;
+
+  /* Dark borders are semi-transparent white — never solid dark colors */
+  --op-border-whisper: 1px solid rgba(255, 255, 255, 0.08);
+  /* Border-as-shadow: the ring IS the depth signal on dark */
+  --op-shadow-card: rgba(0, 0, 0, 0.2) 0 0 0 1px;
+  /* Dialog stack — DESIGN.md verbatim 5-layer */
+  --op-shadow-deep: rgba(0, 0, 0, 0)    0px 8px 2px,
+                    rgba(0, 0, 0, 0.01) 0px 5px 2px,
+                    rgba(0, 0, 0, 0.04) 0px 3px 2px,
+                    rgba(0, 0, 0, 0.07) 0px 1px 1px,
+                    rgba(0, 0, 0, 0.08) 0px 0px 1px;
+
+  --op-tone-info-bg:    rgba(113, 112, 255, 0.14);
+  --op-tone-info-fg:    #a6b1ff;
+  --op-tone-warn-bg:    rgba(245, 176, 106, 0.14);
+  --op-tone-warn-fg:    #ffc987;
+  --op-tone-success-bg: rgba(16, 185, 129, 0.16);
+  --op-tone-success-fg: #6dcc99;
+  --op-tone-danger-bg:  rgba(235, 87, 87, 0.14);
+  --op-tone-danger-fg:  #ff8585;
+
+  --op-note-bg:     rgba(113, 112, 255, 0.10);
+  --op-note-border: #7170ff;
+  --op-note-text:   #c5cdfb;
+}
+
+/* === Linear typography — DESIGN.md hierarchy, weight ceiling 590, OpenType cv01+ss03 === */
+[data-theme="linear"] body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv01", "ss03";             /* Non-negotiable per DESIGN.md */
+}
+[data-theme="linear"] .op-page-title {
+  /* 48px ← DESIGN.md "Display": 510 / 1.00 / -1.056px (-0.022em) */
+  font-family: var(--op-font-display);
+  font-weight: 510;
+  line-height: 1.04;
+  letter-spacing: -0.022em;
+}
+[data-theme="linear"] .op-section-title {
+  /* 40px ← interpolated between Display (48/510) and H1 (32/400), keep display feel */
+  font-family: var(--op-font-display);
+  font-weight: 510;
+  line-height: 1.08;
+  letter-spacing: -0.022em;
+}
+[data-theme="linear"] .op-heading-h2 {
+  /* 32px ← DESIGN.md "Heading 1": 400 / 1.13 / -0.704px (-0.022em) */
+  font-family: var(--op-font-display);
+  font-weight: 400;                                  /* Yes — Linear H1 is regular weight */
+  line-height: 1.13;
+  letter-spacing: -0.022em;
+}
+[data-theme="linear"] .op-heading-h3 {
+  /* 22px ← DESIGN.md "Heading 2": 400 / 1.33 / -0.288px (-0.012em) */
+  font-family: var(--op-font-display);
+  font-weight: 400;
+  line-height: 1.33;
+  letter-spacing: -0.012em;
+}
+[data-theme="linear"] .op-heading-h4 {
+  /* 18px ← DESIGN.md "Heading 3": 590 / 1.33 / -0.24px (-0.012em) */
+  font-family: var(--op-font-display);
+  font-weight: 590;                                  /* Linear's max weight */
+  line-height: 1.33;
+  letter-spacing: -0.012em;
+}
+[data-theme="linear"] .op-page-subtitle,
+[data-theme="linear"] .op-section-lead {
+  /* Body Large: 18px / weight 400 / lh 1.60 / -0.165px */
+  font-weight: 400;
+  line-height: 1.60;
+  letter-spacing: -0.009em;
+  color: var(--op-color-fg-muted);
+}
+[data-theme="linear"] .op-prose {
+  /* Body: 16px / weight 400 / lh 1.50 / normal */
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: 0;
+}
+[data-theme="linear"] .op-prose a {
+  color: var(--op-color-accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(94, 106, 210, 0.40);
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color 120ms ease;
+}
+[data-theme="linear"] .op-prose a:hover {
+  text-decoration-color: var(--op-color-accent);
+}
+[data-theme="linear"][data-mode="dark"] .op-prose a {
+  color: var(--op-color-accent);
+  text-decoration-color: rgba(113, 112, 255, 0.45);
+}

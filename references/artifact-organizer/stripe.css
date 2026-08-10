@@ -1,0 +1,174 @@
+/* ===== Stripe theme — strictly per Stripe DESIGN.md ===== */
+/*
+ *   Source: getdesign.md/stripe/design-md (extracted from getdesign npm v0.6.9)
+ *   Signature: weight 300 headlines (lightness as luxury) + blue-tinted shadows
+ *              rgba(50,50,93,0.25) + deep navy `#061b31` headings.
+ *   Fonts: sohne-var (Inter substitute) with OpenType "ss01" non-negotiable.
+ *   Weights: 300 (body + headings) / 400 (UI/buttons) only — never 600+.
+ *   Radii: 4-8px conservative — NEVER pill on cards/buttons.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500&family=Source+Code+Pro:wght@400;500;700&display=swap');
+
+[data-theme="stripe"] {
+  /* === Surfaces — clean white, deep navy headings (NEVER black) === */
+  --op-color-fg: #061b31;                            /* Deep Navy — DESIGN.md exact */
+  --op-color-bg: #ffffff;
+  --op-color-surface: #ffffff;
+  --op-color-surface-alt: #f6f9fc;                   /* Soft blue-tinted surface */
+  --op-color-surface-dark: #1c1e54;                  /* Brand Dark — deep indigo sections */
+
+  --op-color-fg-muted: #64748d;                      /* Body — DESIGN.md exact */
+  --op-color-fg-placeholder: #94a3b8;
+
+  /* === Chrome — Stripe Purple is the only saturated UI color === */
+  --op-color-accent: #533afd;                        /* Stripe Purple — DESIGN.md exact */
+  --op-color-accent-active: #4434d4;
+  --op-color-navy: #1c1e54;                          /* Brand Dark */
+  --op-color-purple: #533afd;
+  --op-color-pink: #f96bee;                          /* Magenta — decorative */
+  --op-color-teal: #2874ad;
+  --op-color-brown: #9b6829;                         /* Lemon */
+  --op-color-focus: #533afd;
+  --op-color-badge-bg: rgba(83, 58, 253, 0.10);
+  --op-color-badge-text: #533afd;
+  --op-color-success: #15be53;
+  --op-color-warn: #9b6829;
+
+  /* === Depth — Stripe's signature blue-tinted multi-layer shadow === */
+  --op-border-whisper: 1px solid #e5edf5;            /* DESIGN.md Border Default */
+  --op-shadow-card: rgba(50, 50, 93, 0.25) 0 30px 45px -30px,
+                    rgba(0, 0, 0, 0.10)    0 18px 36px -18px;
+  --op-shadow-deep: rgba(3, 3, 39, 0.25) 0 14px 21px -14px,
+                    rgba(0, 0, 0, 0.10)  0 8px 17px -8px;
+
+  /* === Radii — DESIGN.md conservative range, GitHub-aligned === */
+  --op-radius-micro:   4px;
+  --op-radius-subtle:  4px;
+  --op-radius-std:     6px;
+  --op-radius-comfort: 6px;
+  --op-radius-large:   8px;
+
+  /* === Fonts — sohne-var (Inter substitute) + SourceCodePro === */
+  --op-font-sans: "Inter", "sohne-var", "SF Pro Display", -apple-system,
+                  BlinkMacSystemFont, system-ui, sans-serif;
+  --op-font-display: "Inter", "sohne-var", -apple-system, system-ui, sans-serif;
+  --op-font-mono: "Source Code Pro", "SourceCodePro", SFMono-Regular,
+                  ui-monospace, Menlo, Consolas, monospace;
+
+  /* === Tones — purple-led info, DESIGN.md exact for success === */
+  --op-tone-info-bg:    rgba(83, 58, 253, 0.08);
+  --op-tone-info-fg:    #533afd;
+  --op-tone-warn-bg:    rgba(155, 104, 41, 0.10);
+  --op-tone-warn-fg:    #9b6829;
+  --op-tone-success-bg: rgba(21, 190, 83, 0.20);     /* DESIGN.md exact */
+  --op-tone-success-fg: #108c3d;
+  --op-tone-danger-bg:  rgba(234, 34, 97, 0.10);     /* Ruby */
+  --op-tone-danger-fg:  #ea2261;
+
+  --op-note-bg:     rgba(83, 58, 253, 0.06);
+  --op-note-border: #533afd;
+  --op-note-text:   #2e2b8c;
+}
+
+[data-theme="stripe"][data-mode="dark"] {
+  /* Stripe's dark — Brand Dark canvas, the immersive section color */
+  --op-color-fg: #ffffff;
+  --op-color-bg: #1c1e54;                            /* Brand Dark */
+  --op-color-surface: #1c1e54;
+  --op-color-surface-alt: #2a2c6e;
+  --op-color-surface-dark: #0d253d;                  /* Dark Navy */
+
+  --op-color-fg-muted: rgba(255, 255, 255, 0.72);
+  --op-color-fg-placeholder: rgba(255, 255, 255, 0.45);
+
+  --op-color-accent: #b9b9f9;                        /* Purple Light — readable on dark */
+  --op-color-accent-active: #d6d9fc;
+  --op-color-focus: #b9b9f9;
+  --op-color-badge-bg: rgba(185, 185, 249, 0.20);
+  --op-color-badge-text: #d6d9fc;
+
+  --op-border-whisper: 1px solid rgba(255, 255, 255, 0.10);
+  --op-shadow-card: rgba(0, 0, 0, 0.40)         0 30px 45px -30px,
+                    rgba(83, 58, 253, 0.20)     0 18px 36px -18px;
+  --op-shadow-deep: rgba(0, 0, 0, 0.50)         0 14px 21px -14px,
+                    rgba(83, 58, 253, 0.25)     0 8px 17px -8px;
+
+  --op-tone-info-bg:    rgba(185, 185, 249, 0.16);
+  --op-tone-info-fg:    #d6d9fc;
+  --op-tone-warn-bg:    rgba(245, 176, 106, 0.16);
+  --op-tone-warn-fg:    #ffc987;
+  --op-tone-success-bg: rgba(21, 190, 83, 0.18);
+  --op-tone-success-fg: #6dcc99;
+  --op-tone-danger-bg:  rgba(234, 34, 97, 0.16);
+  --op-tone-danger-fg:  #ff7faa;
+
+  --op-note-bg:     rgba(185, 185, 249, 0.12);
+  --op-note-border: #b9b9f9;
+  --op-note-text:   #e6e8fd;
+}
+
+/* === Stripe character: weight 300 lightness, ss01 globally, deep-navy heads === */
+[data-theme="stripe"] body {
+  font-feature-settings: "ss01";                     /* Non-negotiable per DESIGN.md */
+}
+[data-theme="stripe"] .op-page-title {
+  /* 48px ← DESIGN.md "Display Large": 300 / 1.15 / -0.96px (-0.02em) */
+  font-family: var(--op-font-display);
+  font-weight: 300;                                  /* Lightness as luxury */
+  line-height: 1.10;
+  letter-spacing: -0.02em;
+}
+[data-theme="stripe"] .op-section-title {
+  /* 40px ← DESIGN.md interpolation between Display Large (48) and Section Heading (32) */
+  font-family: var(--op-font-display);
+  font-weight: 300;
+  line-height: 1.10;
+  letter-spacing: -0.02em;
+}
+[data-theme="stripe"] .op-heading-h2 {
+  /* 32px ← DESIGN.md "Section Heading": 300 / 1.10 / -0.64px (-0.02em) */
+  font-family: var(--op-font-display);
+  font-weight: 300;
+  line-height: 1.10;
+  letter-spacing: -0.02em;
+}
+[data-theme="stripe"] .op-heading-h3 {
+  /* 22px ← DESIGN.md "Sub-heading": 300 / 1.10 / -0.22px (-0.01em) */
+  font-family: var(--op-font-display);
+  font-weight: 300;
+  line-height: 1.20;
+  letter-spacing: -0.01em;
+}
+[data-theme="stripe"] .op-heading-h4 {
+  /* 18px ← DESIGN.md "Body Large": 300 / 1.40 / normal */
+  font-family: var(--op-font-display);
+  font-weight: 400;                                  /* Bump to 400 for h4 emphasis */
+  line-height: 1.40;
+  letter-spacing: 0;
+}
+[data-theme="stripe"] .op-page-subtitle,
+[data-theme="stripe"] .op-section-lead {
+  /* DESIGN.md "Body Large": 18px / 300 / 1.40 / normal */
+  font-weight: 300;
+  line-height: 1.45;
+  letter-spacing: 0;
+  color: var(--op-color-fg-muted);
+}
+[data-theme="stripe"] .op-prose {
+  font-weight: 400;                                  /* Body slightly heavier than headings */
+  line-height: 1.55;
+}
+[data-theme="stripe"] .op-prose a {
+  color: var(--op-color-accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(83, 58, 253, 0.40);
+  text-underline-offset: 2px;
+}
+[data-theme="stripe"] .op-prose a:hover {
+  text-decoration-color: var(--op-color-accent);
+}
+[data-theme="stripe"][data-mode="dark"] .op-prose a {
+  color: #d6d9fc;
+  text-decoration-color: rgba(214, 217, 252, 0.45);
+}
