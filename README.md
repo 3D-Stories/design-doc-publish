@@ -145,7 +145,7 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2238 passed, 7 skipped**, exit 0.
+Expected: **2241 passed, 7 skipped**, exit 0.
 
 Three of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
 `python3 -m pytest` — on the machine this package came from, the interpreter cannot import pytest

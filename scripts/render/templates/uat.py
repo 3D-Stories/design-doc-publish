@@ -1,6 +1,6 @@
 """`uat` — a checklist a human executes (#18, wave 4; specs §4d).
 
-The only INTERACTIVE template. Its target is `saystory-uat-checklist`, whose structure is
+The only INTERACTIVE template. Its target is a UAT checklist page, whose structure is
 fixed by the owner (2026-08-01) — the only per-project change is colour, which wave 6
 supplies. Everything here was measured against that page, not reconstructed: 25 items but
 only 16 comment boxes (the defect this issue exists to fix), zero `innerHTML`, one inline

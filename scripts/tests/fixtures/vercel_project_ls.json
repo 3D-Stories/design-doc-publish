@@ -1,49 +1,49 @@
 {
   "projects": [
     {
-      "name": "saystory-avx512-floor",
-      "id": "prj_7bALUuMV6bgHxtNhfrzcjOT2v8oi",
-      "latestProductionUrl": "https://saystory-avx512-floor.vercel.app",
+      "name": "example-alpha-spike",
+      "id": "prj_EXAMPLE0000000000000000000001",
+      "latestProductionUrl": "https://example-alpha-spike.vercel.app",
       "updatedAt": 1785613860253,
       "nodeVersion": "24.x",
       "deprecated": false
     },
     {
       "name": "docs-index",
-      "id": "prj_OZJyo3O8xoNdMdnKzmm8mwUOHbeJ",
+      "id": "prj_EXAMPLE0000000000000000000002",
       "latestProductionUrl": "https://docs-index.vercel.app",
       "updatedAt": 1785885066698,
       "nodeVersion": "24.x",
       "deprecated": false
     },
     {
-      "name": "rawgentic-analysis-756-spikes",
-      "id": "prj_1c8brJ3SNwOIb8W94nCxxDVHgbcI",
-      "latestProductionUrl": "https://rawgentic-analysis-756-spikes.vercel.app",
+      "name": "example-analysis-412",
+      "id": "prj_EXAMPLE0000000000000000000003",
+      "latestProductionUrl": "https://example-analysis-412.vercel.app",
       "updatedAt": 1785603373126,
       "nodeVersion": "24.x",
       "deprecated": false
     },
     {
       "name": "claude-skills-plan-786",
-      "id": "prj_EXeUiJojqdWHZqAslAS9tJemQACh",
+      "id": "prj_EXAMPLE0000000000000000000004",
       "latestProductionUrl": "https://claude-skills-plan-786.vercel.app",
       "updatedAt": 1785567949474,
       "nodeVersion": "24.x",
       "deprecated": false
     },
     {
-      "name": "claude-skills-design-templates",
-      "id": "prj_lgiwi446Uz13jKwSkBc3S9avbO2Z",
-      "latestProductionUrl": "https://claude-skills-design-templates.vercel.app",
+      "name": "example-design-templates",
+      "id": "prj_EXAMPLE0000000000000000000005",
+      "latestProductionUrl": "https://example-design-templates.vercel.app",
       "updatedAt": 1785567943916,
       "nodeVersion": "24.x",
       "deprecated": false
     },
     {
-      "name": "saystory-uat-checklist",
-      "id": "prj_7eRqpdoxg2yU61XHjjLu4u8JjyeA",
-      "latestProductionUrl": "https://saystory-uat-checklist.vercel.app",
+      "name": "example-uat-checklist",
+      "id": "prj_EXAMPLE0000000000000000000006",
+      "latestProductionUrl": "https://example-uat-checklist.vercel.app",
       "updatedAt": 1785646601229,
       "nodeVersion": "24.x",
       "deprecated": false

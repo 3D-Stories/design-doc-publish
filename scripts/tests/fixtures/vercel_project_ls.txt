@@ -4,9 +4,9 @@ Fetching projects in 3d-stories
 > Projects found under 3d-stories  [979ms]
 
   Project Name                            Latest Production URL                                  Updated   Node Version   
-  saystory-avx512-floor                   https://saystory-avx512-floor.vercel.app               3h        24.x           
+  example-alpha-spike                   https://example-alpha-spike.vercel.app               3h        24.x           
   docs-index                              https://docs-index.vercel.app                          6h        24.x           
-  rawgentic-analysis-756-spikes           https://rawgentic-analysis-756-spikes.vercel.app       6h        24.x           
+  example-analysis-412           https://example-analysis-412.vercel.app       6h        24.x           
   claude-skills-plan-786                  https://claude-skills-plan-786.vercel.app              16h       24.x           
-  claude-skills-design-templates          https://claude-skills-design-templates.vercel.app      16h       24.x           
-  saystory-uat-checklist                  https://saystory-uat-checklist.vercel.app              16h       24.x           
+  example-design-templates          https://example-design-templates.vercel.app      16h       24.x           
+  example-uat-checklist                  https://example-uat-checklist.vercel.app              16h       24.x           

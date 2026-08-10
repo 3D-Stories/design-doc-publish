@@ -263,6 +263,7 @@ class TestWhatShipsToAStranger:
             "references/manifest.json",          # the removal record and its pinned commit
             "tests/test_vendored_references.py",  # asserts the removal stays done
             "scripts/tests/test_plugin_packaging.py",  # this file
+            "docs/assets-disposition.md",         # the decision and its reasoning (#4)
         }
         offenders = []
         for path in _text_files():
@@ -375,3 +376,66 @@ def test_the_files_the_skill_promises_are_where_it_says(relative):
     whatever directory holds them, so the check that means anything is that the layout the
     skill describes is the layout the repo has."""
     assert (ROOT / relative).exists(), f"{relative} is not where SKILL.md says it is"
+
+
+class TestTheRecordedFixturesCarryNoLiveAccountData:
+    """#4 AC6. The fixtures are SHIPPED material — an install copies every tracked file — and
+    they were a real `vercel project ls` capture from a live account.
+
+    These pin the sanitisation so a refresh cannot quietly restore it. They deliberately do NOT
+    claim the fixtures are fully neutral: two names remain for structural reasons, and
+    `docs/assets-disposition.md` says which and why. A guard that overstated its own coverage
+    would be worse than none.
+    """
+
+    FIXTURES = ROOT / "scripts" / "tests" / "fixtures"
+
+    def test_no_real_vercel_project_id_travels(self):
+        """The IDs were opaque real identifiers with no reason to ship."""
+        pattern = re.compile(r"prj_(?!EXAMPLE)[A-Za-z0-9]{20,}")
+        offenders = []
+        for path in sorted(self.FIXTURES.glob("vercel_project_ls.*")):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if pattern.search(line):
+                    offenders.append(f"{path.relative_to(ROOT).as_posix()}:{number}")
+        assert not offenders, (
+            "a real Vercel project id is back in the shipped fixtures: " + ", ".join(offenders))
+
+    def test_the_sanitised_project_names_stay_sanitised(self):
+        """Named individually rather than by pattern, because the point is these exact ones."""
+        removed = ["saystory-avx512-floor", "rawgentic-analysis-756-spikes",
+                   "claude-skills-design-templates", "saystory-uat-checklist"]
+        # docs/planning/ is NOT exempt here, unlike the guards above. Those exempt it because
+        # a planning document legitimately RECORDS what changed. This one is about what an
+        # install hands a stranger, and docs/planning/ ships like everything else — so
+        # exempting it would let the identifier travel while the guard reported clean. That
+        # was the review's finding, and it was right.
+        offenders = []
+        unreadable = []
+        for path in _text_files():
+            relative = path.relative_to(ROOT).as_posix()
+            if relative == THIS_FILE:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                # A file this guard could not read is not a file it can vouch for. Say so
+                # rather than skipping silently — a silent skip reads as a pass.
+                unreadable.append(relative)
+                continue
+            for name in removed:
+                if name in text:
+                    offenders.append(f"{relative} names {name}")
+        assert not offenders, (
+            "a sanitised project name is back, and an install copies it to everyone: "
+            + "; ".join(offenders))
+        assert not unreadable, (
+            "this guard could not read, and therefore cannot vouch for: " + ", ".join(unreadable))
+
+    def test_the_remaining_two_names_are_documented_rather_than_hidden(self):
+        """If the residual is not written down, the next person reads the guard above as a
+        guarantee of neutrality, which it is not."""
+        disposition = (ROOT / "docs" / "assets-disposition.md").read_text(encoding="utf-8")
+        for still_there in ("docs-index", "claude-skills-plan-786"):
+            assert still_there in disposition, (
+                f"{still_there} still ships but docs/assets-disposition.md does not say so")
