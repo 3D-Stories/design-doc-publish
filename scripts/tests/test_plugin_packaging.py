@@ -263,6 +263,7 @@ class TestWhatShipsToAStranger:
             "references/manifest.json",          # the removal record and its pinned commit
             "tests/test_vendored_references.py",  # asserts the removal stays done
             "scripts/tests/test_plugin_packaging.py",  # this file
+            "docs/assets-disposition.md",         # the decision and its reasoning (#4)
         }
         offenders = []
         for path in _text_files():
@@ -404,14 +405,23 @@ class TestTheRecordedFixturesCarryNoLiveAccountData:
         """Named individually rather than by pattern, because the point is these exact ones."""
         removed = ["saystory-avx512-floor", "rawgentic-analysis-756-spikes",
                    "claude-skills-design-templates", "saystory-uat-checklist"]
+        # docs/planning/ is NOT exempt here, unlike the guards above. Those exempt it because
+        # a planning document legitimately RECORDS what changed. This one is about what an
+        # install hands a stranger, and docs/planning/ ships like everything else — so
+        # exempting it would let the identifier travel while the guard reported clean. That
+        # was the review's finding, and it was right.
         offenders = []
+        unreadable = []
         for path in _text_files():
             relative = path.relative_to(ROOT).as_posix()
-            if relative == THIS_FILE or relative.startswith("docs/planning/"):
+            if relative == THIS_FILE:
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
+                # A file this guard could not read is not a file it can vouch for. Say so
+                # rather than skipping silently — a silent skip reads as a pass.
+                unreadable.append(relative)
                 continue
             for name in removed:
                 if name in text:
@@ -419,6 +429,8 @@ class TestTheRecordedFixturesCarryNoLiveAccountData:
         assert not offenders, (
             "a sanitised project name is back, and an install copies it to everyone: "
             + "; ".join(offenders))
+        assert not unreadable, (
+            "this guard could not read, and therefore cannot vouch for: " + ", ".join(unreadable))
 
     def test_the_remaining_two_names_are_documented_rather_than_hidden(self):
         """If the residual is not written down, the next person reads the guard above as a

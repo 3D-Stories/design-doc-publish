@@ -487,7 +487,7 @@ class TestDocumentLinksOpenInANewTab:
              "title": "First read device", "group": "claude-skills", "chip": "design",
              "updated": datetime(2026, 8, 5, 6, 0, tzinfo=timezone.utc), "updated_src": "page"},
             {"name": "example-alpha-spike", "url": "https://example-alpha-spike.vercel.app",
-             "title": "AVX512 floor", "group": "saystory", "chip": "analysis",
+             "title": "Alpha spike", "group": "example-team", "chip": "analysis",
              "updated": datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc), "updated_src": "deploy"},
         ]
         return mod.render(rows, self.STAMP, now, "sig")
