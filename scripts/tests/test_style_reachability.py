@@ -83,3 +83,55 @@ class TestTheDocumentedMappingMatchesTheCode:
         for purpose in re.findall(r"^\|\s*`([a-z-]+)`\s*\|\s*`[a-z-]+`\s*\|", text, re.M):
             assert purpose in publish_doc.PURPOSE_STYLE, (
                 f"SKILL.md documents --type {purpose}, which the code does not accept")
+
+
+# --- the README's --type table is a promise, so pin it (#3) -----------------------------
+#
+# Cross-model review, #3: the README documents eleven --type values and the template each one
+# resolves to. Nothing checked those eleven rows against the renderer, so a mapping change would
+# have made the README quietly wrong — a public user gets a different template than they were
+# promised. Both directions are asserted, because a row that vanishes is as wrong as a row that
+# lies.
+
+README = SCRIPTS.parent / "README.md"
+
+
+def _readme_type_rows() -> dict:
+    """The `| `type` | `template` | ... |` rows out of the README's --type table."""
+    text = README.read_text(encoding="utf-8")
+    start = text.index("## Choosing a `--type`")
+    end = text.index("\n## ", start + 3)
+    rows = re.findall(r"^\|\s*`([a-z-]+)`\s*\|\s*`([a-z-]+)`\s*\|", text[start:end], re.M)
+    return dict(rows)
+
+
+def _renderer_type_map() -> dict:
+    """Read the map the renderer really uses, by importing it rather than parsing source.
+
+    An earlier version of this regex-matched the source and guessed the wrong variable name,
+    which made all three assertions below fail for a reason having nothing to do with the
+    README. Importing cannot drift from the name.
+    """
+    return dict(publish_doc.PURPOSE_STYLE)
+
+
+def test_the_readme_documents_every_type_the_renderer_accepts():
+    missing = set(_renderer_type_map()) - set(_readme_type_rows())
+    assert not missing, (
+        f"the renderer accepts {sorted(missing)} but the README's --type table never lists them, "
+        "so a reader never learns those documents can be published")
+
+
+def test_the_readme_invents_no_type():
+    extra = set(_readme_type_rows()) - set(_renderer_type_map())
+    assert not extra, (
+        f"the README advertises {sorted(extra)}, which the renderer rejects — a reader who tries "
+        "one gets an argparse error and no explanation")
+
+
+def test_every_documented_type_names_the_template_it_really_resolves_to():
+    renderer, readme = _renderer_type_map(), _readme_type_rows()
+    wrong = {t: (readme[t], renderer[t]) for t in readme if t in renderer and readme[t] != renderer[t]}
+    assert not wrong, (
+        "the README promises a different template than the renderer picks, as "
+        f"type: (README says, renderer does) = {wrong}")
