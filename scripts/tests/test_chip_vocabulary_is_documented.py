@@ -37,6 +37,7 @@ from render import blocks  # noqa: E402
 
 SKILL_MD = SCRIPTS.parent / "skills" / "design-doc-publish" / "SKILL.md"
 DESIGN_LANGUAGE = SCRIPTS.parent / "docs" / "design-language.md"
+README = SCRIPTS.parent / "README.md"
 
 
 def _text(path):
@@ -90,6 +91,45 @@ def test_skill_md_says_the_set_is_closed():
     assert "closed" in text or "not free text" in text, (
         "SKILL.md must say the state cell is a closed set — that is the fact that stops an "
         "author inventing a word")
+
+
+# --- the README is a THIRD copy, and #3 is why it is pinned too --------------------------
+#
+# The vocabulary now lives in three places: design-language.md (the full rules), SKILL.md (what
+# a session loads), and README.md (what a stranger reads before installing). Three copies of the
+# same closed set WILL drift, and the drift is silent — a chip the renderer accepts but the
+# README never mentions is a feature nobody discovers, and a chip the README promises but the
+# renderer rejects is a broken promise. So the README joins the guard rather than becoming the
+# stale copy.
+
+
+@pytest.mark.parametrize("token", sorted(blocks._PHASE_STATES))
+def test_readme_names_every_state_token(token):
+    assert _names(_text(README), token), (
+        f"the renderer accepts the state {token!r} but README.md never mentions it. The README "
+        f"is what somebody reads before they install anything, so a token missing here is a "
+        f"capability they never learn about")
+
+
+def test_readme_shows_the_compound_grammar_itself_not_only_its_parts():
+    """Same reason as SKILL.md: listing the parts does not teach anyone to write `bug:must`."""
+    text = _text(README)
+    assert "<label>:<level>" in text or "label:level" in text, (
+        "README.md must show the compound SHAPE, not just the words it is built from")
+    assert re.search(r"`[a-z]+:[a-z]+`", text), (
+        "README.md must carry at least one worked example, such as `bug:must`")
+
+
+def test_readme_says_the_set_is_closed():
+    text = _text(README).lower()
+    assert "closed" in text or "not free text" in text, (
+        "README.md must say the set is closed — otherwise a reader assumes free text")
+
+
+def test_readme_points_at_the_full_rules():
+    assert "design-language.md" in _text(README), (
+        "the README must name the file carrying the full table, or a reader who needs more has "
+        "nowhere to go")
 
 
 def test_skill_md_points_at_the_full_rules():

@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Implementation plan for packaging as a plugin</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}
+@media print{:root,:root[data-theme=dark]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+
+body.tpl-roadmap{background:radial-gradient(1000px 520px at 70% -8%,#17202c 0%,var(--bg) 58%)}
+.tpl-roadmap .wrap{max-width:1120px;padding:0 22px 72px}
+.tpl-roadmap header{padding:36px 0 14px;border-bottom:none;margin-bottom:20px}
+.tpl-roadmap h1{font-size:clamp(26px,3.6vw,36px)}
+.tpl-roadmap h2{font-size:20px;margin:2em 0 .6em}
+
+.tpl-roadmap .rm-epic{border-left-width:4px}
+.tpl-roadmap .rm-meter{margin:10px 0 4px}
+.tpl-roadmap .rm-meter .blk-track{height:8px}
+.tpl-roadmap .rm-child{gap:5px}
+.tpl-roadmap .rm-child .blk-chip{font-size:10.5px;padding:2px 8px}
+/* Phase rail — what we take from the reference's `.gantt` is that a row is a PHASE, not a log
+   entry: the marker is a short bar rather than a dot, and the phase name is the heavy element
+   while the `when` shrinks to a label. It is NOT proportional — see the docstring; every bar is
+   the same size, because the grammar carries no duration. */
+.tpl-roadmap .rm-timeline{margin:18px 0;border-left-color:var(--line)}
+.tpl-roadmap .rm-timeline .blk-tl{padding:10px 0}
+.tpl-roadmap .rm-timeline .blk-tl::before{width:4px;height:22px;border-radius:2px;left:-19px;
+top:12px;background:var(--line)}
+.tpl-roadmap .rm-timeline .is-now::before{background:var(--accent)}
+.tpl-roadmap .rm-timeline .is-past::before{background:var(--ink-3)}
+.tpl-roadmap .rm-timeline .blk-when{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase}
+.tpl-roadmap .rm-timeline .blk-title{font-size:15.5px}
+/* Risk table — the reference's `.sev` pill, coloured by level, ahead of the risk text so the
+   column of pills is scannable on its own.
+   Severity is NOT a closed set here, which is worth knowing before reading the four rules below.
+   `_findings` calls `_token(value, "severity")` and `_SEMANTIC_SETS` has no "severity" entry, so
+   ANY slug passes straight through — `blocker` yields `is-blocker`, and a blank field yields
+   `is-note`. Neither warns. Executed, not assumed. The four rules colour the four levels the rest
+   of the engine already uses (`review` styles the same set); anything else keeps the base pill
+   shape with no fill, and the author's own word still renders inside it. Deliberate: an
+   unrecognised severity should look unrecognised, not be silently recoloured. */
+.tpl-roadmap .rm-risk{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+padding:4px 16px;margin:14px 0}
+.tpl-roadmap .rm-risk .blk-finding{border-bottom:1px solid var(--line);padding:10px 0}
+.tpl-roadmap .rm-risk .blk-finding:last-child{border-bottom:none}
+.tpl-roadmap .rm-risk .blk-sev{display:inline-block;font:700 10px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;padding:2px 9px;
+border-radius:999px;margin-right:8px}
+.tpl-roadmap .rm-risk .is-critical .blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .rm-risk .is-high .blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.tpl-roadmap .rm-risk .is-medium .blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .rm-risk .is-low .blk-sev{color:var(--sev-low);background:var(--sev-low-bg)}
+/* Data-flow figure — the reference's `.diagram`: a framed figure whose nodes are boxes and
+   whose edges are accented. The tree stays a tree; only the framing and the edge weight come
+   from the reference. */
+.tpl-roadmap .rm-flow{background:var(--code);border:1px solid var(--line);border-radius:12px;
+padding:12px 16px;margin:16px 0}
+.tpl-roadmap .rm-flow .blk-node{background:var(--bg)}
+.tpl-roadmap .rm-flow .blk-edge{color:var(--accent);font:700 10.5px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.05em}
+.tpl-roadmap .rm-flow .blk-label{font-weight:650}
+/* #68: the segmented composition meter — the signature device of the approved visual spec
+   (docs/planning/2026-08-02-72-visual-spec.md §2). One segment per group, proportional to its
+   count, coloured by STATE. The gap between segments is what makes it read as parts of a whole
+   rather than one bar; a solid bar is what `meter` already is. */
+.tpl-roadmap .blk-comp{margin:14px 0}
+.tpl-roadmap .blk-comp-bar{display:flex;gap:5px}
+.tpl-roadmap .blk-comp-seg{height:9px;border-radius:5px;background:var(--ink-3)}
+.tpl-roadmap .blk-comp-seg.is-crit{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-seg.is-warn{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-seg.is-ok{background:var(--chip-c)}
+/* #166: the STATUS half of the phase vocabulary. Strictly additive — the three severity rules
+   above keep their exact declarations, because every roadmap published so far is drawn with
+   them and a repaint is not a fix. The groups are declared in `blocks.py`; this layer only
+   says which colour each group takes, and `test_phase_state_vocabulary.py` fails when a
+   declared token has no rule here. */
+.tpl-roadmap .blk-comp-seg.is-done,.tpl-roadmap .blk-comp-seg.is-shipped,
+.tpl-roadmap .blk-comp-seg.is-merged{background:var(--chip-c)}
+.tpl-roadmap .blk-comp-seg.is-active,.tpl-roadmap .blk-comp-seg.is-wip,
+.tpl-roadmap .blk-comp-seg.is-pending{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-seg.is-blocked,
+.tpl-roadmap .blk-comp-seg.is-failed{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-legend{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:9px;
+font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.tpl-roadmap .blk-comp-key{display:inline-flex;align-items:center;gap:7px}
+.tpl-roadmap .blk-comp-key::before{content:"";width:8px;height:8px;border-radius:2px;
+background:var(--ink-3)}
+.tpl-roadmap .blk-comp-key.is-crit::before{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-key.is-warn::before{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-key.is-ok::before{background:var(--chip-c)}
+/* #68 PR 2: the phase band — the container the composition meter measures.
+   Spec §2 "Tracks as first-class containers": a titled band with its own state badge, its own
+   segmented bar, and its work items nested INSIDE it. Depth by ground, not shadow (spec rule 2):
+   the band sits on `--surface` and its item strip sinks back to `--bg`, which is the two-ground
+   version of the target's three. The ordinal is what makes the sequence visible — it is the
+   "phases in order" the issue title asks for, and it is why the gutter is fixed-width and mono:
+   `01` and `10` must line up or the column stops reading as a sequence. */
+.tpl-roadmap .rm-phase{margin:18px 0;display:flex;flex-direction:column;gap:14px}
+.tpl-roadmap .blk-ph{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 16px;border-left:4px solid var(--ink-3)}
+.tpl-roadmap .blk-ph.is-crit{border-left-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph.is-warn{border-left-color:var(--sev-med)}
+.tpl-roadmap .blk-ph.is-ok{border-left-color:var(--chip-c)}
+.tpl-roadmap .blk-ph.is-done,.tpl-roadmap .blk-ph.is-shipped,
+.tpl-roadmap .blk-ph.is-merged{border-left-color:var(--chip-c)}
+.tpl-roadmap .blk-ph.is-active,.tpl-roadmap .blk-ph.is-wip,
+.tpl-roadmap .blk-ph.is-pending{border-left-color:var(--sev-med)}
+.tpl-roadmap .blk-ph.is-blocked,
+.tpl-roadmap .blk-ph.is-failed{border-left-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph-head{display:flex;align-items:baseline;gap:12px}
+.tpl-roadmap .blk-ph-ord{flex:none;width:26px;font:700 13px/1.4 ui-monospace,Menlo,
+Consolas,monospace;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tpl-roadmap .blk-ph-title{flex:1;font-size:15.5px;font-weight:700}
+.tpl-roadmap .blk-ph-badge{flex:none;font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:2px 9px;border-radius:6px;
+color:var(--ink-3);border:1px solid var(--line)}
+.tpl-roadmap .blk-ph-badge.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-warn{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-ok{color:var(--chip-c);background:var(--sev-low-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-done,.tpl-roadmap .blk-ph-badge.is-shipped,
+.tpl-roadmap .blk-ph-badge.is-merged{color:var(--chip-c);background:var(--sev-low-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-active,.tpl-roadmap .blk-ph-badge.is-wip,
+.tpl-roadmap .blk-ph-badge.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-blocked,
+.tpl-roadmap .blk-ph-badge.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+/* One segment per ITEM, so the bar is a picture of the list beneath it. Equal widths (spec §2)
+   — `flex:1` rather than an inline percentage, so the renderer does no arithmetic and the
+   segments cannot drift out of step with the rows they stand for. */
+.tpl-roadmap .blk-ph > .blk-comp-bar{margin:11px 0 0}
+.tpl-roadmap .blk-ph .blk-comp-seg{flex:1}
+.tpl-roadmap .blk-ph-items{margin-top:11px}
+.tpl-roadmap .blk-ph-items:empty{display:none}
+/* 38px = the ordinal's 26px plus the head's 12px gap, so an item's id starts exactly under
+   its phase's title. At 26px they were three-quarters aligned, which reads as a mistake
+   rather than as a level of hierarchy — found by looking, not by a test. */
+.tpl-roadmap .blk-ph-item{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+padding:8px 0 8px 38px;border-top:1px solid var(--line)}
+.tpl-roadmap .blk-ph-id{font:700 11.5px/1.6 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);border-bottom:2px solid var(--line);padding-bottom:1px}
+.tpl-roadmap .blk-ph-item.is-crit .blk-ph-id{color:var(--sev-crit);
+border-bottom-color:var(--sev-crit)}
+/* The id accent marks TROUBLE only, which is why it is not the whole vocabulary: if every state
+   coloured the id, none of them would stand out. `blocked` and `failed` join `crit` because they
+   are the same group (`_PHASE_STATE_STUCK`), and the guard pins that the group and these rules
+   name the same three words. Written as its own rule rather than appended to the selector list
+   above, so the `is-crit` line stays byte-for-byte what shipped. */
+.tpl-roadmap .blk-ph-item.is-blocked .blk-ph-id,
+.tpl-roadmap .blk-ph-item.is-failed .blk-ph-id{color:var(--sev-crit);
+border-bottom-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph-chip{font:700 9.5px/1.7 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:1px 7px;border-radius:6px;
+color:var(--ink-3);background:var(--code)}
+.tpl-roadmap .blk-ph-chip.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .blk-ph-chip.is-warn{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .blk-ph-chip.is-ok{color:var(--chip-c);background:var(--sev-low-bg)}
+/* The reported defect: DONE rendered grey because nothing matched `.is-done`. These take the
+   SAME declarations as `.is-ok` above rather than a new green, so a page that says DONE and a
+   page that says OK do not become two different-looking claims about the same thing. Measured
+   AA on both: 7.54 dark, 4.82 light. */
+.tpl-roadmap .blk-ph-chip.is-done,.tpl-roadmap .blk-ph-chip.is-shipped,
+.tpl-roadmap .blk-ph-chip.is-merged{color:var(--chip-c);background:var(--sev-low-bg)}
+.tpl-roadmap .blk-ph-chip.is-active,.tpl-roadmap .blk-ph-chip.is-wip,
+.tpl-roadmap .blk-ph-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .blk-ph-chip.is-blocked,
+.tpl-roadmap .blk-ph-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-roadmap">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-10 16:10 MDT</div>
+<h1>Implementation plan for packaging as a plugin</h1>
+
+</header>
+<main>
+<h1>Implementation plan — #2 package as an installable plugin</h1>
+<p>Design: <code>docs/planning/2026-08-10-2-package-as-plugin.md</code> (including its post-gate amendments) · Base <code>e733007</code> · Baseline <code>2257 passed, 4 skipped, exit 0</code></p>
+<p>Verification strategy: red before green per task wherever a test can express the change. The guard in T6 is written FIRST and fails until T1 and T2 land. Scoped suites during iteration. The full suite runs once at Step 9, diffed against the baseline above.</p>
+<table>
+<thead><tr><th>#</th><th>Task</th><th>riskLevel</th><th>Verification</th></tr></thead>
+<tbody>
+<tr><td>T6</td><td>New guard <code>scripts/tests/test_plugin_packaging.py</code>, written red: manifest carries the eight fields, marketplace lists the skill, <code>SKILL.md</code> uses <code>${CLAUDE_PLUGIN_ROOT}</code>, no <code>~/.claude/skills/</code>-rooted path survives, no unlicensed vendored set present, zero dangling <code>nsmith-html</code> references outside the notices</td><td>medium</td><td>the guard, red first then green</td></tr>
+<tr><td>T1</td><td><code>.claude-plugin/plugin.json</code> (concrete content in design item 11) and <code>.claude-plugin/marketplace.json</code> (<code>source: &quot;./&quot;</code>, <code>strict: true</code>, <code>skills: [&quot;./skills/design-doc-publish&quot;]</code>)</td><td>medium</td><td>T6</td></tr>
+<tr><td>T2</td><td>Move <code>SKILL.md</code> → <code>skills/design-doc-publish/SKILL.md</code>. Rewrite lines 12, 42, 81 to <code>${CLAUDE_PLUGIN_ROOT}/</code></td><td><strong>high</strong></td><td>T6</td></tr>
+<tr><td>T3</td><td>Repoint four SKILL.md locators: <code>test_style_reachability.py:29</code>, <code>test_chip_vocabulary_is_documented.py:38</code>, <code>test_publish_doc.py:927</code>, <code>:1230</code></td><td>low</td><td>those suites, scoped</td></tr>
+<tr><td>T4</td><td>Rewrite three install-shape assertions in <code>test_publish_doc.py</code> (<code>:1084</code>, <code>:1088</code>, <code>:1092</code>). The last pinned the checkout directory NAME — replace with an existence check relative to the package root</td><td>medium</td><td><code>pytest scripts/tests/test_publish_doc.py</code></td></tr>
+<tr><td>T5</td><td>Delete <code>references/nsmith-html/</code> (20 templates + <code>LICENSE-upstream.txt</code>). Update <code>tests/test_vendored_references.py</code>, <code>references/README.md</code>, <code>references/manifest.json</code>, and the nine <code>scripts/render/templates/*.py</code> comments. Record the removal and pinned upstream commit in <code>docs/third-party-notices.md</code></td><td><strong>high</strong></td><td><code>pytest tests/</code>, plus T6&#x27;s referential-integrity assertion</td></tr>
+<tr><td>T7</td><td>Remove <code>docs/vercel-account.md</code> from this repo (owner decision D13 — it documents one account, not the tool)</td><td>medium</td><td>T6 asserts it is absent from the shipped tree</td></tr>
+<tr><td>T10</td><td><code>README.md</code> install section: <code>claude plugin marketplace add</code> then <code>claude plugin install</code>, in that order. The human-facing command must NOT use <code>${CLAUDE_PLUGIN_ROOT}</code>, which no shell expands</td><td>low</td><td>scoped doc guards</td></tr>
+<tr><td>T11</td><td>Live verification. Install the real plugin, assert the resolved skill root is under <code>~/.claude/plugins/cache/</code> and NOT the legacy symlink, render one real <code>.md</code> end to end through the installed copy with all 7 stages OK, confirm a genuinely fresh session can invoke it, then uninstall AND remove the orphaned version directory, asserting both settings and cache path are gone</td><td><strong>high</strong></td><td>AC3, AC4, AC6 — evidence captured verbatim</td></tr>
+</tbody>
+</table>
+<p>Three tasks are <code>riskLevel: high</code> (T2, T5, T11), so <strong>Step 8a per-task review is mandatory</strong> as one accumulated wave over their commits.</p>
+<section class="mstone rm-epic"><h3>Deferred verification <span class="chip c-plan">—</span></h3><p>None planned. T11 is the live check and runs in-run. If the fresh-session half (AC3) cannot be completed from inside this session, it is recorded as a deferral carrying its local proxy and its target check, never silently dropped.</p></section>
+<section class="mstone rm-epic"><h3>Sequencing <span class="chip c-plan">—</span></h3><p>T6 (red) → T1 → T2 → T3 → T4 → T5 → T7 → T10 → T11. T3 and T4 both edit <code>test_publish_doc.py</code>, so they run adjacent and in that order.</p></section>
+<section class="mstone rm-epic"><h3>Scope note <span class="chip c-plan">—</span></h3><p>T7 removes <code>docs/vercel-account.md</code>, which stays in #2 because it is about what the plugin ships.</p>
+<p>The setup flow does NOT ship here. Owner decision D14 split it into its own child, <a href="https://github.com/3D-Stories/design-doc-publish/issues/9">#9</a>, which now carries the setup entry point and the retirement of the hardcoded <code>~/rawgentic/.rawgentic_workspace.json</code> default at <code>scripts/publish_doc.py:134</code> and <code>index/build_index.py:75</code>. #9 depends on #2 and is in this run&#x27;s queue. So #2 stays inside its six original acceptance criteria.</p></section>
+
+</main>
+<footer>Last updated: 2026-08-10 16:10 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
