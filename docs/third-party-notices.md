@@ -6,17 +6,30 @@ projects and remains under its own terms.
 
 ## Vendored material
 
-| Path | Upstream | Pinned commit | Licence | Notice |
+| Path | Upstream | Pinned commit | Licence status | Redistribution |
 | --- | --- | --- | --- | --- |
-| `references/nsmith-html/` (20 HTML templates) | `nsmith/html` | `eece610140a08ebbfdd96938ee1610b19793d1ec` | MIT | Upstream ships **no** LICENSE file. The evidence for the MIT determination is quoted verbatim in `references/nsmith-html/LICENSE-upstream.txt`, together with the repository owner's adjudication of 2026-08-02 on issue #38. |
-| `references/artifact-organizer/` (7 theme CSS files) | `keepYaoung/artifact-organizer` | `3e5bc0ef00de784dab48b411b3493c7d72d856ca` | MIT | Upstream notice retained verbatim in `references/artifact-organizer/LICENSE-upstream.txt`. |
+| `references/artifact-organizer/` (7 theme CSS files) | `keepYaoung/artifact-organizer` | `3e5bc0ef00de784dab48b411b3493c7d72d856ca` | **MIT, granted by upstream.** Notice retained verbatim in `references/artifact-organizer/LICENSE-upstream.txt`. | Permitted, provided the retained notice travels with the material. |
+| `references/nsmith-html/` (20 HTML templates) | `nsmith/html` | `eece610140a08ebbfdd96938ee1610b19793d1ec` | **No upstream grant exists.** Upstream ships no LICENSE file. `references/nsmith-html/LICENSE-upstream.txt` holds the evidence considered and the repository owner's internal adjudication of 2026-08-02 (issue #38) that MIT applies. | **NOT established.** See below. |
 
-Both sets are MIT, and MIT permits redistribution provided the notice travels with the
-material. Both notices are retained as files in this repository, so that condition is met.
-The two notice files are **not** equivalent — one holds a real upstream notice, the other
-holds the evidence and adjudication for a licence the upstream never stated — and
-`references/nsmith-html/LICENSE-upstream.txt` says so explicitly rather than letting a
-reader assume otherwise.
+**On `references/nsmith-html/`, stated plainly rather than favourably.** An internal adjudication
+records a decision *we* made; it is not a licence *grant* from the copyright holder, and it cannot
+supply permission the upstream never gave. An earlier draft of this file asserted "MIT, and MIT
+permits redistribution" for this set. That conflated the two and is corrected here — the cross-model
+review of this change flagged it, and the flag was right.
+
+What follows from that:
+
+- Keeping these files in a **private** repository as visual reference is the status quo and is what
+  this repository does today. It is private.
+- **Redistributing them** — publishing the repository, or shipping them inside a distributed plugin —
+  is a different act and is **not** authorised by anything in this file.
+- Establishing an actual upstream grant, or removing the set, is
+  [issue #4](https://github.com/3D-Stories/design-doc-publish/issues/4), which exists precisely
+  because redistribution is not the same act as private reference. Until it resolves, treat
+  `references/nsmith-html/` as excluded from distribution.
+
+The project `LICENSE` (MIT) covers only material authored here and makes no claim over either
+vendored set.
 
 ## What this material is, and how to treat it
 

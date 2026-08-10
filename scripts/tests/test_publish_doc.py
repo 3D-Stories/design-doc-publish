@@ -1359,6 +1359,11 @@ class TestNoRendererOwnedRelativeReferenceExists:
         if mockups.is_file():          # the corpus that motivated the floor is present
             assert checked >= 21, (
                 f"expected the template-mockups shots to be checked; only saw {checked}")
+        elif checked == 0:
+            # Neither the original corpus page nor any other published page is here, so the
+            # loop above asserted nothing. Say so instead of reporting a silent pass: a
+            # dormant guard that looks green is worse than one that admits it did not run.
+            pytest.skip("no published pages in docs/planning yet, so nothing was checked")
 
 
 class TestAPageMissingItsStyleDevicesIsRefused:
