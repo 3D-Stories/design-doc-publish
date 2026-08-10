@@ -59,12 +59,17 @@ Open `hello.html`. That is the whole loop.
 **Rendering works for anyone. Publishing does not work for anyone but the author yet.**
 
 `scripts/publish_doc.py` renders, lints, deploys to Vercel and verifies the live page, in seven
-stages. Stages 1 to 3 work for you. Stage 4 onward does not, because two things are still hardcoded
-to one machine:
+stages. **Stage 1 works for you. Stage 2 refuses**, and that is measured, not estimated:
 
-- the workspace file it validates `--project` against, so the run stops with
-  `--project '<name>' is not a rawgentic project in ~/rawgentic/.rawgentic_workspace.json`
-- the Vercel team it deploys into
+```
+publish_doc: 1/7 rendered hello.html (design template)
+publish_doc: FAILED at stage 2: --project '<name>' is not a rawgentic project in
+~/rawgentic/.rawgentic_workspace.json, and is not the literal 'workspace' bucket.
+```
+
+Two things are still hardcoded to one machine: the workspace file that stage 2 validates
+`--project` against, and the Vercel team the deploy stages target. So use `scripts/render-doc`
+above, which has neither dependency, rather than `publish_doc.py`.
 
 [Issue #9](https://github.com/3D-Stories/design-doc-publish/issues/9) is the first-run setup flow
 that fixes both. **No release is tagged until it lands**, because tagging one would advertise
@@ -122,8 +127,12 @@ keeps this section and it from drifting apart.
 - **It fetches nothing at runtime.** No web fonts, no CDN scripts, no analytics, no remote images.
   The one exception is not an exception in practice: if you write a link in your markdown, the page
   contains that link, and a reader may click it. Nothing loads without them choosing to.
-- **It survives a strict Content-Security-Policy.** There is no inline event handler and no
-  `javascript:` URL to be blocked.
+- **It carries no script at all.** No inline event handler, no `javascript:` URL, no `<script>`
+  block. A Content-Security-Policy that forbids scripts outright costs the page nothing, because
+  there is nothing to block.
+- **One honest caveat about CSP.** The styling lives in a single inline `<style>` block, so a policy
+  with a strict `style-src` and no `'unsafe-inline'` will strip the design and leave you readable
+  but unstyled. If you serve these under such a policy, allow that block by hash or nonce.
 
 ## Running the tests
 
@@ -132,7 +141,7 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2234 passed, 7 skipped**, exit 0.
+Expected: **2235 passed, 7 skipped**, exit 0.
 
 Three of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
 `python3 -m pytest` — on the machine this package came from, the interpreter cannot import pytest

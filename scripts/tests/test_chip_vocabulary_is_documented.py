@@ -111,6 +111,34 @@ def test_readme_names_every_state_token(token):
         f"capability they never learn about")
 
 
+def test_readme_advertises_no_token_the_renderer_would_reject():
+    """The OTHER direction, and the cross-model review was right that it was missing.
+
+    Every guard above is parametrised over the renderer's own token set, so they only catch
+    "the renderer accepts X and the README never says so". If a token is REMOVED from the
+    renderer, its parametrised case simply disappears — and the README can go on advertising a
+    chip that now renders as a fallback. That is the documented-but-rejected broken promise,
+    which is the failure a reader actually experiences, and nothing was checking for it.
+
+    So read the vocabulary out of the README and require every token to be one the renderer
+    really accepts.
+    """
+    text = _text(README)
+    start = text.index("## Chip state vocabulary")
+    end = text.index("##", start + 3)
+    section = text[start:end]
+    # The bare-token list is the run of single-word backticked spans before the compound prose.
+    advertised = {m for m in re.findall(r"`([a-z][a-z-]*)`", section)}
+    known = set(blocks._PHASE_STATES) | set(blocks._PHASE_LEVELS) | set(blocks._PHASE_LABELS)
+    # Words the section uses ABOUT the vocabulary rather than as a token.
+    prose = {"label", "level", "design-language", "md"}
+    unknown = {tok for tok in advertised - known - prose if ":" not in tok}
+    assert not unknown, (
+        f"README.md advertises {sorted(unknown)}, which the renderer does not accept. A reader "
+        "who writes one gets a fallback chip and no explanation — a promise the code does not "
+        "keep")
+
+
 def test_readme_shows_the_compound_grammar_itself_not_only_its_parts():
     """Same reason as SKILL.md: listing the parts does not teach anyone to write `bug:must`."""
     text = _text(README)
