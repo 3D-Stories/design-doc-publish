@@ -24,7 +24,7 @@ import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 CROSSSTYLE = SCRIPTS / "tests" / "crossstyle.sh"
-REL = "user/design-doc-publish"
+REL = "."
 
 TEN = ["plain", "analysis", "roadmap", "report", "design",
        "dashboard", "review", "spec", "uat", "workflow"]

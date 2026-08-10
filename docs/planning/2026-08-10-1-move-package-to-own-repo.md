@@ -113,10 +113,14 @@ green:
 shape: `root / REL / "scripts"` (Python, line 59) and `$1/$REL/scripts/render-doc` (bash, lines 48
 and 95), `$BASE_TREE/$REL/scripts/tests/fixtures/crossstyle.md` (lines 79, 81).
 
-**The value alone is not the fix.** `.` resolves to *something* even when `render-doc` is absent, so
-a missing launcher would read as a roster problem. So `crossstyle.sh` additionally **asserts the
-composed launcher path is an existing file** before invoking it, exiting non-zero with a message
-naming the missing path. That assertion is the substance; the constant is incidental.
+**Correction, found by reading the script rather than assuming.** Earlier passes of this design said
+an existence assertion had to be *added*. It already exists, at all three `$REL` call sites:
+`crossstyle.sh:49` and `:99` each do
+`[ -f "$doc" ] || { echo "FAIL: no render-doc launcher at $doc"; exit 2; }`, and the fixture path at
+`:84` falls back to HEAD then exits 2 naming the failure. A further guard at `:53` exits 2 when the
+roster comes back empty. So the script already fails loudly and names the missing path, and this task
+adds nothing — it changes the constant only. Adding a fourth assertion would have been duplicated
+logic dressed as diligence.
 
 **Because the suite passes either way, it cannot prove this fix.** The pass condition is explicit:
 
@@ -129,11 +133,16 @@ naming the missing path. That assertion is the substance; the constant is incide
    so the check would fail for a reason unrelated to `REL`.
 2. Assert the resolved launcher path in **each** checkout is an existing file before invoking.
 3. `crossstyle.sh head base out --no-style-change` → **exit 0**, output naming no moved style.
-4. Negative case, with a stated mechanism rather than "make unreadable": `chmod 000
-   head/scripts/STYLES.json`, having first asserted the process is **not** running as root
-   (`[ "$(id -u)" -ne 0 ]`), because mode bits do not stop uid 0 and the case would silently pass.
-   Expect **exit 2** with a diagnostic naming the unreadable roster. Exit 0 there is a FAILURE of
-   this task — it would mean the guard silently did not run. Restore the mode afterwards.
+4. Negative case. **Corrected after running it:** an earlier draft said `chmod 000
+   head/scripts/STYLES.json`. That file does not exist in the real package — it belongs to the
+   *synthetic stub tree* the unit tests build, which is the same tautology in another guise, and the
+   attempt therefore proved nothing (it ran to exit 0 with the roster intact). The real roster is
+   parsed from the launcher's own `--help` output (`crossstyle.sh:52`), so the correct trigger is a
+   launcher that **exists but cannot run**: `chmod 000 head/scripts/render-doc`, having first
+   asserted the process is not root (`[ "$(id -u)" -ne 0 ]`), since mode bits do not stop uid 0 and
+   the case would silently pass. Then `[ -f "$doc" ]` still succeeds while `python3 "$doc" --help`
+   fails, the roster comes back empty, and `:53` exits 2. Restore the mode afterwards.
+   **Result: exit 2, confirmed.** Exit 0 there would be a failure of this task.
 
 ## The corpus-floor change, stated exactly
 

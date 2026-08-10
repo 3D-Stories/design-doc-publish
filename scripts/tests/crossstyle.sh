@@ -38,7 +38,7 @@ OUT=${3:?output dir required}
 TARGET=${4:?mode required: a target style, --foundation, or --no-style-change}
 
 STAMP="2026-08-02 00:00 MDT"
-REL="user/design-doc-publish"
+REL="."
 
 # Each tree's roster comes from its OWN launcher, so a tree is never asked for a style it lacks.
 # `--help` prints the choice list twice (usage line, then the option description); the first match
