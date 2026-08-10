@@ -1343,7 +1343,7 @@ class TestNoRendererOwnedRelativeReferenceExists:
         the repo itself is checked. This is what proves #121 fixes rather than breaks the corpus —
         `2026-08-02-template-mockups.html` carries 21 `./shots/*.png` references that were 404ing
         on the published page before this change."""
-        planning = (Path(publish_doc.__file__).resolve().parents[3] / "docs" / "planning")
+        planning = (Path(publish_doc.__file__).resolve().parents[1] / "docs" / "planning")
         if not planning.is_dir():          # a checkout without the docs tree is not a failure
             pytest.skip("no docs/planning in this tree")
         checked = 0
@@ -1355,8 +1355,10 @@ class TestNoRendererOwnedRelativeReferenceExists:
                 assert target.suffix.lower() in publish_doc._ASSET_SUFFIXES, (
                     f"{page.name} references {ref}, which this publisher would refuse")
                 checked += 1
-        assert checked >= 21, (
-            f"expected the template-mockups shots to be checked; only saw {checked}")
+        mockups = planning / "2026-08-02-template-mockups.html"
+        if mockups.is_file():          # the corpus that motivated the floor is present
+            assert checked >= 21, (
+                f"expected the template-mockups shots to be checked; only saw {checked}")
 
 
 class TestAPageMissingItsStyleDevicesIsRefused:

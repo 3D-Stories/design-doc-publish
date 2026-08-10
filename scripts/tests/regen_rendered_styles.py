@@ -26,7 +26,7 @@ from render import templates as render_templates  # noqa: E402
 
 # The pinned recipe. Identical to `crossstyle.sh`'s values, deliberately: the README documents that
 # command too, and a second set of numbers here would make one of the two a lie.
-PAGES = SCRIPTS.parent.parent.parent / "docs" / "rendered-styles"
+PAGES = SCRIPTS.parent / "docs" / "rendered-styles"
 FIXTURE = SCRIPTS / "tests" / "fixtures" / "crossstyle.md"
 TITLE = "Cross-style probe"
 STAMP = "2026-08-02 00:00 MDT"
