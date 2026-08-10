@@ -201,6 +201,29 @@ class TestWhatShipsToAStranger:
         assert not offenders, (
             "these still name the removed vendored set: " + ", ".join(offenders))
 
+    def test_private_working_state_can_never_reach_the_distribution_source(self):
+        """Measured during #2's live verification, and it was a surprise worth pinning.
+
+        `claude plugin install` from a LOCAL PATH copies the working DIRECTORY, not the git
+        tree. The real install shipped 221 files where git tracked 120: `claude_docs/` went
+        along, carrying campaign driver state, supervision claims and a loop-back token.
+        `.git` did NOT ship, so a GitHub-sourced install (the real distribution path, which
+        clones) carries committed files only.
+
+        So the load-bearing property is that this material is gitignored — that is what keeps
+        it out of every clone, and therefore out of every install a stranger performs. It also
+        means you must not test-install from a working tree holding private state and then
+        conclude the bundle is clean. It is clean only from a clean clone.
+        """
+        for private in ("claude_docs/", ".rawgentic-*", "index/index.html"):
+            result = subprocess.run(
+                ["git", "-C", str(ROOT), "check-ignore", "-q", private.rstrip("*")],
+                capture_output=True,
+            )
+            assert result.returncode == 0, (
+                f"{private} is not gitignored, so it would reach the distribution source and "
+                "every install made from it")
+
     def test_no_account_specific_document_ships(self):
         """docs/vercel-account.md named one Vercel team and recorded that its deployment
         protection was deliberately off. That is a posture disclosure, and an install would
