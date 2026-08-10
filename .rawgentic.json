@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "project": {
+    "name": "design-doc-publish",
+    "type": "scripts",
+    "description": "Claude Code add-on that renders design/architecture markdown docs to standalone HTML and deploys them to Vercel; publish_doc.py renders, lints, deploys, and verifies in one command."
+  },
+  "repo": {
+    "provider": "github",
+    "fullName": "3D-Stories/design-doc-publish",
+    "defaultBranch": "main"
+  },
+  "contextMeter": {
+    "windowSize": 1000000
+  },
+  "techStack": [
+    "python",
+    "markdown",
+    "html",
+    "css",
+    "vercel",
+    "claude-code-skill"
+  ],
+  "protectionLevel": "standard",
+  "custom": {}
+}

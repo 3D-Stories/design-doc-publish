@@ -1,0 +1,12 @@
+.DS_Store
+__pycache__/
+*.pyc
+
+# Runtime working state (campaign driver state, session notes). Never committed.
+claude_docs/
+
+# index/index.html is a BUILD ARTIFACT, derived from `vercel project ls` by
+# index/build_index.py. Committing it would recreate the shared mutable file
+# whose lost-row race motivated deriving it (owner decision 2026-08-01).
+# Rebuild it; never edit or commit it.
+index/index.html
