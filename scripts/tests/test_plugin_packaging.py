@@ -35,6 +35,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 PLUGIN_MANIFEST = ROOT / ".claude-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".claude-plugin" / "marketplace.json"
 SKILL_MD = ROOT / "skills" / "design-doc-publish" / "SKILL.md"
+THIS_FILE = Path(__file__).resolve().relative_to(ROOT).as_posix()
 
 # The eight keys AC1 names, modelled on projects/rawgentic/.claude-plugin/plugin.json,
 # which was read and carries exactly these.
@@ -133,15 +134,20 @@ class TestTheSkillIsPluginRooted:
         installed, and it fails at the moment somebody else first tries the tool."""
         offenders = []
         for path in _text_files():
+            relative = path.relative_to(ROOT).as_posix()
+            # Exempt the files whose job is to RECORD the old shape: the planning documents
+            # that explain what changed, and this guard, which must name the pattern it hunts.
+            if relative.startswith("docs/planning/") or relative == THIS_FILE:
+                continue
+            if path.name == "third-party-notices.md":
+                continue
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
-            if path.name == "third-party-notices.md":
-                continue
             for number, line in enumerate(text.splitlines(), 1):
                 if LEGACY_INSTALL_RE.search(line):
-                    offenders.append(f"{path.relative_to(ROOT)}:{number}")
+                    offenders.append(f"{relative}:{number}")
         assert not offenders, (
             "these still address the retired ~/.claude/skills install root: "
             + ", ".join(offenders))
@@ -167,21 +173,31 @@ class TestWhatShipsToAStranger:
 
     def test_no_dangling_reference_to_the_removed_set(self):
         """Deleting files is half the job. A comment or fixture still naming them is a
-        pointer to nothing, which reads as an answer and delivers none."""
+        pointer to nothing, which reads as an answer and delivers none.
+
+        Four files are exempt because naming the removed set is their JOB — they are the
+        record of what went and why, and losing that record is how a future refresh
+        re-vendors unlicensed material without noticing. Everything else must be clean.
+        """
+        keeps_the_record = {
+            "docs/third-party-notices.md",       # the licence position itself
+            "references/README.md",              # provenance, including what was removed
+            "references/manifest.json",          # the removal record and its pinned commit
+            "tests/test_vendored_references.py",  # asserts the removal stays done
+            "scripts/tests/test_plugin_packaging.py",  # this file
+        }
         offenders = []
         for path in _text_files():
+            relative = path.relative_to(ROOT).as_posix()
+            if relative in keeps_the_record or relative.startswith("docs/planning/"):
+                continue
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 continue
-            # The notices file deliberately keeps the record of what was removed and why.
-            if path.name == "third-party-notices.md":
-                continue
-            if "docs/planning/" in path.as_posix():
-                continue
             for number, line in enumerate(text.splitlines(), 1):
                 if "nsmith-html" in line:
-                    offenders.append(f"{path.relative_to(ROOT)}:{number}")
+                    offenders.append(f"{relative}:{number}")
         assert not offenders, (
             "these still name the removed vendored set: " + ", ".join(offenders))
 

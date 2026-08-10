@@ -86,7 +86,11 @@ def _load_manifest() -> dict:
 
 
 def _templates() -> list[Path]:
-    return sorted((REFERENCES / "nsmith-html").glob("*.html"))
+    """Empty since #2 removed the unlicensed set. Kept so the header-leak guards below
+    stay wired: if a future refresh vendors HTML templates again, they are covered the
+    moment the directory reappears, with no test needing to be rewritten."""
+    directory = REFERENCES / "nsmith-html"
+    return sorted(directory.glob("*.html")) if directory.is_dir() else []
 
 
 def _themes() -> list[Path]:
@@ -166,8 +170,10 @@ def test_manifest_hashes_match_the_bytes() -> None:
 
 
 def test_the_expected_counts_are_present() -> None:
-    assert len(_templates()) == 20, "expected exactly 20 nsmith templates"
     assert len(_themes()) == 7, "expected exactly 7 artifact-organizer themes"
+    assert not (REFERENCES / "nsmith-html").exists(), (
+        "the nsmith set was removed in #2 for want of an upstream licence grant — see\n"
+        "docs/third-party-notices.md before vendoring it again")
 
 
 @pytest.mark.parametrize("path", _templates(), ids=lambda p: p.stem)
@@ -195,9 +201,7 @@ ORGANIZER_SHA = "3e5bc0ef00de784dab48b411b3493c7d72d856ca"
 def test_provenance_records_the_required_facts() -> None:
     readme = (REFERENCES / "README.md").read_text(encoding="utf-8")
     for needle in (
-        "nsmith/html",
         "keepYaoung/artifact-organizer",
-        NSMITH_SHA,
         ORGANIZER_SHA,
         "MIT",
     ):
@@ -205,26 +209,26 @@ def test_provenance_records_the_required_facts() -> None:
     assert re.search(r"\b20\d{2}-\d{2}-\d{2}\b", readme), "README.md records no ISO vendoring date"
 
 
-@pytest.mark.parametrize(
-    "relative", ["nsmith-html/LICENSE-upstream.txt", "artifact-organizer/LICENSE-upstream.txt"]
-)
+@pytest.mark.parametrize("relative", ["artifact-organizer/LICENSE-upstream.txt"])
 def test_licence_evidence_is_retained(relative: str) -> None:
     path = REFERENCES / relative
     assert path.is_file(), f"missing licence evidence: {relative}"
     assert path.read_text(encoding="utf-8").strip(), f"empty licence evidence: {relative}"
 
 
-def test_nsmith_licence_evidence_is_pinned_to_the_vendored_commit() -> None:
-    """A refresh that advances the manifest pin must not leave stale licence evidence behind."""
+def test_the_manifest_records_the_removal_and_its_pin() -> None:
+    """#2 removed the nsmith set because no upstream grant exists. The manifest keeps the
+    record — including the commit it was pinned at — so restoring it is one command if a
+    grant is ever established, and so a silent re-vendoring is visible in the diff."""
     manifest = _load_manifest()
-    pins = {
-        entry["upstream_commit"]
-        for entry in manifest["files"]
-        if entry["upstream_repo"] == "nsmith/html"
-    }
-    assert len(pins) == 1, f"nsmith files span several commits: {sorted(pins)}"
-    evidence = (REFERENCES / "nsmith-html/LICENSE-upstream.txt").read_text(encoding="utf-8")
-    assert pins.pop() in evidence, "licence evidence does not name the vendored commit"
+    assert not any(e["upstream_repo"] == "nsmith/html" for e in manifest["files"]), (
+        "nsmith files are back in the manifest — see docs/third-party-notices.md")
+    removed = manifest.get("removed") or []
+    record = [r for r in removed if r["upstream_repo"] == "nsmith/html"]
+    assert len(record) == 1, "the manifest must record what was removed and why"
+    assert record[0]["upstream_commit"] == NSMITH_SHA, (
+        "the removal record must pin the commit the set was vendored at, or it cannot be "
+        "restored from it")
 
 
 # --------------------------------------------------------------------------------------

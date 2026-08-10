@@ -3,7 +3,7 @@
 First-read element: the map itself. A module map is a graph, and the reader's first question is
 always "what talks to what", never "what is the prose".
 
-Measured off `references/nsmith-html/module-map.html` by reading its `<style>` block (D66) — that
+Measured off nsmith's `module-map.html` by reading its `<style>` block (D66) — that
 file is one of the twelve vendored templates carrying a `<script>`, so it is read, not opened:
 
     .wrap  max-width:980px; padding:48px 24px 96px

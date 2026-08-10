@@ -5,7 +5,7 @@ block, NOT on an h2 section: §4d asks for requirement ROWS carrying a stable ID
 MUST/SHOULD chip, and `steps` is already `id | title | text` — a row with an ID. An h2
 wrapper would have been neither. Keeps `_decorate_requirements` for the RFC-2119 badges.
 
-#40 rebuilt the body against `references/nsmith-html/feature-explainer.html`. Re-opened and
+#40 rebuilt the body against nsmith's `feature-explainer.html`. Re-opened and
 measured while writing this, with the extraction cross-checked against the raw file. That page
 carries an `<aside class="toc"><nav aria-label="On this page">` index, three `.card`s, and SEVEN
 `<details>`: four step disclosures and three `class="faq"`, each with a `<summary>` and a
@@ -61,7 +61,7 @@ NAME = "spec"
 # #76 completes this frame — `spec` was the second of the two styles #69 left partial (it had
 # seven slots; `ground` and `header_rule` were missing).
 #
-# Measured off `references/nsmith-html/feature-explainer.html` by reading its `<style>` (D66):
+# Measured off nsmith's `feature-explainer.html` by reading its `<style>` (D66):
 # `.wrap max-width:1080px; padding:3rem 1.25rem 5rem; display:grid`, `h1 clamp(1.9rem,4vw,2.7rem)`.
 #
 # **The measure DEPARTS from the reference, deliberately: 760px, not 1080px** — the same kind of

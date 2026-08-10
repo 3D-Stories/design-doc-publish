@@ -9,7 +9,7 @@ projects and remains under its own terms.
 | Path | Upstream | Pinned commit | Licence status | Redistribution |
 | --- | --- | --- | --- | --- |
 | `references/artifact-organizer/` (7 theme CSS files) | `keepYaoung/artifact-organizer` | `3e5bc0ef00de784dab48b411b3493c7d72d856ca` | **MIT, granted by upstream.** Notice retained verbatim in `references/artifact-organizer/LICENSE-upstream.txt`. | Permitted, provided the retained notice travels with the material. |
-| `references/nsmith-html/` (20 HTML templates) | `nsmith/html` | `eece610140a08ebbfdd96938ee1610b19793d1ec` | **No upstream grant exists.** Upstream ships no LICENSE file. `references/nsmith-html/LICENSE-upstream.txt` holds the evidence considered and the repository owner's internal adjudication of 2026-08-02 (issue #38) that MIT applies. | **NOT established.** See below. |
+| `references/nsmith-html/` (20 HTML templates) | `nsmith/html` | `eece610140a08ebbfdd96938ee1610b19793d1ec` | **No upstream grant exists.** Upstream shipped no LICENSE file. | **REMOVED in [#2](https://github.com/3D-Stories/design-doc-publish/issues/2), 2026-08-10.** Not redistributed. |
 
 **On `references/nsmith-html/`, stated plainly rather than favourably.** An internal adjudication
 records a decision *we* made; it is not a licence *grant* from the copyright holder, and it cannot
@@ -23,10 +23,22 @@ What follows from that:
   this repository does today. It is private.
 - **Redistributing them** — publishing the repository, or shipping them inside a distributed plugin —
   is a different act and is **not** authorised by anything in this file.
-- Establishing an actual upstream grant, or removing the set, is
-  [issue #4](https://github.com/3D-Stories/design-doc-publish/issues/4), which exists precisely
-  because redistribution is not the same act as private reference. Until it resolves, treat
-  `references/nsmith-html/` as excluded from distribution.
+- **It was removed, and that is how this resolved.** Packaging the repository as an
+  installable plugin ([#2](https://github.com/3D-Stories/design-doc-publish/issues/2)) made
+  redistribution imminent rather than hypothetical, so on 2026-08-10 the owner chose to delete
+  the set rather than ship it. The 20 templates and their `LICENSE-upstream.txt` are gone from
+  the working tree.
+- **Restoring it needs a real grant first, and then one command.**
+  `git checkout eece610140a08ebbfdd96938ee1610b19793d1ec -- references/nsmith-html/` brings the
+  set back from the pinned commit. `references/manifest.json` keeps the removal record so that
+  commit is not lost. Do not run it on the strength of another internal adjudication — the thing
+  that was missing is permission from the copyright holder, and only they can supply it.
+- **One caveat this change does NOT fix.** Deleting the files keeps them out of an installed
+  plugin: measured, an install copies working-tree files only and does not carry `.git`. It does
+  not remove them from this repository's HISTORY. If this repository is ever made public, the
+  history still contains them. That question belongs with
+  [issue #4](https://github.com/3D-Stories/design-doc-publish/issues/4) and
+  3D-Stories/claude-skills#9.
 
 The project `LICENSE` (MIT) covers only material authored here and makes no claim over either
 vendored set.

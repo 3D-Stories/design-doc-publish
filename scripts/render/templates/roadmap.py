@@ -4,7 +4,7 @@ First-read element: the stat strip plus a READ THIS FIRST stack of severity call
 The `.mstone` card markup predates #13 (it is #199's) and is kept: `.rm-epic` rides
 alongside it rather than replacing it, so existing pages and their tests are unaffected.
 
-#40 rebuilt the body against `references/nsmith-html/implementation-plan.html`. Measured, that
+#40 rebuilt the body against nsmith's `implementation-plan.html`. Measured, that
 page is: a `.gantt` of `.gantt-row`s each pairing a `.gantt-label` with a proportional
 `.gantt-track`/`.gantt-bar`; a `.diagram` whose `.node`s are joined by accented `.flow` paths; and
 a risk list whose rows carry a `.sev` pill coloured by level. Mapping: `timeline` → the phase
