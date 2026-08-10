@@ -1,0 +1,10 @@
+# Development requirements for the test gate.
+#
+# Pinned at the version that produced the recorded baseline of
+# 2258 passed, 3 skipped, exit 0 on Python 3.12.3 (2026-08-10).
+#
+# The gate command is `pytest`, never `python3 -m pytest`: on the machine this
+# package was migrated from, the interpreter cannot import pytest and only the
+# standalone executable works. A pin makes that reproducible on another host
+# instead of depending on whatever happens to be on PATH.
+pytest==9.0.3
