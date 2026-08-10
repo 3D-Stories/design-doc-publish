@@ -1,0 +1,171 @@
+/* ===== Supabase theme — strictly per Supabase DESIGN.md ===== */
+/*
+ *   Source: getdesign.md/supabase/design-md (extracted from getdesign npm v0.6.9)
+ *   Signature: dark-mode native + emerald green identity + ZERO box-shadows
+ *              (depth via border hierarchy: #242424 → #2e2e2e → #363636 → #393939).
+ *   Fonts: Circular substitute (system-ui rounded sans) + Source Code Pro.
+ *   Weights: 400 default, 500 only on nav/buttons. NEVER 600+.
+ *   Radii: 6 / 8 / 12 / pill — pills for primary CTAs only.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=Source+Code+Pro:wght@400;500&display=swap');
+
+[data-theme="supabase"] {
+  /* === LIGHT MODE — Supabase is dark-native; light is functional === */
+  --op-color-fg: #171717;
+  --op-color-bg: #ffffff;
+  --op-color-surface: #ffffff;
+  --op-color-surface-alt: #fafafa;
+  --op-color-surface-dark: #171717;
+
+  --op-color-fg-muted: #4d4d4d;                      /* DESIGN.md heavy secondary */
+  --op-color-fg-placeholder: #898989;                /* Mid Gray */
+
+  --op-color-accent: #00c573;                        /* Green Link — DESIGN.md exact */
+  --op-color-accent-active: #00a862;
+  --op-color-navy: #1f2937;
+  --op-color-purple: #6b66dc;
+  --op-color-pink: #d4439b;
+  --op-color-teal: #3ecf8e;
+  --op-color-brown: #9b6829;
+  --op-color-focus: #3ecf8e;
+  --op-color-badge-bg: rgba(62, 207, 142, 0.12);
+  --op-color-badge-text: #00a862;
+  --op-color-success: #00c573;
+  --op-color-warn: #d97706;
+
+  /* === Depth — DESIGN.md says NO box-shadows; use border hierarchy === */
+  --op-border-whisper: 1px solid #efefef;            /* Light border for light mode */
+  --op-shadow-card: rgba(0, 0, 0, 0.06) 0 0 0 1px;   /* Single ring, no drops */
+  --op-shadow-deep: rgba(0, 0, 0, 0.10) 0 0 0 1px,
+                    rgba(0, 0, 0, 0.10) 0 4px 12px;  /* Focus shadow per DESIGN.md */
+
+  /* === Radii — pill for primary, 6/8/12 for everything else === */
+  --op-radius-micro:   4px;
+  --op-radius-subtle:  6px;
+  --op-radius-std:     6px;
+  --op-radius-comfort: 8px;                          /* DESIGN.md card range 8-16 */
+  --op-radius-large:   12px;
+
+  /* === Fonts — Circular substitute (geometric rounded sans) === */
+  --op-font-sans: "Inter", "Circular", "Helvetica Neue", Helvetica, Arial,
+                  -apple-system, system-ui, sans-serif;
+  --op-font-display: "Inter", "Circular", -apple-system, system-ui, sans-serif;
+  --op-font-mono: "Source Code Pro", "SourceCodePro", "Office Code Pro",
+                  ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* === Tones — emerald-led info, semantic from Radix palette === */
+  --op-tone-info-bg:    rgba(62, 207, 142, 0.10);
+  --op-tone-info-fg:    #00a862;
+  --op-tone-warn-bg:    rgba(217, 119, 6, 0.10);
+  --op-tone-warn-fg:    #b45309;
+  --op-tone-success-bg: rgba(62, 207, 142, 0.14);
+  --op-tone-success-fg: #00a862;
+  --op-tone-danger-bg:  rgba(229, 72, 77, 0.10);     /* Tomato */
+  --op-tone-danger-fg:  #c52429;
+
+  --op-note-bg:     rgba(62, 207, 142, 0.08);
+  --op-note-border: #3ecf8e;
+  --op-note-text:   #00734a;
+}
+
+[data-theme="supabase"][data-mode="dark"] {
+  /* === DARK MODE — Supabase's native habitat === */
+  --op-color-fg: #fafafa;                            /* Off White */
+  --op-color-bg: #171717;                            /* Dark page canvas */
+  --op-color-surface: #171717;
+  --op-color-surface-alt: #1c1c1c;
+  --op-color-surface-dark: #0f0f0f;                  /* Near Black — button bg */
+
+  --op-color-fg-muted: #b4b4b4;                      /* Light Gray */
+  --op-color-fg-placeholder: #898989;                /* Mid Gray */
+
+  --op-color-accent: #3ecf8e;                        /* Supabase Green — full brand */
+  --op-color-accent-active: #00c573;
+  --op-color-focus: #3ecf8e;
+  --op-color-badge-bg: rgba(62, 207, 142, 0.16);
+  --op-color-badge-text: #3ecf8e;
+
+  /* === Border hierarchy — DESIGN.md depth signal === */
+  --op-border-whisper: 1px solid #2e2e2e;            /* Standard card border */
+  --op-shadow-card: #2e2e2e 0 0 0 1px;               /* Border-as-shadow, no blur */
+  --op-shadow-deep: #393939 0 0 0 1px,
+                    rgba(0, 0, 0, 0.10) 0 4px 12px; /* Focus shadow */
+
+  --op-tone-info-bg:    rgba(62, 207, 142, 0.14);
+  --op-tone-info-fg:    #3ecf8e;
+  --op-tone-warn-bg:    rgba(245, 158, 11, 0.14);
+  --op-tone-warn-fg:    #fbbf24;
+  --op-tone-success-bg: rgba(62, 207, 142, 0.18);
+  --op-tone-success-fg: #3ecf8e;
+  --op-tone-danger-bg:  rgba(229, 72, 77, 0.16);
+  --op-tone-danger-fg:  #ff7170;
+
+  --op-note-bg:     rgba(62, 207, 142, 0.10);
+  --op-note-border: #3ecf8e;
+  --op-note-text:   #6cdba4;
+}
+
+/* === Supabase character: Circular weight 400 default, 1.00 hero leading === */
+[data-theme="supabase"] body {
+  -webkit-font-smoothing: antialiased;
+}
+[data-theme="supabase"] .op-page-title {
+  /* 48px ← DESIGN.md hero scale, weight 400, 1.00 line-height signature */
+  font-family: var(--op-font-display);
+  font-weight: 400;                                  /* Supabase signature: weight restraint */
+  line-height: 1.04;                                 /* Slight relaxation from 1.00 hero */
+  letter-spacing: -0.02em;
+}
+[data-theme="supabase"] .op-section-title {
+  /* 40px ← DESIGN.md "Section Heading": 400 / 1.25 / normal */
+  font-family: var(--op-font-display);
+  font-weight: 400;
+  line-height: 1.20;
+  letter-spacing: -0.012em;
+}
+[data-theme="supabase"] .op-heading-h2 {
+  /* 32px ← scaled from Section Heading */
+  font-family: var(--op-font-display);
+  font-weight: 400;
+  line-height: 1.22;
+  letter-spacing: -0.008em;
+}
+[data-theme="supabase"] .op-heading-h3 {
+  /* 22px ← interpolated, slight negative tracking */
+  font-family: var(--op-font-display);
+  font-weight: 500;                                  /* Bump for emphasis (one of two 500 uses) */
+  line-height: 1.27;
+  letter-spacing: -0.007em;
+}
+[data-theme="supabase"] .op-heading-h4 {
+  /* 18px ← DESIGN.md "Sub-heading": 400 / 1.56 / normal */
+  font-family: var(--op-font-display);
+  font-weight: 500;
+  line-height: 1.33;
+  letter-spacing: 0;
+}
+[data-theme="supabase"] .op-page-subtitle,
+[data-theme="supabase"] .op-section-lead {
+  font-weight: 400;
+  line-height: 1.50;
+  letter-spacing: 0;
+  color: var(--op-color-fg-muted);
+}
+[data-theme="supabase"] .op-prose {
+  font-weight: 400;
+  line-height: 1.50;
+}
+[data-theme="supabase"] .op-prose a {
+  color: var(--op-color-accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(0, 197, 115, 0.45);
+  text-underline-offset: 2px;
+}
+[data-theme="supabase"] .op-prose a:hover {
+  text-decoration-color: var(--op-color-accent);
+}
+[data-theme="supabase"][data-mode="dark"] .op-prose a {
+  color: var(--op-color-accent);
+  text-decoration-color: rgba(62, 207, 142, 0.50);
+}

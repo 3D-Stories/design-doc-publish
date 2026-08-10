@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "accent": { "light": "#1e5f7a", "dark": "#4da7c4" },
+  "tint": { "light": "#f4f8fa", "dark": "#121a1e" },
+  "source": "src/styles/design-tokens.css --brand-blue-500 / --brand-blue-300",
+  "note": "NOT --brand-blue-400 (#2c7a9e), the nominal primary: it measures 4.47:1 on the doc renderer's light --bg and 3.36:1 on its dark card surface. Its own file's 'WCAG AA compliant' note is true against chorestory's #f9fafb (4.58:1), not against these surfaces. Both replacements are steps of the same declared ramp."
+}

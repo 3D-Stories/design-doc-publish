@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Collision-safe CLI for the render engine.
+
+`python3 -m render` resolves by `sys.path` order, so from an unexpected working directory it can
+import an unrelated package that happens to be named `render` — observed live, not theoretical.
+
+The obvious guard — put our directory first, import, then check where it came from — is NOT
+enough, and an earlier version of this file made exactly that mistake:
+
+  * `import` executes the selected package's top-level code BEFORE any check can run, so a
+    foreign package has already had its way by the time it is rejected;
+  * a pre-populated `sys.modules["render"]` bypasses `sys.path` ordering entirely;
+  * a lexical `startswith` check accepts a path that escapes the directory through a symlink.
+
+So this launcher never imports by name at all. It resolves the exact file it intends to run,
+proves that file really lives here (through `realpath`, so symlinks cannot escape), and only then
+loads it — under a private module name, straight from that path, without consulting `sys.path`.
+Nothing foreign is ever executed, not even at import time.
+"""
+import importlib.util
+import os
+import sys
+
+HERE = os.path.realpath(os.path.dirname(os.path.abspath(__file__)))
+PKG_INIT = os.path.join(HERE, "render", "__init__.py")
+PRIVATE_NAME = "_render_doc_engine"
+
+
+def _fail(msg):
+    sys.exit(f"render-doc: refusing to run: {msg}")
+
+
+# 1. The engine must be exactly where we expect it, resolved through any symlinks.
+real_init = os.path.realpath(PKG_INIT)
+if not os.path.isfile(real_init):
+    _fail(f"no render package at {PKG_INIT}")
+
+# 2. Containment by real path components, not string prefix: `/a/scripts2` must not satisfy
+#    `/a/scripts`, and a symlink pointing outside HERE must not either.
+if os.path.commonpath([real_init, HERE]) != HERE:
+    _fail(f"the render package at {PKG_INIT} resolves to {real_init}, outside {HERE}")
+
+# 3. Load that exact file under a private name. `sys.path` is never consulted, so a foreign
+#    package named `render` — cached in sys.modules, or first on the path — can neither be
+#    selected nor have its top-level code executed.
+spec = importlib.util.spec_from_file_location(PRIVATE_NAME, real_init)
+if spec is None or spec.loader is None:
+    _fail(f"could not load the render engine from {real_init}")
+engine = importlib.util.module_from_spec(spec)
+sys.modules[PRIVATE_NAME] = engine
+spec.loader.exec_module(engine)
+
+sys.exit(engine.main(sys.argv[1:]))

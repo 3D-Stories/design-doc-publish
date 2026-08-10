@@ -1,0 +1,151 @@
+/* ===== Apple theme — Apple HIG / apple.com marketing aesthetic ===== */
+/*
+ *   Character: SF Pro system stack, generous whitespace, cool neutral greys,
+ *              Apple Blue accent, soft contained shadows, true-black dark mode.
+ *   Fonts:     -apple-system / SF Pro with Inter as a cross-platform substitute.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+[data-theme="apple"] {
+  /* === Surfaces — Apple's cool light-grey system palette === */
+  --op-color-fg: #1d1d1f;                            /* Apple near-black */
+  --op-color-bg: #ffffff;
+  --op-color-surface: #ffffff;
+  --op-color-surface-alt: #f5f5f7;                   /* Apple signature light grey */
+  --op-color-surface-dark: #1d1d1f;
+
+  --op-color-fg-muted: #6e6e73;                      /* Apple secondary label */
+  --op-color-fg-placeholder: #aeaeb2;
+
+  /* === Chrome — Apple Blue is the sole saturated system color === */
+  --op-color-accent: #0071e3;                        /* Apple Blue (buttons/links) */
+  --op-color-accent-active: #0058b8;
+  --op-color-navy: #1d1d1f;
+  --op-color-purple: #5e5ce6;                        /* Apple indigo */
+  --op-color-pink: #ff2d55;                          /* Apple pink */
+  --op-color-teal: #30b0c7;
+  --op-color-brown: #ac8e68;
+  --op-color-focus: #0071e3;
+  --op-color-badge-bg: #e8f2fd;
+  --op-color-badge-text: #0071e3;
+  --op-color-success: #34c759;                       /* Apple green */
+  --op-color-warn: #ff9f0a;                          /* Apple orange */
+
+  /* === Depth — Apple's soft, low-contrast elevation === */
+  --op-border-whisper: 1px solid rgba(0, 0, 0, 0.08);
+  --op-shadow-card: rgba(0, 0, 0, 0.04) 0 1px 2px,
+                    rgba(0, 0, 0, 0.06) 0 8px 24px -8px;
+  --op-shadow-deep: rgba(0, 0, 0, 0.06) 0 2px 8px,
+                    rgba(0, 0, 0, 0.10) 0 18px 40px -12px;
+
+  /* === Radii — Apple's continuous-curve generosity === */
+  --op-radius-micro:   6px;
+  --op-radius-subtle:  10px;
+  --op-radius-std:     12px;
+  --op-radius-comfort: 14px;
+  --op-radius-large:   18px;
+
+  /* === Fonts — SF Pro system stack, Inter substitute === */
+  --op-font-sans: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text",
+                  "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --op-font-display: "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Display",
+                     "Helvetica Neue", sans-serif;
+  --op-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", SFMono-Regular,
+                  Menlo, Consolas, monospace;
+
+  /* === Tones — Apple system color tints === */
+  --op-tone-info-bg:    #e8f2fd;
+  --op-tone-info-fg:    #0071e3;
+  --op-tone-warn-bg:    #fff4e5;
+  --op-tone-warn-fg:    #c93400;
+  --op-tone-success-bg: #e7f9ed;
+  --op-tone-success-fg: #248a3d;
+  --op-tone-danger-bg:  #fdeceb;
+  --op-tone-danger-fg:  #d70015;
+
+  --op-note-bg:     #fff8e1;
+  --op-note-border: #ff9f0a;
+  --op-note-text:   #7a5200;
+}
+
+[data-theme="apple"][data-mode="dark"] {
+  /* Apple dark mode — soft near-black canvas with elevated surfaces */
+  --op-color-fg: #f5f5f7;
+  --op-color-bg: #0c0c0c;
+  --op-color-surface: #1c1c1e;
+  --op-color-surface-alt: #2c2c2e;
+  --op-color-surface-dark: #000000;
+
+  --op-color-fg-muted: #98989d;
+  --op-color-fg-placeholder: #636366;
+
+  --op-color-accent: #2997ff;                        /* Apple Blue (dark) */
+  --op-color-accent-active: #5cb0ff;
+  --op-color-focus: #2997ff;
+  --op-color-badge-bg: rgba(41, 151, 255, 0.16);
+  --op-color-badge-text: #5cb0ff;
+
+  --op-border-whisper: 1px solid rgba(255, 255, 255, 0.10);
+  --op-shadow-card: rgba(0, 0, 0, 0.50) 0 1px 2px,
+                    rgba(0, 0, 0, 0.60) 0 8px 24px -8px;
+  --op-shadow-deep: rgba(0, 0, 0, 0.60) 0 2px 8px,
+                    rgba(0, 0, 0, 0.70) 0 18px 40px -12px;
+
+  --op-tone-info-bg:    rgba(41, 151, 255, 0.16);
+  --op-tone-info-fg:    #5cb0ff;
+  --op-tone-warn-bg:    #3a2a14;
+  --op-tone-warn-fg:    #ffb340;
+  --op-tone-success-bg: #14331f;
+  --op-tone-success-fg: #30d158;
+  --op-tone-danger-bg:  #3a1d1d;
+  --op-tone-danger-fg:  #ff6961;
+
+  --op-note-bg:     #332a14;
+  --op-note-border: #ff9f0a;
+  --op-note-text:   #ffd60a;
+}
+
+/* === Apple typography character — tight display tracking, airy body === */
+[data-theme="apple"] .op-page-title {
+  font-family: var(--op-font-display);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.022em;                          /* Apple's tight headline tracking */
+}
+[data-theme="apple"] .op-section-title {
+  font-family: var(--op-font-display);
+  font-weight: 600;
+  line-height: 1.10;
+  letter-spacing: -0.019em;
+}
+[data-theme="apple"] .op-heading-h2,
+[data-theme="apple"] .op-heading-h3,
+[data-theme="apple"] .op-heading-h4 {
+  font-family: var(--op-font-display);
+  font-weight: 600;
+  letter-spacing: -0.014em;
+}
+[data-theme="apple"] .op-page-subtitle,
+[data-theme="apple"] .op-section-lead {
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: -0.003em;
+  color: var(--op-color-fg-muted);
+}
+[data-theme="apple"] .op-prose {
+  font-weight: 400;
+  line-height: 1.55;
+  letter-spacing: -0.003em;
+}
+[data-theme="apple"] .op-prose a {
+  color: var(--op-color-accent);
+  text-decoration: none;
+}
+[data-theme="apple"] .op-prose a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+[data-theme="apple"][data-mode="dark"] .op-prose a {
+  color: #2997ff;
+}
