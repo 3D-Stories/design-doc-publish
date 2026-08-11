@@ -378,6 +378,11 @@ def gate(page: str, *, skip_component_checks: bool = False) -> None:
 
 # --- the Vercel CLI ------------------------------------------------------------------
 
+#: A publish call uploads, so it gets more room than a status probe — but it still gets a
+#: bound. Unbounded, a non-responsive CLI hangs the whole publish instead of failing it.
+_VERCEL_TIMEOUT = 300
+
+
 def _vercel(args: list[str], cwd: Path, scope: str) -> subprocess.CompletedProcess:
     """Every call is given an explicit cwd, and every path used afterwards is absolute —
     the CLI resets the shell's working directory.
@@ -386,8 +391,19 @@ def _vercel(args: list[str], cwd: Path, scope: str) -> subprocess.CompletedProce
     team is configured would silently target whichever account `vercel switch` last selected,
     which is the failure the pin exists to prevent — so the caller refuses long before here.
     """
-    return subprocess.run(["vercel", *args, "--scope", scope], cwd=str(cwd),
-                          capture_output=True, text=True, check=False)
+    try:
+        return subprocess.run(["vercel", *args, "--scope", scope], cwd=str(cwd),
+                              capture_output=True, text=True, check=False,
+                              timeout=_VERCEL_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # Fail the stage rather than raise. Every caller already reads `returncode` and
+        # `stderr`, so a synthetic failure keeps them working and keeps the reason legible.
+        # 124 is the conventional exit code for a timed-out command.
+        return subprocess.CompletedProcess(
+            ["vercel", *args, "--scope", scope], 124, "",
+            "vercel did not answer within %d seconds, so this stage was stopped rather "
+            "than left hanging. Nothing about your account or permissions is implied."
+            % _VERCEL_TIMEOUT)
 
 
 #: Vercel's own wording for a permission refusal, matched loosely on purpose: this only

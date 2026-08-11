@@ -1,6 +1,6 @@
 {
   "name": "design-doc-publish",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Render a design or architecture document from markdown to a standalone HTML page. Rendering needs nothing configured. Publishing the page to Vercel requires the vercel CLI, a Vercel account and a one-time setup run that records which team to deploy to.",
   "author": {
     "name": "3D-Stories",

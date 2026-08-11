@@ -186,15 +186,31 @@ def _vercel_installed():
     return shutil.which("vercel") is not None
 
 
+#: Every Vercel call in this module is a STATUS probe, so it should answer quickly or not
+#: at all. Without a bound, a non-responsive CLI stalls `--check` forever, and the one
+#: command meant to diagnose a machine becomes the thing that hangs on it.
+_VERCEL_TIMEOUT = 60
+
+
 def _run(args):
+    """The single place this module shells out, so the timeout belongs here.
+
+    `TimeoutExpired` is left to PROPAGATE. Both callers catch it and map it to "could not
+    check" — never to "not signed in" and never to "refused". A hung call says nothing
+    about a credential, and reporting it as one sends someone to fix what is not broken.
+    """
     return subprocess.run(["vercel"] + list(args), capture_output=True, text=True,
-                          check=False)
+                          check=False, timeout=_VERCEL_TIMEOUT)
 
 
 def _authenticated():
     """`vercel whoami`, read from STDOUT — the banner goes to stderr."""
     try:
         proc = _run(["whoami"])
+    except subprocess.TimeoutExpired:
+        # None, not False. False means "signed out", which is a diagnosis this call did
+        # not earn — the CLI never answered.
+        return None, None
     except OSError:
         return False, None
     if proc.returncode != 0:
@@ -213,6 +229,9 @@ def probe_scope(scope):
     try:
         proc = _run(["project", "ls", "--format", "json", "--limit", "1",
                      "--scope", scope, "--no-color"])
+    except subprocess.TimeoutExpired:
+        return "failed", ("the vercel CLI did not answer within %d seconds"
+                          % _VERCEL_TIMEOUT)
     except OSError as e:
         return "failed", "the vercel CLI could not be run (%s)" % e.__class__.__name__
     if proc.returncode != 0:
@@ -298,6 +317,10 @@ def status(config_path=None, **_ignored):
         return _finish(state, "needs_vercel_cli", None)
 
     authed, who = _authenticated()
+    if authed is None:
+        return _finish(state, "vercel_probe_failed",
+                       "the vercel CLI did not answer within %d seconds"
+                       % _VERCEL_TIMEOUT)
     state["authenticated"] = authed
     if not authed:
         return _finish(state, "needs_login", None)
