@@ -63,6 +63,10 @@ Open `hello.html`. That is the whole loop.
 Rendering needs nothing. **Publishing needs a Vercel account, and one setup run to record which
 team to deploy to.** Nothing about your machine is assumed any more.
 
+**Inside Claude Code, just run `/design-doc-publish:setup`.** The skill walks the whole thing and
+knows the plugin's own install path, so there is nothing to paste. From a plain shell, call the
+script directly:
+
 ```bash
 python3 "$DDP/scripts/setup.py"
 ```
