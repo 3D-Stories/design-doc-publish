@@ -231,48 +231,79 @@ class TestTheResolverIsNotImportableByName:
         assert "import user_config" not in source
 
 
-class TestAFirstPublishFromAnEmptyAccount:
-    """The Step-11 Critical, proved at the PUBLISHER rather than only at the listing.
+class TestStageFourAsksAboutTHISPROJECT:
+    """The Step-11 Critical, and then the re-review of its first fix.
 
-    The reviewer asked for exactly this: a test showing `--new-project` proceeds from a
-    genuinely empty account. Stage 4 is where it used to die, so stage 4 is where it is
-    asserted.
+    The first fix let stage 4 read absence out of an EMPTY LISTING. Re-review was right to
+    call that Critical: a truncated or erroneous CLI response can carry the requested tenant,
+    an empty `projects` array and `pagination.next: null`, which is indistinguishable from a
+    genuinely empty account — and stage 4 answers absence by minting a duplicate project under
+    a new URL, which is the #125 failure and changes a published document's URL.
+
+    So stage 4 no longer infers absence from a list at all. It asks about the ONE project it
+    cares about and accepts only an EXPLICIT not-found. Probed live against Vercel CLI 56.5.0:
+    `vercel project inspect <name> --scope <team>` exits 0 when the project exists, and exits
+    1 with `Error: There is no project for "<name>"` when it does not.
+
+    This is strictly stronger than the listing ever was: it needs no completeness proof,
+    because it never enumerates anything.
     """
 
-    def _listing(self, projects):
-        return json.dumps({"projects": projects, "pagination": {"next": None},
-                           "contextName": SCOPE})
+    def _cli(self, monkeypatch, rc, out="", err=""):
+        seen = []
 
-    def test_stage_four_sees_the_project_as_absent_and_lets_new_project_proceed(
-            self, monkeypatch):
-        monkeypatch.setattr(
-            subprocess, "run",
-            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, self._listing([]), ""))
-        # False == "did not already exist", which is what --new-project needs to hear.
+        def fake_run(cmd, **kw):
+            seen.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, rc, out, err)
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        return seen
+
+    def test_an_explicit_not_found_is_absence_so_new_project_may_proceed(self, monkeypatch):
+        seen = self._cli(monkeypatch, 1,
+                         err='Error: There is no project for "payments-api-design-1"')
         assert publish_doc.resolve_project("payments-api-design-1", new_project=True,
-                                           limit=100, scope=SCOPE) is False
+                                           scope=SCOPE) is False
+        assert seen[0][:3] == ["vercel", "project", "inspect"]
+        assert seen[0][seen[0].index("--scope") + 1] == SCOPE
 
-    def test_without_new_project_it_still_refuses_with_the_usual_advice(self, monkeypatch):
-        """The other half: an empty account does not silently mint anything. Reuse is still
-        the default, and the refusal still names the flag."""
-        monkeypatch.setattr(
-            subprocess, "run",
-            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, self._listing([]), ""))
+    def test_a_project_that_exists_is_reused(self, monkeypatch):
+        self._cli(monkeypatch, 0, out="> Found Project example/payments-api-design-1")
+        assert publish_doc.resolve_project("payments-api-design-1", new_project=False,
+                                           scope=SCOPE) is True
+
+    def test_an_UNEXPLAINED_failure_is_never_read_as_absence(self, monkeypatch):
+        """The property the whole change turns on. A network error, a rate limit, a changed
+        CLI — none of them means the project is absent, and treating them as absence is what
+        mints a duplicate under a new URL."""
+        for rc, err in ((1, "Error: connect ETIMEDOUT"),
+                        (1, "Error: rate limited"),
+                        (2, ""),
+                        (1, "some unrecognised failure")):
+            self._cli(monkeypatch, rc, err=err)
+            with pytest.raises(publish_doc.StageError) as excinfo:
+                publish_doc.resolve_project("payments-api-design-1", new_project=True,
+                                            scope=SCOPE)
+            assert excinfo.value.stage == 4
+
+    def test_absence_without_new_project_still_refuses_with_the_usual_advice(self, monkeypatch):
+        self._cli(monkeypatch, 1, err='Error: There is no project for "x-design-1"')
         with pytest.raises(publish_doc.StageError) as excinfo:
-            publish_doc.resolve_project("payments-api-design-1", new_project=False,
-                                        limit=100, scope=SCOPE)
+            publish_doc.resolve_project("x-design-1", new_project=False, scope=SCOPE)
         assert excinfo.value.stage == 4
         assert "--new-project" in excinfo.value.message
 
-    def test_a_truncated_listing_still_fails_stage_four_rather_than_looking_empty(
-            self, monkeypatch):
-        """The guarantee that must survive the fix: a listing that cannot be judged complete
-        is refused, so stage 4 never mistakes it for an empty account and mints a duplicate."""
-        bad = json.dumps({"projects": [], "pagination": {"count": 0}, "contextName": SCOPE})
-        monkeypatch.setattr(
-            subprocess, "run",
-            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, bad, ""))
+    def test_an_existing_project_with_new_project_still_refuses(self, monkeypatch):
+        self._cli(monkeypatch, 0, out="> Found Project example/x-design-1")
         with pytest.raises(publish_doc.StageError) as excinfo:
-            publish_doc.resolve_project("payments-api-design-1", new_project=True,
-                                        limit=100, scope=SCOPE)
+            publish_doc.resolve_project("x-design-1", new_project=True, scope=SCOPE)
         assert excinfo.value.stage == 4
+        assert "already exists" in excinfo.value.message
+
+    def test_stage_four_no_longer_enumerates_the_account_at_all(self, monkeypatch):
+        """It used to list every project and test membership, which is why a listing it could
+        not trust was able to decide the answer."""
+        seen = self._cli(monkeypatch, 1, err='Error: There is no project for "x-design-1"')
+        publish_doc.resolve_project("x-design-1", new_project=True, scope=SCOPE)
+        assert not any("ls" in cmd for cmd in seen), (
+            f"stage 4 must not enumerate the account: {seen}")

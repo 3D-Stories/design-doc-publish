@@ -415,19 +415,47 @@ def _log(proc: subprocess.CompletedProcess) -> str:
 
 # --- stage 4: reuse or create --------------------------------------------------------
 
-def resolve_project(name: str, *, new_project: bool, limit: int, scope: str) -> bool:
+#: The CLI's own wording for an authoritative "no such project". Matching it is what turns a
+#: failure into ABSENCE, so it is deliberately narrow: anything this does not recognise stays
+#: an error, never an answer.
+_NO_SUCH_PROJECT = "there is no project for"
+
+
+def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
     """True if the project already exists (and is being reused).
 
-    `vercel_projects()` calls `sys.exit()` on CLI failure, so SystemExit is caught here:
-    uncaught, the pipeline would die with the index builder's message instead of a
-    stage verdict.
-    """
-    try:
-        existing = {p["name"] for p in INDEX.vercel_projects(limit, scope=scope)}
-    except SystemExit as e:
-        raise StageError(4, f"could not list Vercel projects: {e}") from e
+    **This asks about ONE project. It does not enumerate the account, and that is the point.**
 
-    exists = name in existing
+    It used to list every project in the team and test membership. Two failures came out of
+    that, one certain and one latent, and they pull in opposite directions:
+
+    * A brand-new account has NO projects, and the listing refused an empty result outright —
+      so a first publish died at stage 4 while setup reported the account ready (#9).
+    * Reading absence out of an empty LIST is unsound anyway. A truncated or erroneous CLI
+      response can carry the requested tenant, an empty `projects` array and a null cursor,
+      which is indistinguishable from a genuinely empty account. Stage 4 answers absence by
+      minting a duplicate project under a new URL — the #125 failure, which changes a
+      published document's URL.
+
+    Asking about the one project removes both. `vercel project inspect` gives an EXPLICIT
+    not-found, so absence is something the platform states rather than something inferred from
+    a listing whose completeness had to be proved. Probed live against Vercel CLI 56.5.0: exit
+    0 when the project exists, exit 1 with `Error: There is no project for "<name>"` when it
+    does not.
+
+    Anything else — a network error, a rate limit, a changed CLI — is a stage-4 error. It is
+    NEVER read as absence, because that is the reading that mints the duplicate.
+    """
+    proc = _vercel(["project", "inspect", name], cwd=Path.cwd(), scope=scope)
+    if proc.returncode == 0:
+        exists = True
+    elif _NO_SUCH_PROJECT in _log(proc).lower():
+        exists = False
+    else:
+        raise StageError(4, f"could not determine whether {name} exists (rc="
+                            f"{proc.returncode}). Refusing to guess: reading this as "
+                            f"'absent' would mint a duplicate project under a new URL.\n"
+                            f"{_log(proc)}")
     if exists and new_project:
         raise StageError(4, f"{name} already exists — drop --new-project and it is "
                             f"reused, which is what keeps its URL stable. Otherwise the "
@@ -890,8 +918,7 @@ def main(argv=None) -> int:
         # network call is about to target one.
         scope = CONFIG.require_vercel_scope(cli_value=args.vercel_scope,
                                             config_path=config_path)
-        reused = resolve_project(name, new_project=args.new_project, limit=args.limit,
-                                 scope=scope)
+        reused = resolve_project(name, new_project=args.new_project, scope=scope)
         print(f"publish_doc: 4/7 {'reusing' if reused else 'creating'} {name}")
 
         stage = 5

@@ -110,7 +110,9 @@ class FakeRun:
         """A coarse ordered trace, for asserting stage order rather than membership."""
         out = []
         for c, _ in self.calls:
-            if c[:3] == ["vercel", "project", "ls"]:
+            if c[:3] == ["vercel", "project", "inspect"]:
+                out.append("inspect")
+            elif c[:3] == ["vercel", "project", "ls"]:
                 out.append("ls")
             elif c[:2] == ["vercel", "link"]:
                 out.append(f"link:{c[c.index('--project') + 1]}")
@@ -126,6 +128,20 @@ class FakeRun:
         self.calls.append((cmd, cwd))
         if self.raises:
             raise self.raises
+
+        if cmd[:3] == ["vercel", "project", "inspect"]:
+            # #9: stage 4 asks about ONE project instead of enumerating the account. Answered
+            # from the same recorded listing every test already sets, so what each test means
+            # by "this project exists" is unchanged. `ls_rc` still models a CLI that is
+            # failing, which must read as an ERROR rather than as absence.
+            if self.ls_rc != 0:
+                return subprocess.CompletedProcess(cmd, self.ls_rc, "", "the CLI is unwell\n")
+            name = cmd[3]
+            if name in self._ls_names():
+                return subprocess.CompletedProcess(
+                    cmd, 0, f"> Found Project team/{name}\n", LS_BANNER)
+            return subprocess.CompletedProcess(
+                cmd, 1, "", f'Error: There is no project for "{name}"\n')
 
         if cmd[:3] == ["vercel", "project", "ls"]:
             # The trap, reproduced — and it is the INVERSE of the table mode's: `--format json`
@@ -166,6 +182,13 @@ class FakeRun:
                 Path(out).write_text(f"<html><title>docs index</title>{rows}</html>",
                                      encoding="utf-8")
             return subprocess.CompletedProcess(cmd, self.index_rc, "wrote it\n", "")
+
+    def _ls_names(self):
+        """Every project name in the recorded listing, including the index's own."""
+        try:
+            return {p.get("name") for p in json.loads(self.ls_output)["projects"]}
+        except (ValueError, KeyError, TypeError):
+            return set()
 
     def _ls_count(self):
         """How many rows a real index would carry, counted the way the code under test counts:
@@ -735,7 +758,7 @@ class TestTheIndexRefreshIsPartOfPublishing:
         being built after it is deployed."""
         _, fr, _ = run("--new-project")
         assert fr.sequence() == [
-            "ls", f"link:{ABSENT}", "deploy", "build_index",
+            "inspect", f"link:{ABSENT}", "deploy", "build_index",
             f"link:{publish_doc.INDEX_PROJECT}", "deploy",
             "ls",     # stage 7 re-lists to prove the index is CURRENT, not merely live
         ]
