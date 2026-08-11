@@ -170,7 +170,12 @@ PRE_74 = {
     # byte-for-byte what shipped — which is what lets every roadmap already published keep its
     # exact appearance. An additive stylesheet cannot repaint an existing page; that is why the
     # fix was built this way rather than by renaming the severity tokens.
-    "roadmap": "a8f18d7301d4ec31038f7452b3eaa4b529847289354d6f44213c76a38a585b61",
+    # MOVED ON PURPOSE (badge overflow). A 256-character phase badge took its full intrinsic
+    # width (measured 1843px) because `.blk-ph-badge` was `flex:none` with no cap, which
+    # collapsed the sibling title to 71px and made the page scroll sideways by 815px at a
+    # 1300px viewport. The badge now shrinks and wraps, the head wraps with it, and the title
+    # carries a min-width floor. Same re-pin treatment #68 gave `roadmap` and #75 gave `uat`.
+    "roadmap": "eb427e12cb617c6d965a4768b25e178119a4df4aa79336abc7e84205c4b797ca",
     # #76 rebuild — re-pinned; see the header note above.
     "report": "229f7c864f27493a726bd38fac321dffafdc870679fb4a8c9b653d89f257e729",
     "design": "0e92870b453f6374b2ca19980859b91646088f690b7ec159733cb546906a5d3f",
