@@ -288,9 +288,21 @@ def vercel_projects(limit: int = 100, *, scope: str) -> list[dict]:
                  f"to keep going. Either the account is larger than this tool expects, or the "
                  f"cursor is not advancing.")
 
-    if not rows:
-        sys.exit("build_index: parsed zero projects — the CLI returned an empty project list. "
-                 "Refusing to render an empty index.")
+    # The empty-list refusal that used to live HERE has moved to `main()`, where its own
+    # stated purpose already put it (#9). It said "refusing to render an empty index" while
+    # sitting in the function that does not render anything — and the docstring of
+    # `TestTheBootstrapAccountStillPublishes` had already drawn the distinction in so many
+    # words: "the refusal that DOES exist is about rendering an index from nothing, which is a
+    # different question from what this function returns."
+    #
+    # A brand-new Vercel account has ZERO projects, not even `docs-index`, and `resolve_project`
+    # must be able to see "no such project yet" so `--new-project` can mint the very first doc.
+    # Exiting here made a first publish fail at stage 4 while setup reported the account ready.
+    #
+    # Nothing is weakened. `_parse_projects_json` has already refused a listing whose
+    # `contextName` is wrong or whose `pagination.next` is missing, and the cursor is followed
+    # to exhaustion — so an empty list that survives all of that is an empty ACCOUNT, not a
+    # truncated listing. That is the same reasoning the note below applies to the row count.
     # The length heuristic that lived here is GONE, and its removal is the point rather than a
     # casualty. It refused whenever a page came back full, because a full page used to be the
     # only evidence of truncation available. Under the loop a full page is the ordinary case —
@@ -791,6 +803,14 @@ def main(argv=None) -> int:
 
     now = datetime.now(ZoneInfo("America/Edmonton"))
     entries = vercel_projects(args.limit, scope=scope)
+    # Rendering an index from nothing is what the refusal was always about, so it lives here
+    # now rather than inside the listing function every consumer shares (#9). It also checks
+    # the FILTERED list, which the old placement could not: an account holding only
+    # `docs-index` used to reach `render` with zero rows and raise `IndexError` from the
+    # `order[0]` its own accent CSS reads.
+    if not entries:
+        sys.exit("build_index: no pages to index — the account holds no published documents "
+                 "yet. Refusing to render an empty index. Publish something first.")
     projects = known_projects(workspace)
     rows = build_rows(entries, projects, fetch_titles=not args.no_titles)
 

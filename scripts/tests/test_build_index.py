@@ -332,10 +332,31 @@ class TestItFailsClosedRatherThanGuessing:
         with pytest.raises(SystemExit):
             index.vercel_projects(scope=SCOPE)
 
-    def test_zero_projects_is_refused_rather_than_rendering_an_empty_index(self, index, cli):
+    def test_zero_projects_is_refused_BY_THE_RENDERER_not_by_the_listing(self, index, cli,
+                                                                         tmp_path, monkeypatch):
+        """**This assertion MOVED in #9, deliberately — read why before changing it back.**
+
+        It used to require `vercel_projects` itself to exit on an empty listing, with the
+        message "Refusing to render an empty index". That message was always about rendering,
+        and it sat in the function that renders nothing. Every consumer shared the refusal,
+        including `publish_doc.resolve_project`, whose only question is whether a name exists
+        — so a brand-new Vercel account with zero projects failed its FIRST publish at stage 4
+        while `setup.py` reported it ready. That was the Step-11 Critical on #9.
+
+        The refusal is not gone. It is in `main()`, where it also covers a case the old
+        placement could not: an account holding only `docs-index` filters to zero rows and used
+        to reach `render` and raise `IndexError`.
+
+        What still fails closed is unchanged, and the tests above cover it: a wrong
+        `contextName`, a missing `pagination.next`, a non-JSON payload, an unprintable name.
+        Completeness is proven by exhausting the cursor, not by counting rows.
+        """
+        monkeypatch.setenv("DESIGN_DOC_PUBLISH_VERCEL_SCOPE", SCOPE)
+        monkeypatch.setenv("DESIGN_DOC_PUBLISH_CONFIG", str(tmp_path / "absent.json"))
         cli(stdout=_payload([]))
+        assert index.vercel_projects(scope=SCOPE) == [], "the listing answers, it does not exit"
         with pytest.raises(SystemExit) as e:
-            index.vercel_projects(scope=SCOPE)
+            index.main(["--out", str(tmp_path / "index.html"), "--no-titles"])
         assert "empty index" in str(e.value)
 
     def test_a_full_page_with_no_cursor_is_complete_not_truncated(self, index, cli):
@@ -535,3 +556,66 @@ class TestDocumentLinksOpenInANewTab:
         assert len(doc_anchors) == 4, (
             f"expected 4 document links (2 grouped + 2 recent), got {len(doc_anchors)}")
         assert all('target="_blank"' in a for a in doc_anchors)
+
+
+class TestAGenuinelyEmptyAccountCanStillMakeItsFirstPublish:
+    """#9, Step-11 Critical. A brand-new Vercel account has ZERO projects — not even
+    `docs-index`, which only exists once something has been published.
+
+    `TestTheBootstrapAccountStillPublishes` above already settled the principle for the
+    one-step-later case, in its own words: "The refusal that DOES exist is about rendering an
+    index from nothing, which is a different question from what this function returns." The
+    refusal had simply never been moved to where that reasoning puts it, so a truly empty
+    account exited here instead — and `setup.py` reports such an account as ready, so the
+    first publish failed at stage 4 with the user having done nothing wrong.
+
+    Nothing is weakened by moving it. Completeness is proven by exhausting the cursor, not by
+    counting rows, and `_parse_projects_json` has already refused anything whose `contextName`
+    is wrong or whose `pagination.next` is missing. An empty list that survives all of that is
+    an empty account, not a truncated listing.
+    """
+
+    def test_zero_projects_returns_empty_rather_than_exiting(self, index, cli):
+        cli(stdout=_payload([]))
+        assert index.vercel_projects(scope=SCOPE) == []
+
+    def test_and_so_the_very_first_publish_sees_its_project_as_absent(self, index, cli):
+        """The membership test stage 4 performs. Absent is the answer that lets
+        `--new-project` mint the first doc; exiting is what broke it."""
+        cli(stdout=_payload([]))
+        existing = {p["name"] for p in index.vercel_projects(scope=SCOPE)}
+        assert "example-design-1" not in existing
+
+    def test_a_TRUNCATED_listing_is_still_refused(self, index, cli):
+        """The guard that matters is unchanged: a payload missing `pagination.next` cannot be
+        judged complete, so it is refused rather than read as an empty account."""
+        doc = json.loads(_payload([]))
+        doc["pagination"] = {"count": 0}
+        cli(stdout=json.dumps(doc))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    def test_a_listing_for_the_wrong_tenant_is_still_refused(self, index, cli):
+        cli(stdout=_payload([], contextName="someone-else"))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    def test_the_INDEX_still_refuses_to_render_from_nothing(self, index, cli, tmp_path,
+                                                            monkeypatch):
+        """The refusal is not deleted, it is relocated to the thing it was always about.
+        Rendering a page of zero rows is what it exists to stop — and it also stops an
+        `IndexError` from `render`, which reads `order[0]` for its own accent CSS."""
+        monkeypatch.setenv("DESIGN_DOC_PUBLISH_VERCEL_SCOPE", SCOPE)
+        monkeypatch.setenv("DESIGN_DOC_PUBLISH_CONFIG", str(tmp_path / "none.json"))
+        cli(stdout=_payload([]))
+        with pytest.raises(SystemExit):
+            index.main(["--out", str(tmp_path / "index.html"), "--no-titles"])
+
+    def test_an_account_holding_only_the_index_also_refuses_to_render(self, index, cli,
+                                                                      tmp_path, monkeypatch):
+        """Previously this reached `render` with zero rows and raised IndexError."""
+        monkeypatch.setenv("DESIGN_DOC_PUBLISH_VERCEL_SCOPE", SCOPE)
+        monkeypatch.setenv("DESIGN_DOC_PUBLISH_CONFIG", str(tmp_path / "none.json"))
+        cli(stdout=_payload([_row("docs-index")]))
+        with pytest.raises(SystemExit):
+            index.main(["--out", str(tmp_path / "index.html"), "--no-titles"])

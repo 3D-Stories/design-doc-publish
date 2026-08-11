@@ -229,3 +229,50 @@ class TestTheResolverIsNotImportableByName:
         assert "is_relative_to(root)" in loader
         assert "spec_from_file_location" in loader
         assert "import user_config" not in source
+
+
+class TestAFirstPublishFromAnEmptyAccount:
+    """The Step-11 Critical, proved at the PUBLISHER rather than only at the listing.
+
+    The reviewer asked for exactly this: a test showing `--new-project` proceeds from a
+    genuinely empty account. Stage 4 is where it used to die, so stage 4 is where it is
+    asserted.
+    """
+
+    def _listing(self, projects):
+        return json.dumps({"projects": projects, "pagination": {"next": None},
+                           "contextName": SCOPE})
+
+    def test_stage_four_sees_the_project_as_absent_and_lets_new_project_proceed(
+            self, monkeypatch):
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, self._listing([]), ""))
+        # False == "did not already exist", which is what --new-project needs to hear.
+        assert publish_doc.resolve_project("payments-api-design-1", new_project=True,
+                                           limit=100, scope=SCOPE) is False
+
+    def test_without_new_project_it_still_refuses_with_the_usual_advice(self, monkeypatch):
+        """The other half: an empty account does not silently mint anything. Reuse is still
+        the default, and the refusal still names the flag."""
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, self._listing([]), ""))
+        with pytest.raises(publish_doc.StageError) as excinfo:
+            publish_doc.resolve_project("payments-api-design-1", new_project=False,
+                                        limit=100, scope=SCOPE)
+        assert excinfo.value.stage == 4
+        assert "--new-project" in excinfo.value.message
+
+    def test_a_truncated_listing_still_fails_stage_four_rather_than_looking_empty(
+            self, monkeypatch):
+        """The guarantee that must survive the fix: a listing that cannot be judged complete
+        is refused, so stage 4 never mistakes it for an empty account and mints a duplicate."""
+        bad = json.dumps({"projects": [], "pagination": {"count": 0}, "contextName": SCOPE})
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, bad, ""))
+        with pytest.raises(publish_doc.StageError) as excinfo:
+            publish_doc.resolve_project("payments-api-design-1", new_project=True,
+                                        limit=100, scope=SCOPE)
+        assert excinfo.value.stage == 4
