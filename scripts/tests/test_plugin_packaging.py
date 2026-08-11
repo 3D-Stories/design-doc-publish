@@ -336,11 +336,12 @@ class TestWhatShipsToAStranger:
         # would make this guard cry wolf on correct content, and a guard nobody believes gets
         # deleted. What made the removed document a disclosure was its POSTURE claim.
         #
-        # Known and deliberately out of scope for #2, reported rather than silently passed:
-        #   - scripts/tests/fixtures/vercel_project_ls.* carry real project names from the
-        #     account. That is the sanitisation sweep, issue #4 (its AC6 names exactly this).
-        #   - VERCEL_SCOPE is hardcoded at scripts/publish_doc.py:129 and
-        #     index/build_index.py:39, so the tool targets one team. That is issue #9.
+        # Two gaps were recorded here as out of scope for #2. BOTH ARE NOW CLOSED, and saying
+        # so matters: a stale pointer reads as an answer and delivers none.
+        #   - The fixtures carried real project names from the account. Sanitised by #4, and
+        #     the last derived name went in #9 (see TestTheRecordedFixturesCarryNoLiveAccountData).
+        #   - VERCEL_SCOPE was hardcoded, so the tool targeted one team. Retired by #9: the
+        #     team is resolved from the user's own configuration, and there is no fallback.
         # Also NOT "invalid_sso_protection" on its own: that is a public Vercel API error
         # code, used legitimately as test data in test_deploy_check.py. The marker has to be
         # the SENTENCE that disclosed the posture, not a vocabulary word that appears near it.
