@@ -170,7 +170,11 @@ PRE_74 = {
     # byte-for-byte what shipped — which is what lets every roadmap already published keep its
     # exact appearance. An additive stylesheet cannot repaint an existing page; that is why the
     # fix was built this way rather than by renaming the severity tokens.
-    "roadmap": "a8f18d7301d4ec31038f7452b3eaa4b529847289354d6f44213c76a38a585b61",
+    # Re-pinned: `.blk-ph-badge` moved from `flex:none` to `flex:0 1 auto;min-width:0` so a long
+    # phase-rail meta line WRAPS inside its flex row instead of overflowing the page horizontally
+    # (a full-page 2381px scroll on a 780px viewport, owner-reported). Only the roadmap template
+    # carries `blk-ph-badge`, so no other style moves; `crossstyle.sh` is the "only mine moved" guard.
+    "roadmap": "18ce98e1d92e3c05ea62da6d75a890470717b5bd8ae3f3c666378e461b442657",
     # #76 rebuild — re-pinned; see the header note above.
     "report": "229f7c864f27493a726bd38fac321dffafdc870679fb4a8c9b653d89f257e729",
     "design": "0e92870b453f6374b2ca19980859b91646088f690b7ec159733cb546906a5d3f",
