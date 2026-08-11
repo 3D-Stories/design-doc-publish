@@ -35,7 +35,7 @@ requiring these blocks to be updated when it closes. An acceptance criterion is 
 procedure, so closing #119 without touching these files would leave the suite green and the claim
 stale. To audit by hand:
 
-    gh issue view 119 --repo 3D-Stories/example --json state
+    gh issue view 119 --repo 3D-Stories/claude-skills --json state
 """
 import re
 from pathlib import Path

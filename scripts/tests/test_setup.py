@@ -583,3 +583,127 @@ class TestTheEntryPointIsExecutable:
         mode = os.stat(path).st_mode
         assert mode & stat.S_IXUSR, f"{path} is not executable, but the skill says to run it"
         assert path.read_text(encoding="utf-8").startswith("#!"), "and it needs a shebang"
+
+
+class TestTheStateTableOrderIsTheDocumentedOne:
+    """Found by the Step-11 inline pass on the bug_logic lens.
+
+    The design states an ORDER — `status` is the FIRST actionable fault — precisely so that
+    coexisting problems have one defined answer. The implementation resolved configuration
+    before checking whether the CLI existed, so a machine with no `vercel` AND an invalid
+    configured team reported `needs_config` while the table says `needs_vercel_cli` comes
+    first. A table nobody follows is not a contract.
+    """
+
+    def test_a_missing_cli_outranks_a_bad_configured_team(self, monkeypatch, cfg):
+        _write(cfg, {"version": 1, "vercel_scope": "Not A Slug"})
+        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
+        assert s["status"] == "needs_vercel_cli", (
+            "row 2 comes before row 4; a machine with no CLI is told about the CLI first")
+
+    def test_a_missing_cli_outranks_a_missing_workspace(self, monkeypatch, cfg, tmp_path):
+        _write(cfg, {"version": 1, "vercel_scope": SCOPE,
+                     "workspace_file": str(tmp_path / "gone.json")})
+        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
+        assert s["status"] == "needs_vercel_cli"
+
+    def test_not_being_signed_in_outranks_a_bad_configured_team(self, monkeypatch, cfg):
+        _write(cfg, {"version": 1, "vercel_scope": "Not A Slug"})
+        s = _status(monkeypatch, FakeVercel(logged_in=False), cfg)
+        assert s["status"] == "needs_login", "row 3 comes before row 4"
+
+    def test_an_unknown_config_version_still_outranks_everything(self, monkeypatch, cfg):
+        _write(cfg, {"version": 99})
+        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
+        assert s["status"] == "config_version_unsupported", "row 1 is row 1"
+
+    def test_an_invalid_configured_team_is_still_reported_when_it_is_the_only_fault(
+            self, monkeypatch, cfg):
+        _write(cfg, {"version": 1, "vercel_scope": "Not A Slug"})
+        s = _status(monkeypatch, FakeVercel(), cfg)
+        assert s["status"] == "needs_config"
+        assert s["can_proceed"] is False
+
+
+class TestTheStepElevenFindings:
+    """Findings from the Step-11 cross-model review, each verified against the code first."""
+
+    def test_the_lock_refuses_to_write_through_a_symlink(self, monkeypatch, cfg, tmp_path):
+        """`open(path, "w")` follows a symlink and TRUNCATES the destination before any lock
+        is taken, so a pre-created `.lock` symlink in a writable directory could destroy any
+        file the invoking user can write."""
+        FakeVercel().install(monkeypatch)
+        ws = tmp_path / "mine.json"
+        setup_mod.main(["--init-workspace", str(ws), "--config", str(cfg)])
+
+        victim = tmp_path / "precious.txt"
+        victim.write_text("do not truncate me", encoding="utf-8")
+        lock = Path(str(ws) + ".lock")
+        lock.symlink_to(victim)
+
+        rc = setup_mod.main(["--add-project", "widget", "--config", str(cfg)])
+        assert rc != 0, "a symlinked lock must be refused, not followed"
+        assert victim.read_text(encoding="utf-8") == "do not truncate me"
+
+    def test_a_normal_lock_still_works(self, monkeypatch, cfg, tmp_path):
+        """The counterpart, so the hardening does not simply break locking."""
+        FakeVercel().install(monkeypatch)
+        ws = tmp_path / "mine.json"
+        setup_mod.main(["--init-workspace", str(ws), "--config", str(cfg)])
+        assert setup_mod.main(["--add-project", "widget", "--config", str(cfg)]) == 0
+        assert Path(str(ws) + ".lock").is_file()
+
+    def test_adopting_a_workspace_clears_a_previous_ownership_claim(self, monkeypatch, cfg,
+                                                                    tmp_path):
+        """Leaving the old record intact is not the same as clearing it: a previously owned
+        path stays authorized, so re-adopting it after it has been replaced by someone else's
+        file would let --add-project write to that file."""
+        FakeVercel().install(monkeypatch)
+        mine = tmp_path / "mine.json"
+        setup_mod.main(["--init-workspace", str(mine), "--config", str(cfg)])
+        assert json.loads(cfg.read_text(encoding="utf-8"))["owned_workspace_file"] == str(mine)
+
+        theirs = _write(tmp_path / "theirs.json", {"version": 1, "projects": []})
+        setup_mod.main(["--set-workspace", str(theirs), "--config", str(cfg)])
+        stored = json.loads(cfg.read_text(encoding="utf-8"))
+        assert "owned_workspace_file" not in stored, "adoption must clear the claim"
+
+        # And the dangerous sequence itself: the old path is no longer authorized.
+        mine.write_text(json.dumps({"version": 1, "projects": []}), encoding="utf-8")
+        setup_mod.main(["--set-workspace", str(mine), "--config", str(cfg)])
+        assert setup_mod.main(["--add-project", "widget", "--config", str(cfg)]) != 0
+
+    def test_the_config_write_is_serialized_too(self):
+        """--set-scope and --init-workspace are two commands the documentation tells people
+        to run one after another. Run concurrently they could both read the old config and
+        the later writer would erase the other's setting."""
+        import inspect
+        source = inspect.getsource(setup_mod._store)
+        assert "_locked(" in source, "the config read-modify-write must hold the lock too"
+
+    def test_a_none_update_removes_the_key_rather_than_storing_null(self, monkeypatch, cfg,
+                                                                    tmp_path):
+        FakeVercel().install(monkeypatch)
+        setup_mod.main(["--init-workspace", str(tmp_path / "m.json"), "--config", str(cfg)])
+        setup_mod._store(cfg, owned_workspace_file=None)
+        assert "owned_workspace_file" not in json.loads(cfg.read_text(encoding="utf-8"))
+
+    def test_locking_is_declared_posix_only_rather_than_crashing_on_import(self):
+        """`fcntl` does not exist on Windows. Imported at module level it would raise before
+        argument parsing, so the one command a stranger runs first would traceback instead of
+        telling them anything."""
+        import inspect
+        source = inspect.getsource(setup_mod)
+        assert "except ImportError" in source
+        assert "fcntl = None" in source
+
+    def test_a_platformless_host_refuses_instead_of_tracebacking(self, monkeypatch, cfg,
+                                                                 tmp_path, capsys):
+        FakeVercel().install(monkeypatch)
+        setup_mod.main(["--init-workspace", str(tmp_path / "m.json"), "--config", str(cfg)])
+        monkeypatch.setattr(setup_mod, "fcntl", None)
+        rc = setup_mod.main(["--add-project", "widget", "--config", str(cfg)])
+        assert rc != 0
+        err = capsys.readouterr().err
+        assert "POSIX" in err
+        assert "Traceback" not in err

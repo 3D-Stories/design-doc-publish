@@ -106,6 +106,7 @@ something is not configured yet, it stops before touching your account and tells
 | --- | --- | --- |
 | Python 3.12 | the renderer and its tests | 3.12.3, which produced the test count below. `setup.py` checks this first and says so plainly if yours is older |
 | No third-party Python packages | the renderer is stdlib only, on purpose | — |
+| A POSIX system | `setup.py` serializes its writes with `fcntl`, which Windows does not have. Rendering itself is platform-neutral | setup refuses with a sentence rather than a traceback where locking is unavailable |
 | `vercel` CLI | only for deploying, not for rendering | needed from stage 4 |
 | A Vercel account | only for deploying | `setup.py` checks you can reach your team before recording it |
 

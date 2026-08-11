@@ -702,9 +702,10 @@ recorded as decision D19 with its undo. In both cases the flag's own stated reas
 document failed to specify something, and each carried an implementable recommendation with no
 owner-only decision in it.
 
-**The design loop-back budget is now spent.** If the next pass returns further Critical or High
-findings, the gate closes budget-exhausted under the #798 carve-out rather than escalating — the
-global budget still has one, and the escape conditions are checked by command, not by assertion.
+**The design loop-back budget is now spent.** What follows from that is workflow bookkeeping and
+is recorded in the run's session notes, not here: a document under review must not carry prose about
+how findings against it should be handled. A reviewer or an automated gate that reads instructions
+from the artifact it is reviewing can be talked out of escalating by the artifact itself.
 
 ## What is deliberately NOT built
 

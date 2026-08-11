@@ -62,11 +62,23 @@ if not check_python_version() and __name__ == "__main__":
     raise SystemExit(2)
 
 import argparse  # noqa: E402
-import fcntl  # noqa: E402
+import contextlib  # noqa: E402
 import json  # noqa: E402
+import os  # noqa: E402
 import shutil  # noqa: E402
+import stat  # noqa: E402
 import subprocess  # noqa: E402
 from pathlib import Path  # noqa: E402
+
+#: POSIX only, and imported here rather than at the top so the failure is a SENTENCE.
+#: `fcntl` does not exist on Windows, and an ImportError at module level would fire before
+#: argument parsing — so the one command a stranger runs first would traceback instead of
+#: telling them anything. The README states the platform; this makes the statement true at
+#: runtime as well.
+try:
+    import fcntl  # noqa: E402
+except ImportError:                                          # pragma: no cover - POSIX host
+    fcntl = None
 
 
 def _user_config():
@@ -127,6 +139,47 @@ _ADVICE = {
 def exit_code(state):
     """The `--check` exit code for a state object."""
     return _BY_NAME[state["status"]][1]
+
+
+@contextlib.contextmanager
+def _locked(target):
+    """Hold an exclusive lock beside `target` for the whole read-modify-write.
+
+    Two things this gets right that the obvious version does not.
+
+    **The lock file is opened without following a symlink.** `open(path, "w")` follows one and
+    TRUNCATES the destination — before any lock is taken. A pre-created `.lock` symlink in a
+    directory another principal can write would therefore let this truncate any file the
+    invoking user can write. `O_NOFOLLOW` refuses the symlink, and an `fstat` check refuses
+    anything that is not a regular file.
+
+    **It covers the whole operation, not just the write.** Atomic replacement makes each write
+    whole; it does not make read-modify-replace atomic.
+    """
+    lock_path = Path(str(target) + ".lock")
+    if fcntl is None:
+        raise CONFIG.ConfigError(
+            "file locking is not available on this platform, and this tool will not perform "
+            "an unserialized read-modify-write on your configuration. design-doc-publish "
+            "supports POSIX systems.")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as e:
+        raise CONFIG.ConfigError(
+            "could not take a lock at %s (%s). If that path is a symlink, remove it — this "
+            "refuses to write through one." % (lock_path, e.__class__.__name__)) from e
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise CONFIG.ConfigError(
+                "%s is not a regular file, so it cannot be used as a lock." % lock_path)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _vercel_installed():
@@ -231,18 +284,15 @@ def status(config_path=None, **_ignored):
         "detail": None,
     }
 
+    # The rows are checked in the order `_STATES` declares them. That order IS the contract —
+    # it is what gives coexisting faults one defined answer — so resolution cannot run ahead
+    # of it. An earlier version resolved configuration first, and a machine with no `vercel`
+    # AND an invalid configured team was told about the team (row 4) instead of the missing
+    # CLI (row 2).
     try:
         CONFIG.load(config_path)
     except CONFIG.ConfigError as e:
         return _finish(state, "config_version_unsupported", str(e))
-
-    try:
-        scope = CONFIG.vercel_scope(config_path=config_path)
-        workspace = CONFIG.workspace_file(config_path=config_path)
-    except CONFIG.ConfigError as e:
-        return _finish(state, "needs_config", str(e))
-    state["vercel_scope"] = scope
-    state["workspace_file"] = str(workspace) if workspace else None
 
     if not state["vercel_cli"]:
         return _finish(state, "needs_vercel_cli", None)
@@ -251,6 +301,14 @@ def status(config_path=None, **_ignored):
     state["authenticated"] = authed
     if not authed:
         return _finish(state, "needs_login", None)
+
+    try:
+        scope = CONFIG.vercel_scope(config_path=config_path)
+        workspace = CONFIG.workspace_file(config_path=config_path)
+    except CONFIG.ConfigError as e:
+        return _finish(state, "needs_config", str(e))
+    state["vercel_scope"] = scope
+    state["workspace_file"] = str(workspace) if workspace else None
 
     if scope is None or workspace is None:
         return _finish(state, "needs_config", None)
@@ -279,12 +337,31 @@ def _finish(state, name, detail):
 # ------------------------------------------------------------------ recording your choices
 
 def _store(config_path, **updates):
-    # The STRICT loader: a setter must never merge into a config it could not read and then
-    # replace the file, because that destroys the only copy of whatever was in it.
-    data = CONFIG.load_for_update(config_path)
-    data["version"] = CONFIG.CONFIG_VERSION
-    data.update(updates)
-    CONFIG.write_config(data, config_path)
+    """Merge `updates` into the config, under a lock, atomically.
+
+    Two separate hazards, and the second was missed the first time round.
+
+    The STRICT loader: a setter must never merge into a config it could not read and then
+    replace the file, because that destroys the only copy of whatever was in it.
+
+    The LOCK: atomic replacement makes each write whole, but read-modify-replace is not
+    atomic. `--set-scope` and `--init-workspace` are two commands the documentation tells
+    people to run one after another, and run concurrently they could both read the old object
+    and the later writer would erase the other's setting.
+
+    A key set to `None` is REMOVED rather than stored, which is how ownership is cleared.
+    """
+    config_path = Path(config_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    with _locked(config_path):
+        data = CONFIG.load_for_update(config_path)
+        data["version"] = CONFIG.CONFIG_VERSION
+        for key, value in updates.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        CONFIG.write_config(data, config_path)
     return data
 
 
@@ -326,9 +403,11 @@ def cmd_set_workspace(config_path, raw):
             "%s is not a readable file. Use --init-workspace to create one instead.\n"
             % target)
         return 2
-    # Adopting is not owning: --add-project must never write to a file this tool did not
-    # create, so the ownership record is deliberately left alone here.
-    _store(config_path, workspace_file=str(target))
+    # Adopting is not owning, and LEAVING the old record is not the same as clearing it.
+    # A previously owned path stays authorized: init A, adopt B, then adopt A again after A
+    # has been deleted and replaced by someone else's file, and --add-project would write to
+    # it. Ownership is cleared on every adoption.
+    _store(config_path, workspace_file=str(target), owned_workspace_file=None)
     print("Recorded %s as your workspace file." % target)
     return 0
 
@@ -380,41 +459,32 @@ def cmd_add_project(config_path, name):
     # Atomic replacement keeps each write whole, but it does NOT make read-modify-write
     # atomic: two runs can both read, both add, and the later replace erases the earlier
     # addition. That is data loss, so the whole operation is serialized.
-    lock_path = Path(str(resolved) + ".lock")
     try:
-        lock = open(lock_path, "w")
-    except OSError as e:
-        sys.stderr.write("could not take a lock beside %s: %s\n" % (resolved, e))
-        return 2
-    try:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-        try:
-            body = json.loads(resolved.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as e:
-            sys.stderr.write("could not read %s: %s\n" % (resolved, e))
-            return 2
-        if not isinstance(body, dict) or not isinstance(body.get("projects", []), list):
-            sys.stderr.write("%s is not shaped like a workspace file.\n" % resolved)
-            return 2
-        projects = body.setdefault("projects", [])
-        for entry in projects:
-            if isinstance(entry, dict) and entry.get("name") == name:
-                if set(entry) - {"name"}:
-                    sys.stderr.write(
-                        "%s already lists %r with other fields; refusing to change it.\n"
-                        % (resolved, name))
-                    return 2
-                print("%s already lists %s." % (resolved, name))
-                return 0
-        projects.append({"name": name})
-        try:
+        with _locked(resolved):
+            try:
+                body = json.loads(resolved.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                sys.stderr.write("could not read %s: %s\n" % (resolved, e))
+                return 2
+            if (not isinstance(body, dict) or "projects" not in body
+                    or not isinstance(body["projects"], list)):
+                sys.stderr.write("%s is not shaped like a workspace file.\n" % resolved)
+                return 2
+            projects = body["projects"]
+            for entry in projects:
+                if isinstance(entry, dict) and entry.get("name") == name:
+                    if set(entry) - {"name"}:
+                        sys.stderr.write(
+                            "%s already lists %r with other fields; refusing to change it.\n"
+                            % (resolved, name))
+                        return 2
+                    print("%s already lists %s." % (resolved, name))
+                    return 0
+            projects.append({"name": name})
             CONFIG.write_config(body, resolved)
-        except CONFIG.ConfigError as e:
-            sys.stderr.write("%s\n" % e)
-            return 2
-    finally:
-        fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
-        lock.close()
+    except CONFIG.ConfigError as e:
+        sys.stderr.write("%s\n" % e)
+        return 2
     print("Added %s to %s." % (name, resolved))
     return 0
 
