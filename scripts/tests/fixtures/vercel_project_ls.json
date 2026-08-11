@@ -25,9 +25,9 @@
       "deprecated": false
     },
     {
-      "name": "claude-skills-plan-786",
+      "name": "example-plan-786",
       "id": "prj_EXAMPLE0000000000000000000004",
-      "latestProductionUrl": "https://claude-skills-plan-786.vercel.app",
+      "latestProductionUrl": "https://example-plan-786.vercel.app",
       "updatedAt": 1785567949474,
       "nodeVersion": "24.x",
       "deprecated": false
@@ -54,6 +54,6 @@
     "next": null,
     "prev": 1785885066698
   },
-  "contextName": "3d-stories",
+  "contextName": "example-team",
   "elapsed": "407ms"
 }

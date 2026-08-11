@@ -155,7 +155,7 @@ def load_pack(project: str, config_path: Path) -> dict | None:
             "source": block["source"], "note": block["note"]}
 
 
-def _project_config(project: str, workspace_file: Path) -> Path | None:
+def _project_config(project: str, workspace_file: Path | None) -> Path | None:
     """Where `project` keeps its own config, or None.
 
     Every malformed shape WARNS rather than resolving silently: a workspace that cannot
@@ -163,12 +163,18 @@ def _project_config(project: str, workspace_file: Path) -> Path | None:
     behind-a-green-gate failure this module exists to remove. Only a valid workspace
     that genuinely has no such project is silent.
 
+    `None` is one of those silent cases, and since #9 it is the ordinary state rather than
+    an impossible one: the hardcoded `~/rawgentic/.rawgentic_workspace.json` default is
+    retired, so a machine that has never run setup resolves to no workspace at all. The
+    renderer must keep working there — it is the README's first command — so this degrades
+    to the seed-or-hash answer instead of raising.
+
     The resolved directory must stay inside the workspace root. An absolute `path`
     discards the prefix entirely and `../` walks out of it, either of which would let a
     workspace entry point the publisher at a foreign config and choose a public page's
     branding from outside the tree that declares it.
     """
-    if not workspace_file.exists():
+    if workspace_file is None or not workspace_file.exists():
         return None                                   # silent: no workspace at all
     try:
         data = json.loads(workspace_file.read_text(encoding="utf-8"))
@@ -197,12 +203,20 @@ def _project_config(project: str, workspace_file: Path) -> Path | None:
             continue                                  # one bad row must not blind the rest
         if str(entry.get("name", "")).strip().lower() != project.lower():
             continue
-        raw = entry.get("path", "")
+        if "path" not in entry:
+            # Silent, and this is the #9 case rather than a slip. `setup.py --add-project`
+            # writes `{"name": ...}` with no path, because a project registered by name has
+            # no config directory to read — that is absence, and absence is the one thing
+            # this module does not warn about. Warning here would print on every render.
+            return None
+        raw = entry.get("path")
         if not isinstance(raw, str):
             _warn(project, workspace_file, f"path is {type(raw).__name__}, not a string")
             return None
         if not raw:
-            _warn(project, workspace_file, "entry has no path, so its config cannot be found")
+            # Present-but-useless is a different event from absent, and it stays loud.
+            _warn(project, workspace_file, "entry has an empty path, so its config cannot "
+                                           "be found")
             return None
         try:
             resolved = (root / raw).resolve()
@@ -231,12 +245,15 @@ def _fallback(project: str) -> dict:
             "source": "vdl_packs.PALETTE", "note": f"no declaration or seed for {project}"}
 
 
-def pack_for(project: str, workspace_file: Path) -> dict:
+def pack_for(project: str, workspace_file: Path | None) -> dict:
     """The colour for `project`: declared → seed → deterministic fallback.
 
     NEVER returns None. A single source of truth that abstains is not one — the renderer
     would keep its default accent while the index picked its own, which is precisely the
     divergence this module exists to remove.
+
+    `workspace_file` may be `None` (#9): a machine with no configured workspace resolves
+    through the seed table and then the name hash, silently.
     """
     project = (project or "").strip().lower()
     config = _project_config(project, workspace_file)

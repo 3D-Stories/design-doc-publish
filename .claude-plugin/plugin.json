@@ -1,7 +1,7 @@
 {
   "name": "design-doc-publish",
   "version": "1.0.0",
-  "description": "Render a design or architecture document from markdown to a standalone HTML page. Publishing to Vercel is not yet available to anyone but the author: it needs a workspace file and a Vercel team that are still hardcoded, which issue #9 fixes.",
+  "description": "Render a design or architecture document from markdown to a standalone HTML page. Rendering needs nothing configured. Publishing the page to Vercel requires the vercel CLI, a Vercel account and a one-time setup run that records which team to deploy to.",
   "author": {
     "name": "3D-Stories",
     "url": "https://github.com/3D-Stories"

@@ -36,7 +36,12 @@ from zoneinfo import ZoneInfo
 # The index groups by rawgentic project. `workspace-` is the cross-project bucket.
 WORKSPACE_GROUP = "workspace"
 SELF_PROJECT = "docs-index"  # the index never lists itself
-VERCEL_SCOPE = "3d-stories"
+
+# #9: `VERCEL_SCOPE` used to live here as a hardcoded team name, which meant this builder
+# only ever worked for one account. The scope is now resolved from the user's own
+# configuration and THREADED through — `main()` resolves it once and passes it down, so a
+# child process cannot re-resolve to a different account halfway through a publish. Every
+# call that targets an account still carries `--scope`; the pin was never the problem.
 
 # Runaway backstop for the #171 pagination loop, not a capacity limit: at the default
 # `--limit 100` this allows 2,500 projects, far past any real account here. It exists so a
@@ -72,17 +77,34 @@ def _vdl_packs():
     return mod
 
 
-DEFAULT_WORKSPACE = Path.home() / "rawgentic" / ".rawgentic_workspace.json"
+def _user_config():
+    """`scripts/user_config.py`, loaded the same guarded way as `vdl_packs` (#9).
+
+    Containment duplicated here on purpose, exactly as the comment above says: a shared
+    helper would itself have to be loaded this way, so the guard cannot live behind the
+    thing it guards. This module decides which Vercel account a public page reaches, which
+    makes a `sys.path` hijack of it worse than most.
+    """
+    import importlib.util
+    root = Path(__file__).resolve().parent.parent / "scripts"
+    path = root / "user_config.py"
+    real = path.resolve()
+    if not real.is_file() or not real.is_relative_to(root):
+        raise RuntimeError(f"refusing to load {path}: resolves to {real}, outside {root}")
+    spec = importlib.util.spec_from_file_location("_index_user_config", real)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def group_colors(group: str, workspace_file: Path | None = None) -> tuple[str, str]:
     """(dark, light) for a line — the same pack the rendered pages wear.
 
-    `None` normalises to the CLI's own default rather than reaching `pack_for` and
-    raising: `render()` still advertises a four-argument form, and an existing caller
-    using it must render an index, not an AttributeError.
+    `None` is a real state since #9, not a stand-in for a default that no longer exists:
+    a machine that has never run setup has no workspace file, and `pack_for` degrades to
+    the seed table and then the name hash rather than raising.
     """
-    pack = _vdl_packs().pack_for(group, workspace_file or DEFAULT_WORKSPACE)
+    pack = _vdl_packs().pack_for(group, workspace_file)
     return pack["accent"]["dark"], pack["accent"]["light"]
 
 
@@ -146,7 +168,7 @@ def _instant(value: object) -> datetime | None:
         return None
 
 
-def _parse_projects_json(blob: str) -> tuple[list[dict], object]:
+def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
     """One `--format json` payload in; validated rows plus the next cursor out — or a loud exit.
 
     Returns the cursor VALUE rather than a more-pages flag (#171). A boolean could only answer
@@ -179,8 +201,8 @@ def _parse_projects_json(blob: str) -> tuple[list[dict], object]:
     # answered for the wrong account is that same hazard, and it would present every genuinely
     # live project as absent, which is #125's failure by another route.
     context = doc.get("contextName")
-    if context != VERCEL_SCOPE:
-        _refuse(f"the listing answered for context {context!r}, not {VERCEL_SCOPE!r}")
+    if context != scope:
+        _refuse(f"the listing answered for context {context!r}, not {scope!r}")
     pagination = doc.get("pagination")
     if not isinstance(pagination, dict) or "next" not in pagination:
         _refuse("the payload carries no `pagination.next`, so completeness cannot be judged")
@@ -198,7 +220,7 @@ def _parse_projects_json(blob: str) -> tuple[list[dict], object]:
     return rows, pagination["next"]
 
 
-def vercel_projects(limit: int = 100) -> list[dict]:
+def vercel_projects(limit: int = 100, *, scope: str) -> list[dict]:
     """Project name + last-deploy instant from the Vercel CLI, read as JSON.
 
     `--format json` puts a machine surface on **stdout** and leaves only the banner on stderr —
@@ -241,14 +263,14 @@ def vercel_projects(limit: int = 100) -> list[dict]:
     cursor = None
     for _page in range(_MAX_PAGES):
         cmd = ["vercel", "project", "ls", "--format", "json",
-               "--limit", str(limit), "--scope", VERCEL_SCOPE, "--no-color"]
+               "--limit", str(limit), "--scope", scope, "--no-color"]
         if cursor is not None:
             cmd += ["--next", str(cursor)]
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
         if proc.returncode != 0:
             sys.exit(f"build_index: `vercel project ls` failed (rc={proc.returncode}):\n"
                      + (proc.stdout or "") + (proc.stderr or ""))
-        page_rows, cursor = _parse_projects_json(proc.stdout or "")
+        page_rows, cursor = _parse_projects_json(proc.stdout or "", scope)
         # Deduplicated by name, because a page boundary that moves while paging can repeat a
         # row. A duplicate is not corruption, but it would double-count in the index, and the
         # first sighting carries the newer timestamp — pages come newest-first.
@@ -266,9 +288,21 @@ def vercel_projects(limit: int = 100) -> list[dict]:
                  f"to keep going. Either the account is larger than this tool expects, or the "
                  f"cursor is not advancing.")
 
-    if not rows:
-        sys.exit("build_index: parsed zero projects — the CLI returned an empty project list. "
-                 "Refusing to render an empty index.")
+    # The empty-list refusal that used to live HERE has moved to `main()`, where its own
+    # stated purpose already put it (#9). It said "refusing to render an empty index" while
+    # sitting in the function that does not render anything — and the docstring of
+    # `TestTheBootstrapAccountStillPublishes` had already drawn the distinction in so many
+    # words: "the refusal that DOES exist is about rendering an index from nothing, which is a
+    # different question from what this function returns."
+    #
+    # A brand-new Vercel account has ZERO projects, not even `docs-index`, and `resolve_project`
+    # must be able to see "no such project yet" so `--new-project` can mint the very first doc.
+    # Exiting here made a first publish fail at stage 4 while setup reported the account ready.
+    #
+    # Nothing is weakened. `_parse_projects_json` has already refused a listing whose
+    # `contextName` is wrong or whose `pagination.next` is missing, and the cursor is followed
+    # to exhaustion — so an empty list that survives all of that is an empty ACCOUNT, not a
+    # truncated listing. That is the same reasoning the note below applies to the row count.
     # The length heuristic that lived here is GONE, and its removal is the point rather than a
     # casualty. It refused whenever a page came back full, because a full page used to be the
     # only evidence of truncation available. Under the loop a full page is the ordinary case —
@@ -285,9 +319,17 @@ def vercel_projects(limit: int = 100) -> list[dict]:
     return [r for r in rows if r["name"] != SELF_PROJECT]
 
 
-def known_projects(workspace_file: Path) -> list[str]:
+def known_projects(workspace_file: Path | None) -> list[str]:
     """rawgentic project names, longest first so prefix matching prefers the specific one
-    (`3dstories-bench` must win over any shorter sibling)."""
+    (a longer name must win over any shorter sibling).
+
+    `None` since #9: the index groups by project as a nicety, so a machine with no
+    configured workspace still builds a usable page — every row simply falls into the
+    cross-project bucket. That is a degradation the index can afford. `publish_doc` cannot,
+    which is why IT calls `require_workspace_file` and refuses instead.
+    """
+    if workspace_file is None:
+        return []
     try:
         data = json.loads(workspace_file.read_text())
     except (OSError, json.JSONDecodeError):
@@ -432,7 +474,15 @@ NEW_TAB = ' target="_blank" rel="noopener"'
 
 
 def render(rows: list[dict], stamp: str, now: datetime, sig: str,
-           workspace_file: Path | None = None) -> str:
+           workspace_file: Path | None = None, scope: str | None = None) -> str:
+    # #9: the team name is user-supplied now, so the two places it reaches the page are an
+    # injection surface that did not exist while it was a constant. Both are escaped, and
+    # `user_config.validate_scope` has already refused anything that is not a slug — belt
+    # and braces, because this page is deployed PUBLICLY.
+    tenant = html.escape(scope) if scope else ""
+    title_prefix = f"{tenant} · " if tenant else ""
+    eyebrow = f"{tenant} · vercel · living documentation" if tenant else (
+        "vercel · living documentation")
     groups: dict[str, list[dict]] = {}
     for r in sorted(rows, key=_sort_key):
         groups.setdefault(r["group"], []).append(r)
@@ -513,7 +563,7 @@ def render(rows: list[dict], stamp: str, now: datetime, sig: str,
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>3d-stories · docs index</title>
+<title>{title_prefix}docs index</title>
 <meta name="index-signature" content="{sig}">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23131720'/%3E%3Ccircle cx='5' cy='8' r='2.2' fill='%235ec8f2'/%3E%3Ccircle cx='11' cy='8' r='2.2' fill='%23f2a65e'/%3E%3C/svg%3E">
 <style>
@@ -604,7 +654,7 @@ footer{{border-top:1px solid var(--hair);color:var(--dim);font:12px/1.6 ui-monos
 </head>
 <body>
 <header>
-  <div class="eyebrow">3d-stories · vercel · living documentation</div>
+  <div class="eyebrow">{eyebrow}</div>
   <h1>Docs index<span class="tick"></span></h1>
   <p class="sub">Every deployed page, newest first, grouped by the rawgentic project it belongs to. Type to filter; click a line to jump.</p>
   <div class="hud">
@@ -717,9 +767,16 @@ footer{{border-top:1px solid var(--hair);color:var(--dim);font:12px/1.6 ui-monos
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", help="output path, or - for stdout. Required unless --signature.")
-    ap.add_argument("--workspace-file",
-                    default=str(Path.home() / "rawgentic" / ".rawgentic_workspace.json"),
-                    help="rawgentic workspace file, used to group pages by project")
+    ap.add_argument("--workspace-file", default=None,
+                    help="workspace file used to group pages by project. Resolved from your "
+                         "configuration when omitted; grouping is skipped when nothing is "
+                         "configured, which is a degradation rather than a failure.")
+    ap.add_argument("--vercel-scope", default=None,
+                    help="the Vercel team to list. Resolved from your configuration when "
+                         "omitted; there is no built-in default, because deploying to the "
+                         "wrong account is worse than refusing.")
+    ap.add_argument("--config", default=None,
+                    help="read configuration from this file instead of the default location")
     ap.add_argument("--no-titles", action="store_true",
                     help="skip <title> fetches (fast; rows are labelled by project name)")
     ap.add_argument("--limit", type=int, default=100,
@@ -733,9 +790,28 @@ def main(argv=None) -> int:
     if not args.out and not args.signature:
         ap.error("--out is required unless --signature is given")
 
+    # Resolved ONCE, here, and threaded down. Re-resolving inside a helper would let one run
+    # answer for two different accounts — the exact hazard that makes `publish_doc` pass these
+    # values to this script explicitly rather than letting it look them up again (#9).
+    cfg = _user_config()
+    try:
+        config_path = cfg.config_file(cli_value=args.config)
+        scope = cfg.require_vercel_scope(cli_value=args.vercel_scope, config_path=config_path)
+        workspace = cfg.workspace_file(cli_value=args.workspace_file, config_path=config_path)
+    except cfg.ConfigError as e:
+        sys.exit(f"build_index: {e}")
+
     now = datetime.now(ZoneInfo("America/Edmonton"))
-    entries = vercel_projects(args.limit)
-    projects = known_projects(Path(args.workspace_file))
+    entries = vercel_projects(args.limit, scope=scope)
+    # Rendering an index from nothing is what the refusal was always about, so it lives here
+    # now rather than inside the listing function every consumer shares (#9). It also checks
+    # the FILTERED list, which the old placement could not: an account holding only
+    # `docs-index` used to reach `render` with zero rows and raise `IndexError` from the
+    # `order[0]` its own accent CSS reads.
+    if not entries:
+        sys.exit("build_index: no pages to index — the account holds no published documents "
+                 "yet. Refusing to render an empty index. Publish something first.")
+    projects = known_projects(workspace)
     rows = build_rows(entries, projects, fetch_titles=not args.no_titles)
 
     sig = signature(rows)
@@ -744,7 +820,7 @@ def main(argv=None) -> int:
         return 0
 
     stamp = now.strftime("%Y-%m-%d %H:%M %Z")
-    page = render(rows, stamp, now, sig, Path(args.workspace_file))
+    page = render(rows, stamp, now, sig, workspace, scope)
 
     if args.out == "-":
         sys.stdout.write(page)

@@ -336,11 +336,12 @@ class TestWhatShipsToAStranger:
         # would make this guard cry wolf on correct content, and a guard nobody believes gets
         # deleted. What made the removed document a disclosure was its POSTURE claim.
         #
-        # Known and deliberately out of scope for #2, reported rather than silently passed:
-        #   - scripts/tests/fixtures/vercel_project_ls.* carry real project names from the
-        #     account. That is the sanitisation sweep, issue #4 (its AC6 names exactly this).
-        #   - VERCEL_SCOPE is hardcoded at scripts/publish_doc.py:129 and
-        #     index/build_index.py:39, so the tool targets one team. That is issue #9.
+        # Two gaps were recorded here as out of scope for #2. BOTH ARE NOW CLOSED, and saying
+        # so matters: a stale pointer reads as an answer and delivers none.
+        #   - The fixtures carried real project names from the account. Sanitised by #4, and
+        #     the last derived name went in #9 (see TestTheRecordedFixturesCarryNoLiveAccountData).
+        #   - VERCEL_SCOPE was hardcoded, so the tool targeted one team. Retired by #9: the
+        #     team is resolved from the user's own configuration, and there is no fallback.
         # Also NOT "invalid_sso_protection" on its own: that is a public Vercel API error
         # code, used legitimately as test data in test_deploy_check.py. The marker has to be
         # the SENTENCE that disclosed the posture, not a vocabulary word that appears near it.
@@ -370,7 +371,12 @@ class TestWhatShipsToAStranger:
 
 
 @pytest.mark.parametrize("relative", ["scripts/publish_doc.py", "scripts/render-doc",
-                                      "docs/design-language.md", "index/build_index.py"])
+                                      "docs/design-language.md", "index/build_index.py",
+                                      # #9 AC1: setup must be reachable from the INSTALLED
+                                      # copy, not only from a source checkout. SKILL.md and
+                                      # the README both address it, so its absence here is
+                                      # the failure a stranger would hit first.
+                                      "scripts/setup.py", "scripts/user_config.py"])
 def test_the_files_the_skill_promises_are_where_it_says(relative):
     """SKILL.md addresses these as ${CLAUDE_PLUGIN_ROOT}/<relative>. The install root is
     whatever directory holds them, so the check that means anything is that the layout the
@@ -432,10 +438,45 @@ class TestTheRecordedFixturesCarryNoLiveAccountData:
         assert not unreadable, (
             "this guard could not read, and therefore cannot vouch for: " + ", ".join(unreadable))
 
-    def test_the_remaining_two_names_are_documented_rather_than_hidden(self):
+    def test_the_remaining_name_is_documented_rather_than_hidden(self):
         """If the residual is not written down, the next person reads the guard above as a
-        guarantee of neutrality, which it is not."""
+        guarantee of neutrality, which it is not.
+
+        #4 handed TWO names to #9. One is gone: `claude-skills-plan-786` was coupled to how
+        the tests derive `<project>-<type>-<ref>`, and renaming it alone had produced 80
+        failures — renaming both sides in one change is what made it safe. `docs-index`
+        stays, because it is `SELF_PROJECT`, a structural constant that names the tool rather
+        than anyone's private work, and a stranger's own index carries the same name.
+        """
         disposition = (ROOT / "docs" / "assets-disposition.md").read_text(encoding="utf-8")
-        for still_there in ("docs-index", "claude-skills-plan-786"):
-            assert still_there in disposition, (
-                f"{still_there} still ships but docs/assets-disposition.md does not say so")
+        assert "docs-index" in disposition, (
+            "docs-index still ships but docs/assets-disposition.md does not say so")
+
+    @needs_the_source_repo
+    def test_the_derived_fixture_name_really_did_leave(self):
+        """The counterpart: a guard that only checks the documentation would pass while the
+        name was still in the tree."""
+        offenders = []
+        for path in _text_files():
+            relative = path.relative_to(ROOT).as_posix()
+            # These RECORD the rename, which is their job — the same exemption the sibling
+            # guards in this file give the files that keep the record. Losing that record is
+            # how the next refresh reintroduces the name without noticing.
+            if relative.startswith("docs/planning/") or relative == THIS_FILE:
+                continue
+            if relative == "docs/assets-disposition.md":
+                continue
+            # Append-only run telemetry: a historical record of runs that happened, under the
+            # names they actually used. Rewriting history to tidy a record makes it a worse
+            # record. Stated in docs/assets-disposition.md rather than left to be discovered.
+            if relative == "docs/measurements/run_records.jsonl":
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            for number, line in enumerate(text.splitlines(), 1):
+                if "claude-skills-plan-786" in line:
+                    offenders.append(f"{relative}:{number}")
+        assert not offenders, (
+            "the renamed fixture project is back: " + ", ".join(offenders))

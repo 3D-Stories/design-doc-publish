@@ -93,6 +93,7 @@ CHECK_STYLE_DEVICES = _LINT.check_style_devices
 CHECK_TEMPLATE_CLASSIFICATION = _LINT.check_template_classification
 INDEX = _load(INDEX_SCRIPT, "_publish_doc_index")
 VDL = _load(HERE / "vdl_packs.py", "_publish_doc_vdl")
+CONFIG = _load(HERE / "user_config.py", "_publish_doc_user_config")
 
 # Offset past argparse's own exit code 2, so a usage error is never mistaken for a
 # stage failure — stage 2 (naming) would otherwise share it.
@@ -122,16 +123,20 @@ PURPOSE_STYLE = {
     "deck": "slide-deck",
 }
 
-# Every Vercel call is pinned to this team. Ambient scope is whatever the last `vercel
-# switch` left behind, so an unpinned deploy can land in a personal account — and the
-# recorded fixture only *mentions* 3d-stories, it does not enforce it. Raised by the
-# security lane on #12 and again on #19.
-VERCEL_SCOPE = "3d-stories"
+# Every Vercel call is still pinned to a team — that has not changed and must not. Ambient
+# scope is whatever the last `vercel switch` left behind, so an unpinned deploy can land in a
+# personal account. Raised by the security lane on #12 and again on #19.
+#
+# What #9 changed is WHERE the team comes from. It used to be the string "3d-stories" written
+# here, which meant this tool worked for exactly one account. It is now resolved from the
+# user's own configuration, ONCE in `main`, and threaded through every stage — including the
+# index-refresh CHILD PROCESS, which would otherwise be free to resolve a different account
+# halfway through a single publish. There is deliberately no fallback: `require_vercel_scope`
+# raises rather than returning anything a caller could pass to `--scope`.
 
 WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic project
 INDEX_PROJECT = "docs-index"
 MAX_NAME = 100
-DEFAULT_WORKSPACE = Path.home() / "rawgentic" / ".rawgentic_workspace.json"
 
 
 class StageError(Exception):
@@ -373,11 +378,28 @@ def gate(page: str, *, skip_component_checks: bool = False) -> None:
 
 # --- the Vercel CLI ------------------------------------------------------------------
 
-def _vercel(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def _vercel(args: list[str], cwd: Path, scope: str) -> subprocess.CompletedProcess:
     """Every call is given an explicit cwd, and every path used afterwards is absolute —
-    the CLI resets the shell's working directory."""
-    return subprocess.run(["vercel", *args, "--scope", VERCEL_SCOPE], cwd=str(cwd),
+    the CLI resets the shell's working directory.
+
+    `scope` is REQUIRED and is never conditionally omitted (#9). Dropping `--scope` when no
+    team is configured would silently target whichever account `vercel switch` last selected,
+    which is the failure the pin exists to prevent — so the caller refuses long before here.
+    """
+    return subprocess.run(["vercel", *args, "--scope", scope], cwd=str(cwd),
                           capture_output=True, text=True, check=False)
+
+
+#: Vercel's own wording for a permission refusal, matched loosely on purpose: this only
+#: chooses which of two messages a failed deploy prints, so a miss costs a less specific
+#: diagnostic and never a wrong outcome. Both paths still fail the stage.
+_DENIED = ("not authorized", "not a member", "forbidden", "do not have permission",
+           "does not have permission", "access denied")
+
+
+def _looks_like_denied(log: str) -> bool:
+    lowered = log.lower()
+    return any(marker in lowered for marker in _DENIED)
 
 
 def _log(proc: subprocess.CompletedProcess) -> str:
@@ -393,19 +415,66 @@ def _log(proc: subprocess.CompletedProcess) -> str:
 
 # --- stage 4: reuse or create --------------------------------------------------------
 
-def resolve_project(name: str, *, new_project: bool, limit: int) -> bool:
+def _says_no_such_project(proc, name: str) -> bool:
+    """True only for the CLI's authoritative "no project named THIS", on stderr.
+
+    Absence is the reading that mints a duplicate project under a new URL, so it is the
+    narrowest branch in this file, and two things narrow it:
+
+    * **stderr only.** That is where the CLI puts its error. Accepting the phrase from stdout
+      widens what can trigger absence for no gain.
+    * **It must name THIS project.** A bare substring test read a not-found about a DIFFERENT
+      project as absence for the one being asked about — and then `--new-project` would mint
+      a duplicate of a project that already existed.
+
+    Verified live against Vercel CLI 56.5.0: `Error: There is no project for "<name>"`.
+    """
+    needle = 'there is no project for "%s"' % name.lower()
+    return needle in (proc.stderr or "").lower()
+
+
+def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
     """True if the project already exists (and is being reused).
 
-    `vercel_projects()` calls `sys.exit()` on CLI failure, so SystemExit is caught here:
-    uncaught, the pipeline would die with the index builder's message instead of a
-    stage verdict.
+    **This asks about ONE project. It does not enumerate the account, and that is the point.**
+
+    It used to list every project in the team and test membership. Two failures came out of
+    that, one certain and one latent, and they pull in opposite directions:
+
+    * A brand-new account has NO projects, and the listing refused an empty result outright —
+      so a first publish died at stage 4 while setup reported the account ready (#9).
+    * Reading absence out of an empty LIST is unsound anyway. A truncated or erroneous CLI
+      response can carry the requested tenant, an empty `projects` array and a null cursor,
+      which is indistinguishable from a genuinely empty account. Stage 4 answers absence by
+      minting a duplicate project under a new URL — the #125 failure, which changes a
+      published document's URL.
+
+    Asking about the one project removes both. `vercel project inspect` gives an EXPLICIT
+    not-found, so absence is something the platform states rather than something inferred from
+    a listing whose completeness had to be proved. Probed live against Vercel CLI 56.5.0: exit
+    0 when the project exists, exit 1 with `Error: There is no project for "<name>"` when it
+    does not.
+
+    Anything else — a network error, a rate limit, a changed CLI — is a stage-4 error. It is
+    NEVER read as absence, because that is the reading that mints the duplicate.
     """
     try:
-        existing = {p["name"] for p in INDEX.vercel_projects(limit)}
-    except SystemExit as e:
-        raise StageError(4, f"could not list Vercel projects: {e}") from e
-
-    exists = name in existing
+        proc = _vercel(["project", "inspect", name], cwd=Path.cwd(), scope=scope)
+    except OSError as e:
+        # A missing or unrunnable binary RAISES rather than returning, so the promise that
+        # everything but an explicit not-found is a stage-4 error has to catch it here.
+        raise StageError(4, f"could not run the `vercel` CLI to check whether {name} exists "
+                            f"({e.__class__.__name__}: {e}). Install it, or check it is on "
+                            f"PATH.") from e
+    if proc.returncode == 0:
+        exists = True
+    elif _says_no_such_project(proc, name):
+        exists = False
+    else:
+        raise StageError(4, f"could not determine whether {name} exists (rc="
+                            f"{proc.returncode}). Refusing to guess: reading this as "
+                            f"'absent' would mint a duplicate project under a new URL.\n"
+                            f"{_log(proc)}")
     if exists and new_project:
         raise StageError(4, f"{name} already exists — drop --new-project and it is "
                             f"reused, which is what keeps its URL stable. Otherwise the "
@@ -543,7 +612,7 @@ def stage_assets(page: str, base: Path, workdir: Path) -> list[str]:
     return staged
 
 
-def deploy(name: str, page: str, workdir: Path) -> str:
+def deploy(name: str, page: str, workdir: Path, scope: str) -> str:
     """Deploy the LINTED page, bound to `name` (§2a).
 
     The bytes written here are the string the gate passed — not a re-read of `--out`.
@@ -556,13 +625,22 @@ def deploy(name: str, page: str, workdir: Path) -> str:
     """
     (workdir / "index.html").write_text(page, encoding="utf-8")
 
-    link = _vercel(["link", "--yes", "--project", name], cwd=workdir)
+    link = _vercel(["link", "--yes", "--project", name], cwd=workdir, scope=scope)
     if link.returncode != 0:
         raise StageError(5, f"`vercel link --project {name}` failed:\n{_log(link)}")
 
-    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir)
+    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir, scope=scope)
     log = _log(dep)
     if dep.returncode != 0:
+        # Listing a team and DEPLOYING to it are different permissions, and setup can only
+        # prove the first — the only way to prove a deploy is permitted is to deploy (#9).
+        # So an authorization refusal surfaces here, named, rather than looking like a
+        # configuration mistake the user already fixed.
+        if _looks_like_denied(log):
+            raise StageError(5, f"the Vercel team {scope!r} refused this deploy on "
+                                f"permissions. Setup cannot detect this in advance: it can "
+                                f"prove you may LIST the team, not that you may deploy to "
+                                f"it. Ask an owner of {scope!r} for deploy access.\n{log}")
         raise StageError(5, f"`vercel deploy --prod` failed (rc={dep.returncode}):\n{log}")
     if not deployed_hosts(log, name):
         raise StageError(5, f"the deploy log names no URL belonging to {name} — the "
@@ -662,7 +740,7 @@ def verify_live(url: str, expected: str, stage: int = 6, timeout: float = 20.0) 
 
 # --- stage 7: the docs index ---------------------------------------------------------
 
-def refresh_index(workdir: Path, workspace_file: Path) -> None:
+def refresh_index(workdir: Path, workspace_file: Path, scope: str) -> None:
     """Rebuild the index from `vercel project ls`, deploy it, and prove it went live.
 
     The generated page is a build artifact: it is written into a temp directory and
@@ -674,9 +752,13 @@ def refresh_index(workdir: Path, workspace_file: Path) -> None:
     the failure that made the index worth deriving at all — cannot report OK.
     """
     out = workdir / "index.html"
+    # Both resolved values are handed to the child EXPLICITLY (#9). Left to look them up
+    # again it would re-read the environment and the config file, so a single publish could
+    # render its page under one Vercel account and its index under another — with nothing in
+    # either output saying so.
     build = subprocess.run(
         [sys.executable, str(INDEX_SCRIPT), "--out", str(out),
-         "--workspace-file", str(workspace_file)],
+         "--workspace-file", str(workspace_file), "--vercel-scope", scope],
         capture_output=True, text=True, check=False)
     if build.returncode != 0:
         raise StageError(7, f"could not rebuild the docs index:\n{_log(build)}")
@@ -685,10 +767,10 @@ def refresh_index(workdir: Path, workspace_file: Path) -> None:
     except OSError as e:
         raise StageError(7, f"the index builder reported success but wrote no page: {e}") from e
 
-    link = _vercel(["link", "--yes", "--project", INDEX_PROJECT], cwd=workdir)
+    link = _vercel(["link", "--yes", "--project", INDEX_PROJECT], cwd=workdir, scope=scope)
     if link.returncode != 0:
         raise StageError(7, f"could not link {INDEX_PROJECT}:\n{_log(link)}")
-    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir)
+    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir, scope=scope)
     if dep.returncode != 0:
         raise StageError(7, f"could not deploy {INDEX_PROJECT}:\n{_log(dep)}")
     if not deployed_hosts(_log(dep), INDEX_PROJECT):
@@ -702,9 +784,17 @@ def refresh_index(workdir: Path, workspace_file: Path) -> None:
     # byte check. The original prose rule was "the page's computed count equals
     # `vercel project ls` minus one", and it is the only thing that catches that race.
     try:
-        live_count = len(INDEX.vercel_projects(100))
+        live_count = len(INDEX.vercel_projects(100, scope=scope))
     except SystemExit as e:
         raise StageError(7, f"could not re-list projects to check the index: {e}") from e
+    # An empty listing HERE cannot be an empty account: a deploy just succeeded, so at least
+    # that project exists. It used to pass vacuously (`shown < 0` is never true), which meant
+    # the one check that catches an interleaved publisher was silently disabled by exactly the
+    # untruthful-listing case that made `vercel_projects` stop refusing empties elsewhere.
+    if not live_count:
+        raise StageError(7, "the account lists no projects at all, moments after a deploy "
+                            "succeeded — so the listing cannot be believed, and the index "
+                            "cannot be checked against it. Nothing is lost; re-run.")
     shown = built.count('<li><a href="https://')
     if shown < live_count:
         raise StageError(7, f"the index went live with {shown} pages but the account now "
@@ -778,7 +868,16 @@ def build_parser() -> argparse.ArgumentParser:
                          "the same one the WF2 design-artifact step injects (#152). Omitted by "
                          "default; malformed input is a loud stage-1 failure, never a silently "
                          "dropped section.")
-    ap.add_argument("--workspace-file", default=str(DEFAULT_WORKSPACE))
+    ap.add_argument("--workspace-file", default=None,
+                    help="the workspace file --project is checked against. Resolved from "
+                         "your configuration when omitted; run setup if nothing is "
+                         "configured, because stage 2 refuses rather than guessing.")
+    ap.add_argument("--vercel-scope", default=None,
+                    help="the Vercel team to deploy to. Resolved from your configuration "
+                         "when omitted. There is no built-in default: an unpinned deploy "
+                         "lands in whichever account `vercel switch` last selected.")
+    ap.add_argument("--config", default=None,
+                    help="read configuration from this file instead of the default location")
     ap.add_argument("--limit", type=int, default=100,
                     help="`vercel project ls` page size (it paginates at 20 without one)")
     return ap
@@ -796,9 +895,18 @@ def main(argv=None) -> int:
     stage = 1   # so an UNEXPECTED failure is still attributed to the stage it happened in
 
     try:
+        # Resolved ONCE, before stage 1, and threaded through every stage that needs it —
+        # including the stage-7 CHILD PROCESS (#9). A helper that resolved for itself could
+        # answer for a different Vercel account than the page it is indexing.
+        config_path = CONFIG.config_file(cli_value=args.config)
+        workspace = CONFIG.workspace_file(cli_value=args.workspace_file,
+                                          config_path=config_path)
+
         # #14: the page wears its project's colour. Resolved through the shared
-        # module the index also calls, so the two cannot drift.
-        pack = VDL.pack_for(args.project, Path(args.workspace_file))
+        # module the index also calls, so the two cannot drift. An unconfigured workspace is
+        # a real state here and degrades to the seed-or-hash colour rather than refusing:
+        # rendering must keep working before anything is set up.
+        pack = VDL.pack_for(args.project, workspace)
         page = render(Path(args.md), out_path, title=args.title, subtitle=args.subtitle,
                       style=style, doc_id=args.doc_id, vdl=pack,
                       telemetry=load_telemetry(Path(args.telemetry) if args.telemetry else None),
@@ -807,7 +915,12 @@ def main(argv=None) -> int:
               f"{pack['origin']} palette {pack['accent']['light']})")
 
         stage = 2
-        name = derive_name(args.project, args.purpose, args.ref, Path(args.workspace_file))
+        # The first place a stranger is stopped, so it must say what to run. `require_*`
+        # raises `ConfigError`, which the handler below turns into a one-line stage failure
+        # rather than a traceback.
+        workspace = CONFIG.require_workspace_file(cli_value=args.workspace_file,
+                                                  config_path=config_path)
+        name = derive_name(args.project, args.purpose, args.ref, workspace)
         print(f"publish_doc: 2/7 name {name}")
 
         stage = 3
@@ -827,7 +940,12 @@ def main(argv=None) -> int:
             return 0
 
         stage = 4
-        reused = resolve_project(name, new_project=args.new_project, limit=args.limit)
+        # Deferred to here on purpose: rendering, naming and linting all work without a
+        # Vercel account, and `--dry-run` returns above. A team is required only once a
+        # network call is about to target one.
+        scope = CONFIG.require_vercel_scope(cli_value=args.vercel_scope,
+                                            config_path=config_path)
+        reused = resolve_project(name, new_project=args.new_project, scope=scope)
         print(f"publish_doc: 4/7 {'reusing' if reused else 'creating'} {name}")
 
         stage = 5
@@ -839,7 +957,7 @@ def main(argv=None) -> int:
             if assets:
                 print(f"publish_doc: 5/7 packaging {len(assets)} asset(s): "
                       f"{', '.join(assets)}")
-            log = deploy(name, page, Path(tmp))
+            log = deploy(name, page, Path(tmp), scope)
         print(f"publish_doc: 5/7 deployed\n{log.strip()}")
 
         stage = 6
@@ -849,9 +967,15 @@ def main(argv=None) -> int:
 
         stage = 7
         with tempfile.TemporaryDirectory(prefix="publish-index-") as tmp:
-            refresh_index(Path(tmp), Path(args.workspace_file))
+            refresh_index(Path(tmp), workspace, scope)
         print(f"publish_doc: 7/7 index refreshed and verified — "
               f"https://{INDEX_PROJECT}.vercel.app")
+    except CONFIG.ConfigError as e:
+        # A configuration refusal is a stage failure with a legible sentence, never a
+        # traceback (#9 AC5). The stage counter says WHERE it stopped, so the exit code
+        # keeps meaning what it always meant.
+        print(f"publish_doc: FAILED at stage {stage}: {e}", file=sys.stderr)
+        return EXIT_BASE + stage
     except StageError as e:
         print(f"publish_doc: FAILED at stage {e.stage}: {e.message}", file=sys.stderr)
         return EXIT_BASE + e.stage

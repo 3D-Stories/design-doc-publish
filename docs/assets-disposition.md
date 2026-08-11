@@ -47,10 +47,10 @@ Three things follow, and all three are the reader's business:
   `.gitignore:11-15`: committing it would recreate the shared mutable file whose lost-row race
   motivated deriving it in the first place. Rebuild it. Never edit or commit it.
 - **The builder reads a LIVE Vercel account.** Someone who installs this plugin does not have that
-  account, and today the team is hardcoded (`VERCEL_SCOPE`, at `scripts/publish_doc.py:129` and
-  `index/build_index.py:39`). So for anyone but the author the index is currently inert rather than
-  useful, and that is a known gap rather than a surprise —
-  [#9](https://github.com/3D-Stories/design-doc-publish/issues/9) owns making it configurable.
+  account. The team used to be hardcoded as `VERCEL_SCOPE`, which made the index inert for anyone
+  but the author. **[#9](https://github.com/3D-Stories/design-doc-publish/issues/9) closed that**:
+  the team is resolved from the user's own configuration, and `build_index.py` refuses rather than
+  falling back, because deploying to the wrong account is worse than not deploying.
 - **Its tests must not need that account.** They run off recorded fixtures, which is what makes the
   builder testable by a stranger at all.
 
@@ -67,18 +67,32 @@ listing from a live account. They have been sanitised:
   identifiers with no reason to travel.
 - **Four of six project names replaced** with neutral `example-…` names.
 
-**Two names deliberately remain, and pretending otherwise would be worse than saying so:**
+**One name deliberately remains, and pretending otherwise would be worse than saying so:**
 
 - **`docs-index`** is the index's own project name and a structural constant in the code
-  (`SELF_PROJECT`). It describes the tool rather than private work.
-- **`claude-skills-plan-786`** is coupled to how the tests derive a project name
-  (`<project>-<type>-<ref>`). Renaming it in isolation desynchronises the fixture from the test that
-  derives it, which was tried and produced 80 failures. Untangling that is real work and belongs
-  with [#9](https://github.com/3D-Stories/design-doc-publish/issues/9), which is already changing
-  how the project and team are resolved.
+  (`SELF_PROJECT`). It describes the tool rather than private work, and a stranger's own index
+  carries the same name in their own account.
 
-**The team name `3d-stories` also remains in the fixtures**, because `VERCEL_SCOPE` pins it in code
-and changing only the fixture breaks the pair. Same owner: #9.
+### What #9 closed, and how
+
+Two residuals were handed to [#9](https://github.com/3D-Stories/design-doc-publish/issues/9). Both
+are gone.
+
+- **The team name `3d-stories` is out of the fixtures.** It could not be removed on its own while
+  `VERCEL_SCOPE` pinned it in code — the tests compare the fixture's `contextName` against the
+  team the code asks for, so the pair had to move together. Once the team came from configuration,
+  the fixtures became `example-team` and the tests state the team they mean.
+- **`claude-skills-plan-786` is now `example-plan-786`.** It was never a loose string: the tests
+  DERIVE it as `<project>-<type>-<ref>`, so renaming the fixture alone desynchronised it from the
+  test that builds it, which is what produced 80 failures during #4. Renaming **both sides in one
+  change** — the fixture and the classifying workspace entry `claude-skills` → `example` — is what
+  made it safe, and the full suite stayed green across the sweep.
+
+**One place still carries the old name, deliberately.** `docs/measurements/run_records.jsonl` is
+append-only run telemetry: a record of runs that actually happened, under the names they actually
+used. Rewriting history to make a record tidier would make it a worse record. The packaging guard
+exempts that one file by name and hunts the string everywhere else, so the exemption is visible
+rather than assumed.
 
 ## What this does NOT resolve
 
