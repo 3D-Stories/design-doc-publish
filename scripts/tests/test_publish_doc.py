@@ -236,6 +236,12 @@ class FakeUrlopen:
         return FakeResponse(body, self.status, final=self.redirect_to or url)
 
 
+# #9: the Vercel team is configuration now, not a constant. Every test that publishes states
+# the team it publishes to, which is also what proves the value reaching `--scope` is the
+# CONFIGURED one rather than something baked in.
+SCOPE = "example-team"
+
+
 # --------------------------------------------------------------------------- harness
 
 @pytest.fixture
@@ -298,7 +304,7 @@ def run(monkeypatch, workspace, doc):
         monkeypatch.setattr(publish_doc, "VERIFY_DELAY", 0)   # the suite does not wait
         argv = ["--md", str(doc), "--project", "claude-skills", "--type", "design",
                 "--ref", "12", "--title", "A Real Doc",
-                "--workspace-file", str(workspace), *extra]
+                "--workspace-file", str(workspace), "--vercel-scope", SCOPE, *extra]
         return publish_doc.main(argv), fr, fu
     return go
 
@@ -458,7 +464,8 @@ class TestThePathsItRefuses:
         rc = publish_doc.main(["--md", str(link), "--out", str(tmp_path / "o.html"),
                                "--project", "claude-skills", "--type", "design",
                                "--ref", "12", "--title", "T",
-                               "--workspace-file", str(workspace)])
+                               "--workspace-file", str(workspace),
+                               "--vercel-scope", SCOPE])
         assert rc == code(1)
         assert not (tmp_path / "o.html").exists()
         assert fr.deploys() == []
@@ -609,7 +616,7 @@ class TestTheDeployIsBoundToTheRenderedFile:
         assert vercel_calls
         for cmd in vercel_calls:
             assert "--scope" in cmd, cmd
-            assert cmd[cmd.index("--scope") + 1] == publish_doc.VERCEL_SCOPE
+            assert cmd[cmd.index("--scope") + 1] == SCOPE
 
     def test_a_failed_deploy_is_stage_five(self, run):
         assert run("--new-project", fake_run=FakeRun(deploy_rc=1))[0] == code(5)
@@ -715,7 +722,8 @@ class TestVerificationIsCacheBustedAndContentChecked:
         rc = publish_doc.main(["--md", str(doc), "--project", "claude-skills",
                                "--type", "design", "--ref", "12",
                                "--title", "Design & Build <now>",
-                               "--workspace-file", str(workspace), "--new-project"])
+                               "--workspace-file", str(workspace),
+                               "--vercel-scope", SCOPE, "--new-project"])
         assert rc == 0
 
 

@@ -1,7 +1,7 @@
 <claude-code-hint v="1" type="plugin" value="vercel@claude-plugins-official" />
 Vercel CLI 56.5.0 (Node.js 22.22.1)
-Fetching projects in 3d-stories
-> Projects found under 3d-stories  [979ms]
+Fetching projects in example-team
+> Projects found under example-team  [979ms]
 
   Project Name                            Latest Production URL                                  Updated   Node Version   
   example-alpha-spike                   https://example-alpha-spike.vercel.app               3h        24.x           

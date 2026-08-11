@@ -506,11 +506,17 @@ class TestTheIndexAndThePagesCannotDrift:
         assert from_index == from_render
 
     def test_the_index_renders_without_being_handed_a_workspace(self, tmp_path):
-        """`render()` still advertises a four-argument form; that caller must get an
-        index, not an AttributeError from `None.read_text()`."""
+        """`render()` still advertises a four-argument form, and that caller must get an
+        index rather than an `AttributeError` from `None.read_text()`.
+
+        This used to compare against `index.DEFAULT_WORKSPACE`, a hardcoded path to one
+        machine. #9 retired it, and the comparison got MORE meaningful rather than less:
+        `None` is now the real state of a machine that has never run setup, so this asserts
+        the omitted argument and the explicit one give the same answer on the path a
+        stranger actually takes.
+        """
         index = _index_module()
-        assert index.group_colors("sysop") == index.group_colors(
-            "sysop", index.DEFAULT_WORKSPACE)
+        assert index.group_colors("sysop") == index.group_colors("sysop", None)
 
     def test_the_index_holds_no_colour_table_of_its_own(self):
         src = (SCRIPTS.parent / "index" / "build_index.py").read_text(encoding="utf-8")

@@ -740,8 +740,12 @@ def main(argv=None) -> int:
     ap.add_argument("--project",
                     help="rawgentic project whose VDL pack this page wears (#14). "
                          "Omitted, the page renders in the default palette.")
-    ap.add_argument("--workspace-file",
-                    default=str(Path.home() / "rawgentic" / ".rawgentic_workspace.json"))
+    # #9: no default. Rendering needs no workspace at all — this is the README's first
+    # command and the only thing that has ever worked for a stranger — so an absent one
+    # resolves the page's accent through the seed table and then the name hash, silently.
+    ap.add_argument("--workspace-file", default=None,
+                    help="workspace file used to resolve --project's accent colour. "
+                         "Optional: without it the page renders in a derived palette.")
     ap.add_argument("--style", choices=tuple(_TEMPLATES), default="plain",
                     help="template: plain (default), roadmap (h2 bubble cards + chips), "
                          "or report/design/dashboard/review/spec (#344 component styles)")
@@ -761,7 +765,8 @@ def main(argv=None) -> int:
             return 2
     pack = None
     if args.project:
-        pack = _resolve_pack(args.project, Path(args.workspace_file))
+        pack = _resolve_pack(args.project,
+                             Path(args.workspace_file) if args.workspace_file else None)
     html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
                                telemetry=tel, generated_at=args.generated_at,
                                style=args.style, doc_id=args.doc_id, vdl=pack)

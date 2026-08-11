@@ -1,4 +1,4 @@
-"""`build_index.vercel_projects()` — the strict JSON read of the Vercel project list (#125).
+"""`build_index.vercel_projects(scope=SCOPE)` — the strict JSON read of the Vercel project list (#125).
 
 Why this file exists at all: `vercel_projects` had **no direct unit coverage**. It was exercised
 only through `publish_doc.main()`, so the one function deciding whether stage 4 reuses a project
@@ -41,6 +41,11 @@ LS_JSON = (FIXTURES / "vercel_project_ls.json").read_text(encoding="utf-8")
 # arrive on stdout if a CLI upgrade drops `--format json`, so it is what the no-fallback and
 # not-JSON tests feed.
 LS_TABLE = (FIXTURES / "vercel_project_ls.txt").read_text(encoding="utf-8")
+
+# #9: the team is configuration now, not a constant, so every test states the one it means.
+# The recorded fixtures carry the same neutral value — code and fixture pin each other, and
+# #4 measured 80 failures from moving one of them alone.
+SCOPE = "example-team"
 
 EXPECTED = ["example-alpha-spike", "example-analysis-412",
             "claude-skills-plan-786", "example-design-templates",
@@ -96,7 +101,7 @@ def _payload(projects, **envelope):
     """A CLI-shaped response document carrying `projects`."""
     doc = {"projects": projects,
            "pagination": {"count": len(projects), "next": None, "prev": 1},
-           "contextName": "3d-stories", "elapsed": "12ms"}
+           "contextName": SCOPE, "elapsed": "12ms"}
     doc.update(envelope)
     return json.dumps(doc)
 
@@ -114,23 +119,23 @@ def _row(name, updated=1785613860253, **extra):
 class TestTheCapturedListingParsesCleanly:
     def test_the_names_are_exactly_the_real_ones_minus_the_index_itself(self, index, cli):
         cli(stdout=LS_JSON)
-        assert [p["name"] for p in index.vercel_projects()] == EXPECTED
+        assert [p["name"] for p in index.vercel_projects(scope=SCOPE)] == EXPECTED
 
     def test_no_name_carries_a_control_byte(self, index, cli):
         """The #125 symptom, stated as an invariant rather than a strip: a project name is a
         project name. `\\x1b[1mthewanderinginn-design-11\\x1b[22m` was never one."""
         cli(stdout=LS_JSON)
-        for p in index.vercel_projects():
+        for p in index.vercel_projects(scope=SCOPE):
             assert not any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in p["name"]), p
 
     def test_the_self_project_is_filtered(self, index, cli):
         cli(stdout=LS_JSON)
-        assert "docs-index" not in [p["name"] for p in index.vercel_projects()]
+        assert "docs-index" not in [p["name"] for p in index.vercel_projects(scope=SCOPE)]
         assert index.SELF_PROJECT == "docs-index"
 
     def test_updated_at_becomes_an_absolute_timezone_aware_instant(self, index, cli):
         cli(stdout=LS_JSON)
-        got = {p["name"]: p["deployed"] for p in index.vercel_projects()}
+        got = {p["name"]: p["deployed"] for p in index.vercel_projects(scope=SCOPE)}
         one = got["claude-skills-plan-786"]
         assert one.tzinfo is not None
         # 1785567949474 ms, read from the fixture's own row.
@@ -141,17 +146,17 @@ class TestTheCapturedListingParsesCleanly:
         """`_parse_age` derived `now - "3h"`, so the value moved on every build and had to be
         excluded from the change signature. An absolute `updatedAt` does not move."""
         cli(stdout=LS_JSON)
-        first = [p["deployed"] for p in index.vercel_projects()]
+        first = [p["deployed"] for p in index.vercel_projects(scope=SCOPE)]
         cli(stdout=LS_JSON)
-        assert [p["deployed"] for p in index.vercel_projects()] == first
+        assert [p["deployed"] for p in index.vercel_projects(scope=SCOPE)] == first
 
     def test_the_row_signature_is_stable_across_builds(self, index, cli, tmp_path):
         ws = tmp_path / "workspace.json"
         ws.write_text(json.dumps({"projects": [{"name": "claude-skills"}]}), encoding="utf-8")
         cli(stdout=LS_JSON)
-        a = index.signature(index.build_rows(index.vercel_projects(), ["claude-skills"], False))
+        a = index.signature(index.build_rows(index.vercel_projects(scope=SCOPE), ["claude-skills"], False))
         cli(stdout=LS_JSON)
-        b = index.signature(index.build_rows(index.vercel_projects(), ["claude-skills"], False))
+        b = index.signature(index.build_rows(index.vercel_projects(scope=SCOPE), ["claude-skills"], False))
         assert a == b
 
 
@@ -160,11 +165,11 @@ class TestTheCapturedListingParsesCleanly:
 class TestTheInvocation:
     def test_it_asks_for_json_pins_the_scope_and_disables_colour(self, index, cli):
         fake = cli(stdout=LS_JSON)
-        index.vercel_projects(100)
+        index.vercel_projects(100, scope=SCOPE)
         assert fake.cmd[:3] == ["vercel", "project", "ls"]
         assert "--format" in fake.cmd and fake.cmd[fake.cmd.index("--format") + 1] == "json"
         assert fake.cmd[fake.cmd.index("--limit") + 1] == "100"
-        assert fake.cmd[fake.cmd.index("--scope") + 1] == index.VERCEL_SCOPE
+        assert fake.cmd[fake.cmd.index("--scope") + 1] == SCOPE
         assert "--no-color" in fake.cmd
 
     def test_the_child_environment_is_scrubbed_of_forced_colour(self, index, cli, monkeypatch):
@@ -172,7 +177,7 @@ class TestTheInvocation:
         original defect reproducible, so it must not reach the child."""
         monkeypatch.setenv("FORCE_COLOR", "1")
         fake = cli(stdout=LS_JSON)
-        index.vercel_projects()
+        index.vercel_projects(scope=SCOPE)
         env = fake.kw["env"]
         assert "FORCE_COLOR" not in env
         assert env["NO_COLOR"] == "1"
@@ -186,7 +191,7 @@ class TestItFailsClosedRatherThanGuessing:
     def test_a_table_on_stdout_is_refused_and_the_diagnostic_names_an_upgrade(self, index, cli):
         cli(stdout=LS_TABLE)
         with pytest.raises(SystemExit) as e:
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
         msg = str(e.value)
         assert "json" in msg.lower()
         assert "upgrade" in msg.lower()
@@ -196,13 +201,13 @@ class TestItFailsClosedRatherThanGuessing:
         mask exactly the upgrade regression that should stop publication."""
         cli(stdout="", stderr=LS_TABLE)
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_an_ansi_wrapped_payload_is_refused(self, index, cli):
         """Colour around the whole document is not JSON at all."""
         cli(stdout="\x1b[1m" + LS_JSON + "\x1b[22m")
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_a_coloured_name_inside_valid_json_is_refused_not_accepted(self, index, cli):
         """The nastier shape, and the reason the name check is not merely a JSON parse: escape
@@ -211,22 +216,22 @@ class TestItFailsClosedRatherThanGuessing:
         JSON clothing."""
         cli(stdout=_payload([_row("\x1b[1mclaude-skills-plan-786\x1b[22m")]))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_a_bare_array_is_refused(self, index, cli):
         cli(stdout=json.dumps([_row("a-project")]))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_a_missing_projects_key_is_refused(self, index, cli):
         cli(stdout=json.dumps({"pagination": {"count": 0}, "contextName": "3d-stories"}))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_a_row_that_is_not_an_object_is_refused(self, index, cli):
         cli(stdout=_payload(["claude-skills-plan-786"]))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     @pytest.mark.parametrize("bad", [{}, {"name": ""}, {"name": None}, {"name": 7}])
     def test_a_row_without_a_usable_name_is_refused(self, index, cli, bad):
@@ -235,7 +240,7 @@ class TestItFailsClosedRatherThanGuessing:
         row.update(bad)
         cli(stdout=_payload([row]))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     @pytest.mark.parametrize("name", [
         "[1mclaude-skills-plan-786",      # C1 CSI: one codepoint, same effect as ESC-[
@@ -249,7 +254,7 @@ class TestItFailsClosedRatherThanGuessing:
         comparison is both shorter and correct."""
         cli(stdout=_payload([_row(name)]))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_a_listing_answered_for_another_tenant_is_refused(self, index, cli):
         """`--scope` only ASKS for an account. The payload says which one it answered for, and
@@ -257,15 +262,15 @@ class TestItFailsClosedRatherThanGuessing:
         would present every genuinely live project as absent."""
         cli(stdout=_payload([_row("claude-skills-plan-786")], contextName="someone-else"))
         with pytest.raises(SystemExit) as e:
-            index.vercel_projects()
-        assert "someone-else" in str(e.value) and index.VERCEL_SCOPE in str(e.value)
+            index.vercel_projects(scope=SCOPE)
+        assert "someone-else" in str(e.value) and SCOPE in str(e.value)
 
     def test_a_listing_with_no_tenant_named_is_refused(self, index, cli):
         doc = json.loads(_payload([_row("claude-skills-plan-786")]))
         doc.pop("contextName")
         cli(stdout=json.dumps(doc))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_a_further_page_is_followed_rather_than_refused(self, index, cli):
         """**This assertion was inverted by #171, deliberately — read why before changing it.**
@@ -287,7 +292,7 @@ class TestItFailsClosedRatherThanGuessing:
         first["pagination"]["next"] = 1785866993550
         got = None
         fake = cli(pages=[json.dumps(first), _payload([_row("second-page-project")])])
-        got = index.vercel_projects(100)
+        got = index.vercel_projects(100, scope=SCOPE)
         assert [p["name"] for p in got] == ["claude-skills-plan-786", "second-page-project"], \
             "both pages must appear; the second one used to be invisible"
         assert len(fake.cmds) == 2, "the cursor must be followed, not refused"
@@ -299,14 +304,14 @@ class TestItFailsClosedRatherThanGuessing:
         a = json.loads(_payload([_row("p1")])); a["pagination"]["next"] = 11
         b = json.loads(_payload([_row("p2")])); b["pagination"]["next"] = 22
         fake = cli(pages=[json.dumps(a), json.dumps(b), _payload([_row("p3")])])
-        assert [p["name"] for p in index.vercel_projects(100)] == ["p1", "p2", "p3"]
+        assert [p["name"] for p in index.vercel_projects(100, scope=SCOPE)] == ["p1", "p2", "p3"]
         assert len(fake.cmds) == 3
 
     def test_a_row_repeated_across_a_page_boundary_is_counted_once(self, index, cli):
         """A boundary that shifts while paging can repeat a row. That is not corruption, but
         counting it twice would put the same project in the index twice."""
         a = json.loads(_payload([_row("p1"), _row("dupe")])); a["pagination"]["next"] = 11
-        got = index.vercel_projects(100) if cli(
+        got = index.vercel_projects(100, scope=SCOPE) if cli(
             pages=[json.dumps(a), _payload([_row("dupe"), _row("p2")])]) else None
         assert [p["name"] for p in got] == ["p1", "dupe", "p2"]
 
@@ -317,7 +322,7 @@ class TestItFailsClosedRatherThanGuessing:
         stuck["pagination"]["next"] = 99
         cli(pages=[json.dumps(stuck)] * (index._MAX_PAGES + 2))
         with pytest.raises(SystemExit) as e:
-            index.vercel_projects(100)
+            index.vercel_projects(100, scope=SCOPE)
         assert "paginating" in str(e.value)
 
     def test_a_payload_with_no_pagination_cursor_is_refused(self, index, cli):
@@ -325,12 +330,12 @@ class TestItFailsClosedRatherThanGuessing:
         doc.pop("pagination")
         cli(stdout=json.dumps(doc))
         with pytest.raises(SystemExit):
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
 
     def test_zero_projects_is_refused_rather_than_rendering_an_empty_index(self, index, cli):
         cli(stdout=_payload([]))
         with pytest.raises(SystemExit) as e:
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
         assert "empty index" in str(e.value)
 
     def test_a_full_page_with_no_cursor_is_complete_not_truncated(self, index, cli):
@@ -347,7 +352,7 @@ class TestItFailsClosedRatherThanGuessing:
         six rows and a null cursor, so six rows at `--limit 6` is a COMPLETE account.
         """
         cli(stdout=LS_JSON)
-        got = index.vercel_projects(6)
+        got = index.vercel_projects(6, scope=SCOPE)
         assert got, "a full final page is a complete listing, not a truncated one"
         assert "docs-index" not in [p["name"] for p in got]
 
@@ -357,13 +362,13 @@ class TestItFailsClosedRatherThanGuessing:
         short = json.loads(_payload([_row("p1")]))
         short["pagination"]["next"] = 77
         fake = cli(pages=[json.dumps(short), _payload([_row("p2")])])
-        assert [p["name"] for p in index.vercel_projects(100)] == ["p1", "p2"]
+        assert [p["name"] for p in index.vercel_projects(100, scope=SCOPE)] == ["p1", "p2"]
         assert len(fake.cmds) == 2
 
     def test_a_cli_failure_is_a_loud_exit_carrying_both_streams(self, index, cli):
         cli(stdout="partial", stderr="Error: not authorised", rc=1)
         with pytest.raises(SystemExit) as e:
-            index.vercel_projects()
+            index.vercel_projects(scope=SCOPE)
         assert "not authorised" in str(e.value)
 
 
@@ -378,7 +383,7 @@ class TestOnlyTheAgeDegrades:
     @pytest.mark.parametrize("bad", [None, "3h", "", -1, 0, True, {}, [], float("nan")])
     def test_an_unusable_updated_at_keeps_the_row_and_drops_the_age(self, index, cli, bad):
         cli(stdout=_payload([_row("claude-skills-plan-786", updated=bad)]))
-        rows = index.vercel_projects()
+        rows = index.vercel_projects(scope=SCOPE)
         assert [p["name"] for p in rows] == ["claude-skills-plan-786"]
         assert rows[0]["deployed"] is None
 
@@ -386,7 +391,7 @@ class TestOnlyTheAgeDegrades:
         row = _row("claude-skills-plan-786")
         row.pop("updatedAt")
         cli(stdout=_payload([row]))
-        rows = index.vercel_projects()
+        rows = index.vercel_projects(scope=SCOPE)
         assert rows[0]["deployed"] is None
 
     def test_a_timestamp_in_the_wrong_unit_degrades_instead_of_reading_as_1970(self, index, cli):
@@ -394,7 +399,7 @@ class TestOnlyTheAgeDegrades:
         and hashed into the change signature as though it were real. A magnitude window turns a
         unit change into a missing age rather than a confident wrong date."""
         cli(stdout=_payload([_row("claude-skills-plan-786", updated=1785613860)]))
-        rows = index.vercel_projects()
+        rows = index.vercel_projects(scope=SCOPE)
         assert [p["name"] for p in rows] == ["claude-skills-plan-786"]
         assert rows[0]["deployed"] is None
 
@@ -402,7 +407,7 @@ class TestOnlyTheAgeDegrades:
         row = _row("claude-skills-plan-786")
         row.pop("updatedAt")
         cli(stdout=_payload([row]))
-        built = index.build_rows(index.vercel_projects(), ["claude-skills"], False)
+        built = index.build_rows(index.vercel_projects(scope=SCOPE), ["claude-skills"], False)
         assert built[0]["updated_src"] == "none"
 
 
@@ -423,13 +428,13 @@ class TestTheBootstrapAccountStillPublishes:
     def test_a_listing_of_only_the_index_itself_returns_empty_rather_than_refusing(
             self, index, cli):
         cli(stdout=_payload([_row("docs-index")]))
-        assert index.vercel_projects() == []
+        assert index.vercel_projects(scope=SCOPE) == []
 
     def test_and_so_a_first_ever_publish_sees_the_project_as_absent(self, index, cli):
         """The membership test publish stage 4 performs, on a bootstrap account: absent, which
         is what lets `--new-project` proceed."""
         cli(stdout=_payload([_row("docs-index")]))
-        existing = {p["name"] for p in index.vercel_projects()}
+        existing = {p["name"] for p in index.vercel_projects(scope=SCOPE)}
         assert "claude-skills-design-12" not in existing
 
 
