@@ -14,7 +14,7 @@ One command does all of that, and its exit code is the verdict:
   --project <rawgentic-project> --type design --ref <issue>
 ```
 
-Absolute path — a skill runs from whatever project is bound. `--dry-run` lints without publishing.
+Absolute path — a skill runs from whatever project is bound. `--dry-run` lints without publishing. **Never published from this machine? `${CLAUDE_PLUGIN_ROOT}/scripts/setup.py --check` first** — silent and 0 means ready, otherwise it exits non-zero and prints the one thing to fix (`--json` for the same state as an object, `--set-scope`/`--init-workspace`/`--add-project` to record choices). It never runs `vercel login` and stores no credential; rendering needs no setup at all.
 `--new-project` only after checking the doc's own repo/issue links for a URL it already has: the tool
 catches a name collision, not the same doc under an older name. `--ref` is the issue number or a
 short slug; `--project` is a rawgentic project, or `workspace`. `--style` overrides the template a `--type` implies. Two styles have no `--type` at all and are reachable only this way: `--style dashboard` for the dashboard template, and `--style plain` for an unstyled document with no template CSS. `plain` is also the one style where a code fence stays a bare listing: everywhere else it renders as a box with a **Copy** button, labelled by the fence's info string — so name the language on any fence a reader is meant to run.

@@ -58,35 +58,56 @@ python3 scripts/render-doc --md hello.md --out hello.html --title "Hello"
 
 Open `hello.html`. That is the whole loop.
 
-## Honest limits, before you install anything
+## Publishing: one setup run first
 
-**Rendering works for anyone. Publishing does not work for anyone but the author yet.**
+Rendering needs nothing. **Publishing needs a Vercel account, and one setup run to record which
+team to deploy to.** Nothing about your machine is assumed any more.
 
-`scripts/publish_doc.py` renders, lints, deploys to Vercel and verifies the live page, in seven
-stages. **Stage 1 works for you. Stage 2 refuses**, and that is measured, not estimated:
-
-```
-publish_doc: 1/7 rendered hello.html (design template)
-publish_doc: FAILED at stage 2: --project '<name>' is not a rawgentic project in
-~/rawgentic/.rawgentic_workspace.json, and is not the literal 'workspace' bucket.
+```bash
+python3 "$DDP/scripts/setup.py"
 ```
 
-Two things are still hardcoded to one machine: the workspace file that stage 2 validates
-`--project` against, and the Vercel team the deploy stages target. So use `scripts/render-doc`
-above, which has neither dependency, rather than `publish_doc.py`.
+It tells you what is missing rather than failing at it: whether the `vercel` CLI is installed,
+whether you are signed in, which team you are publishing to, and where your configuration lives.
+Run it as often as you like — it only reads, unless you ask it to record something.
 
-[Issue #9](https://github.com/3D-Stories/design-doc-publish/issues/9) is the first-run setup flow
-that fixes both. **No release is tagged until it lands**, because tagging one would advertise
-something that is not true yet.
+Three commands record your choices:
+
+```bash
+python3 "$DDP/scripts/setup.py" --set-scope <your-vercel-team>   # checks you can use it first
+python3 "$DDP/scripts/setup.py" --init-workspace                 # creates a project list
+python3 "$DDP/scripts/setup.py" --add-project my-project         # a name you can publish under
+```
+
+`vercel teams ls` lists the teams you belong to. If you are not signed in, setup prints the
+`vercel login` command for you to run — it never runs it for you, because that is interactive and
+changes your machine's sign-in for everything.
+
+Your configuration is written to `~/.config/design-doc-publish/config.json`, **outside** the plugin,
+so upgrading the plugin does not lose it. It holds a team name and a file path. **It never holds a
+credential** — signing in stays entirely with the `vercel` CLI.
+
+`--check` is the same information for a script: silent and exit 0 when you are ready, one line and a
+non-zero exit otherwise. `--json` gives you the whole state as an object.
+
+Then publish:
+
+```bash
+python3 "$DDP/scripts/publish_doc.py" --md hello.md --title "Hello" \
+  --project my-project --type design --ref 1
+```
+
+Seven stages: render, name, lint, reuse-or-create, deploy, verify live, refresh the index. If
+something is not configured yet, it stops before touching your account and tells you what to run.
 
 ## Prerequisites
 
 | What | Why | Verified |
 | --- | --- | --- |
-| Python 3.12 | the renderer and its tests | 3.12.3, which produced the test count below |
+| Python 3.12 | the renderer and its tests | 3.12.3, which produced the test count below. `setup.py` checks this first and says so plainly if yours is older |
 | No third-party Python packages | the renderer is stdlib only, on purpose | — |
 | `vercel` CLI | only for deploying, not for rendering | needed from stage 4 |
-| A Vercel account | only for deploying | see the limits above |
+| A Vercel account | only for deploying | `setup.py` checks you can reach your team before recording it |
 
 ## Choosing a `--type`
 
