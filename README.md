@@ -1,10 +1,34 @@
-# design-doc-publish
+<h1 align="center">design-doc-publish</h1>
 
-Turns a markdown design document into a single self-contained HTML page that looks like it was
-designed, not dumped. One file out. No build step, no CSS framework, no JavaScript bundle.
+<p align="center">
+  <strong>Your design docs deserve better than a markdown preview.</strong>
+</p>
 
-It is a Claude Code plugin, so the usual way to use it is to let Claude drive it. You can also run
-it directly, and everything below is a command you can paste into a terminal.
+<p align="center">
+A Claude Code plugin that turns a markdown design document into a single self-contained HTML page
+that looks like it was <em>designed</em>, not dumped. One file out. No build step, no CSS framework,
+no JavaScript bundle, and nothing fetched at runtime.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/licence-MIT-blue?style=flat" alt="MIT licence">
+  <img src="https://img.shields.io/badge/tests-2431_passed-2da44e?style=flat" alt="2431 tests passing">
+  <img src="https://img.shields.io/badge/python-3.12-blue?style=flat" alt="Python 3.12">
+  <img src="https://img.shields.io/badge/dependencies-stdlib_only-2da44e?style=flat" alt="Standard library only">
+  <img src="https://img.shields.io/badge/document_types-11-blue?style=flat" alt="11 document types">
+</p>
+
+<p align="center">
+  <a href="#what-the-output-looks-like">Output</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#publishing-one-setup-run-first">Publishing</a> ·
+  <a href="#choosing-a---type">Document types</a> ·
+  <a href="#what-you-can-rely-on-about-the-pages">Guarantees</a> ·
+  <a href="#prerequisites">Prerequisites</a> ·
+  <a href="#removing-it">Uninstall</a>
+</p>
+
+---
 
 ## What the output looks like
 
@@ -19,25 +43,56 @@ went in — no styling, no HTML — and
 [`docs/examples/example-roadmap.html`](docs/examples/example-roadmap.html) is the page that came out.
 Open the HTML in a browser and it is exactly what you see above.
 
-## Install it
+## Features
 
-Two commands. The first one is easy to miss, and without it the second cannot find anything:
+- **One self-contained file** — styles and assets inlined. It works from a local disk, an email
+  attachment, or a static host with nothing beside it.
+- **Zero runtime fetches** — no web fonts, no CDN scripts, no analytics, no remote images.
+- **No JavaScript at all** — not one `<script>` block, inline handler, or `javascript:` URL. A
+  script-forbidding Content-Security-Policy costs the page nothing.
+- **11 document types** — design, plan, UAT, audit, report, runbook, analysis, spec, tokens, map,
+  deck. Each picks a template; `--style` overrides it.
+- **Standard library only** — no third-party Python packages, on purpose.
+- **Rendering needs no setup** — no account, no config, no network. Setup is only for publishing.
+- **Publishes to Vercel in one command** — render, lint, deploy and verify, with the exit code as
+  the verdict.
+
+## Quick start
+
+### 1. Add the marketplace
+
+Inside Claude Code:
+
+```
+/plugin marketplace add 3D-Stories/design-doc-publish
+```
+
+### 2. Install the plugin
+
+```
+/plugin install design-doc-publish
+```
+
+Then start a **new** session. A session already running holds the paths it resolved at startup, so
+it will not see a plugin installed after it began.
+
+<details>
+<summary><strong>Prefer the terminal?</strong></summary>
+
+Both steps work outside a session with the Claude Code CLI:
 
 ```bash
 claude plugin marketplace add 3D-Stories/design-doc-publish
 claude plugin install design-doc-publish@design-doc-publish
 ```
 
-Then start a **new** session. A session that is already running holds paths it resolved at startup,
-so it will not see a plugin installed after it began.
+Start a new session afterwards either way.
 
-## Your first page
+</details>
+
+### 3. Render your first page
 
 This works with nothing configured — no account, no workspace file, no network.
-
-**If you installed the plugin**, the scripts live inside the install, so point at them there. Note
-that the path is written out in full: `${CLAUDE_PLUGIN_ROOT}` is expanded by Claude when it loads a
-skill, and your shell does **not** expand it, so it is no use in a command you paste.
 
 ```bash
 DDP=$(ls -d ~/.claude/plugins/cache/design-doc-publish/design-doc-publish/*/ | sort -V | tail -1)
@@ -45,64 +100,87 @@ printf '# Hello\n\nA first page.\n\n## A section\n\nSome prose.\n' > hello.md
 python3 "$DDP/scripts/render-doc" --md hello.md --out hello.html --title "Hello"
 ```
 
-The first line finds whichever version you installed, rather than naming one. A literal version
-would break on the next release, and worse, could silently pick up a stale copy that uninstalling
-left behind.
+Open `hello.html`. That is the whole loop.
 
-**If you cloned the repo instead**, run it from the checkout:
+<details>
+<summary><strong>Why the first line, instead of naming a version?</strong></summary>
+
+It finds whichever version you installed. A literal version would break on the next release, and
+worse, could silently pick up a stale copy that uninstalling left behind.
+
+`${CLAUDE_PLUGIN_ROOT}` is no help here: Claude expands it when it loads a skill, but your shell
+does not, so it is useless in a command you paste.
+
+</details>
+
+<details>
+<summary><strong>Cloned the repo instead?</strong></summary>
+
+Run it from the checkout:
 
 ```bash
 printf '# Hello\n\nA first page.\n\n## A section\n\nSome prose.\n' > hello.md
 python3 scripts/render-doc --md hello.md --out hello.html --title "Hello"
 ```
 
-Open `hello.html`. That is the whole loop.
+</details>
 
 ## Publishing: one setup run first
 
 Rendering needs nothing. **Publishing needs a Vercel account, and one setup run to record which
-team to deploy to.** Nothing about your machine is assumed any more.
+team to deploy to.** Nothing about your machine is assumed.
 
-**Inside Claude Code, just run `/design-doc-publish:setup`.** The skill walks the whole thing and
-knows the plugin's own install path, so there is nothing to paste. From a plain shell, call the
-script directly:
+Inside Claude Code, run:
 
-```bash
-python3 "$DDP/scripts/setup.py"
+```
+/design-doc-publish:setup
 ```
 
-It tells you what is missing rather than failing at it: whether the `vercel` CLI is installed,
-whether you are signed in, which team you are publishing to, and where your configuration lives.
-Run it as often as you like — it only reads, unless you ask it to record something.
+It reports what is missing rather than failing at it: whether the `vercel` CLI is installed, whether
+you are signed in, which team you publish to, and where your configuration lives. **It installs
+nothing and signs you into nothing** — where something must be installed, it shows you the command
+and waits for you to decide.
 
-Three commands record your choices:
+<details>
+<summary><strong>Running setup from a shell instead</strong></summary>
 
 ```bash
-python3 "$DDP/scripts/setup.py" --set-scope <your-vercel-team>   # checks you can use it first
-python3 "$DDP/scripts/setup.py" --init-workspace                 # creates a project list
-python3 "$DDP/scripts/setup.py" --add-project my-project         # a name you can publish under
+python3 "$DDP/scripts/setup.py"                              # the full report; only reads
+python3 "$DDP/scripts/setup.py" --set-scope <your-team>      # checks you can use it first
+python3 "$DDP/scripts/setup.py" --init-workspace             # creates a project list
+python3 "$DDP/scripts/setup.py" --add-project my-project     # a name you can publish under
 ```
 
 `vercel teams ls` lists the teams you belong to. If you are not signed in, setup prints the
 `vercel login` command for you to run — it never runs it for you, because that is interactive and
 changes your machine's sign-in for everything.
 
-Your configuration is written to `~/.config/design-doc-publish/config.json`, **outside** the plugin,
-so upgrading the plugin does not lose it. It holds a team name and a file path. **It never holds a
-credential** — signing in stays entirely with the `vercel` CLI.
+</details>
 
-`--check` is the same information for a script: silent and exit 0 when you are ready, one line and a
-non-zero exit otherwise. `--json` gives you the whole state as an object.
+### Exactly what setup writes
 
-Then publish:
+**Two files, both under your home directory, and nothing else on your machine is touched.**
+
+| Path | Holds |
+| --- | --- |
+| `~/.config/design-doc-publish/config.json` | which Vercel team to use, and which workspace file |
+| `~/.config/design-doc-publish/workspace.json` | the project names you may publish under |
+
+They live **outside** the plugin, so upgrading it does not lose them. **Neither ever holds a
+credential** — signing in stays entirely with the `vercel` CLI. `--check`, `--json` and the bare
+report only read.
+
+**To undo everything, delete those two files.** That returns the machine to never-configured.
+
+### Then publish
 
 ```bash
-python3 "$DDP/scripts/publish_doc.py" --md hello.md --title "Hello" \
-  --project my-project --type design --ref 1
+python3 "$DDP/scripts/publish_doc.py" --md docs/planning/my-doc.md \
+  --title "My design doc" --project my-project --type design --ref 42
 ```
 
-Seven stages: render, name, lint, reuse-or-create, deploy, verify live, refresh the index. If
-something is not configured yet, it stops before touching your account and tells you what to run.
+Render, lint, deploy and verify, in one command. `--dry-run` lints without publishing. The exit
+code is the verdict.
 
 ## Prerequisites
 
@@ -171,9 +249,9 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2241 passed, 7 skipped**, exit 0.
+Expected: **2431 passed, 7 skipped**, exit 0.
 
-Three of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
+Several of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
 `python3 -m pytest` — on the machine this package came from, the interpreter cannot import pytest
 and only the standalone executable works.
 
@@ -187,6 +265,9 @@ claude plugin marketplace remove design-doc-publish
 Uninstalling deregisters the plugin but **leaves its files on disk**, in a version directory marked
 `.orphaned_at` under `~/.claude/plugins/cache/design-doc-publish/`. Delete that directory yourself
 if you want the space back.
+
+Your configuration is separate and survives on purpose. Delete
+`~/.config/design-doc-publish/` to remove that too.
 
 ## Licence
 
