@@ -116,13 +116,20 @@ class TestTheIndexChildIsHandedTheResolvedValues:
             if str(cmd[1]).endswith("build_index.py"):
                 out = Path(cmd[cmd.index("--out") + 1])
                 out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text("<html></html>", encoding="utf-8")
+                # One row, matching the one-project listing stubbed below: stage 7 compares
+                # the rendered count against the live one to catch an interleaved publisher.
+                out.write_text(
+                    '<html><li><a href="https://example-plan-1.vercel.app">p</a></li></html>',
+                    encoding="utf-8")
             return subprocess.CompletedProcess(cmd, 0, "", "")
 
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(publish_doc, "deployed_hosts", lambda log, name: ["x.vercel.app"])
         monkeypatch.setattr(publish_doc, "verify_live", lambda *a, **kw: None)
-        monkeypatch.setattr(publish_doc.INDEX, "vercel_projects", lambda *a, **kw: [])
+        # A believable listing: stage 7 now refuses an empty one, because moments after a
+        # successful deploy an account cannot truthfully hold nothing.
+        monkeypatch.setattr(publish_doc.INDEX, "vercel_projects",
+                            lambda *a, **kw: [{"name": "example-plan-1"}])
 
         publish_doc.refresh_index(tmp_path, tmp_path / "ws.json", SCOPE)
 
@@ -307,3 +314,90 @@ class TestStageFourAsksAboutTHISPROJECT:
         publish_doc.resolve_project("x-design-1", new_project=True, scope=SCOPE)
         assert not any("ls" in cmd for cmd in seen), (
             f"stage 4 must not enumerate the account: {seen}")
+
+
+class TestAbsenceMustNameTHISProject:
+    """Third-pass review. The absence branch used a bare substring test over stdout AND
+    stderr, so any failure whose text happened to contain the phrase counted as absence —
+    including a message about a DIFFERENT project. Absence is the reading that mints a
+    duplicate under a new URL, so it has to be the narrowest branch in the function.
+    """
+
+    def _cli(self, monkeypatch, rc, out="", err=""):
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda cmd, **kw: subprocess.CompletedProcess(cmd, rc, out, err))
+
+    def test_a_not_found_about_ANOTHER_project_is_not_absence(self, monkeypatch):
+        self._cli(monkeypatch, 1, err='Error: There is no project for "something-else"')
+        with pytest.raises(publish_doc.StageError) as excinfo:
+            publish_doc.resolve_project("payments-api-design-1", new_project=True, scope=SCOPE)
+        assert excinfo.value.stage == 4
+
+    def test_the_phrase_appearing_in_STDOUT_is_not_absence(self, monkeypatch):
+        """The authoritative message is the CLI's error, on stderr. Accepting it from stdout
+        widens the surface that can trigger the branch for no gain."""
+        self._cli(monkeypatch, 1,
+                  out='There is no project for "payments-api-design-1"', err="")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.resolve_project("payments-api-design-1", new_project=True, scope=SCOPE)
+
+    def test_a_merely_similar_message_is_not_absence(self, monkeypatch):
+        self._cli(monkeypatch, 1, err="Error: no project format recognised")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.resolve_project("payments-api-design-1", new_project=True, scope=SCOPE)
+
+    def test_the_real_message_for_THIS_project_still_reads_as_absence(self, monkeypatch):
+        self._cli(monkeypatch, 1,
+                  err='Error: There is no project for "payments-api-design-1"\n')
+        assert publish_doc.resolve_project("payments-api-design-1", new_project=True,
+                                           scope=SCOPE) is False
+
+    def test_a_missing_cli_is_a_stage_four_error_not_a_traceback(self, monkeypatch):
+        """`_vercel` shells out; if the binary is gone that raises rather than returning."""
+        def boom(cmd, **kw):
+            raise FileNotFoundError(2, "No such file or directory", "vercel")
+        monkeypatch.setattr(subprocess, "run", boom)
+        with pytest.raises(publish_doc.StageError) as excinfo:
+            publish_doc.resolve_project("payments-api-design-1", new_project=True, scope=SCOPE)
+        assert excinfo.value.stage == 4
+        assert "vercel" in excinfo.value.message.lower()
+
+
+class TestStageSevenDoesNotBelieveAnEmptyListing:
+    """Re-review, Medium. Stage 7 compares the rendered row count against a live listing to
+    catch a publisher that interleaved with this one. With a live count of zero the comparison
+    `shown < 0` is never true, so the check passed VACUOUSLY — disabled by exactly the
+    untruthful-empty-listing case that the stage-4 rewrite stopped trusting elsewhere.
+
+    An empty listing here cannot mean an empty account: a deploy has just succeeded, so at
+    minimum that project exists.
+    """
+
+    def test_an_empty_live_listing_after_a_deploy_is_refused(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _index_written(cmd, tmp_path))
+        monkeypatch.setattr(publish_doc, "deployed_hosts", lambda log, name: ["x.vercel.app"])
+        monkeypatch.setattr(publish_doc, "verify_live", lambda *a, **kw: None)
+        monkeypatch.setattr(publish_doc.INDEX, "vercel_projects", lambda *a, **kw: [])
+        with pytest.raises(publish_doc.StageError) as excinfo:
+            publish_doc.refresh_index(tmp_path, tmp_path / "ws.json", SCOPE)
+        assert excinfo.value.stage == 7
+
+    def test_a_believable_listing_still_passes(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _index_written(cmd, tmp_path))
+        monkeypatch.setattr(publish_doc, "deployed_hosts", lambda log, name: ["x.vercel.app"])
+        monkeypatch.setattr(publish_doc, "verify_live", lambda *a, **kw: None)
+        monkeypatch.setattr(publish_doc.INDEX, "vercel_projects",
+                            lambda *a, **kw: [{"name": "one"}])
+        publish_doc.refresh_index(tmp_path, tmp_path / "ws.json", SCOPE)
+
+
+def _index_written(cmd, tmp_path):
+    """The index child, faked: it writes a one-row page so stage 7 has something to compare."""
+    cmd = list(cmd)
+    if str(cmd[1]).endswith("build_index.py"):
+        out = Path(cmd[cmd.index("--out") + 1])
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text('<html><li><a href="https://one.vercel.app">one</a></li></html>',
+                       encoding="utf-8")
+    return subprocess.CompletedProcess(cmd, 0, "", "")

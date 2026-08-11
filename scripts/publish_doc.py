@@ -415,10 +415,22 @@ def _log(proc: subprocess.CompletedProcess) -> str:
 
 # --- stage 4: reuse or create --------------------------------------------------------
 
-#: The CLI's own wording for an authoritative "no such project". Matching it is what turns a
-#: failure into ABSENCE, so it is deliberately narrow: anything this does not recognise stays
-#: an error, never an answer.
-_NO_SUCH_PROJECT = "there is no project for"
+def _says_no_such_project(proc, name: str) -> bool:
+    """True only for the CLI's authoritative "no project named THIS", on stderr.
+
+    Absence is the reading that mints a duplicate project under a new URL, so it is the
+    narrowest branch in this file, and two things narrow it:
+
+    * **stderr only.** That is where the CLI puts its error. Accepting the phrase from stdout
+      widens what can trigger absence for no gain.
+    * **It must name THIS project.** A bare substring test read a not-found about a DIFFERENT
+      project as absence for the one being asked about — and then `--new-project` would mint
+      a duplicate of a project that already existed.
+
+    Verified live against Vercel CLI 56.5.0: `Error: There is no project for "<name>"`.
+    """
+    needle = 'there is no project for "%s"' % name.lower()
+    return needle in (proc.stderr or "").lower()
 
 
 def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
@@ -446,10 +458,17 @@ def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
     Anything else — a network error, a rate limit, a changed CLI — is a stage-4 error. It is
     NEVER read as absence, because that is the reading that mints the duplicate.
     """
-    proc = _vercel(["project", "inspect", name], cwd=Path.cwd(), scope=scope)
+    try:
+        proc = _vercel(["project", "inspect", name], cwd=Path.cwd(), scope=scope)
+    except OSError as e:
+        # A missing or unrunnable binary RAISES rather than returning, so the promise that
+        # everything but an explicit not-found is a stage-4 error has to catch it here.
+        raise StageError(4, f"could not run the `vercel` CLI to check whether {name} exists "
+                            f"({e.__class__.__name__}: {e}). Install it, or check it is on "
+                            f"PATH.") from e
     if proc.returncode == 0:
         exists = True
-    elif _NO_SUCH_PROJECT in _log(proc).lower():
+    elif _says_no_such_project(proc, name):
         exists = False
     else:
         raise StageError(4, f"could not determine whether {name} exists (rc="
@@ -768,6 +787,14 @@ def refresh_index(workdir: Path, workspace_file: Path, scope: str) -> None:
         live_count = len(INDEX.vercel_projects(100, scope=scope))
     except SystemExit as e:
         raise StageError(7, f"could not re-list projects to check the index: {e}") from e
+    # An empty listing HERE cannot be an empty account: a deploy just succeeded, so at least
+    # that project exists. It used to pass vacuously (`shown < 0` is never true), which meant
+    # the one check that catches an interleaved publisher was silently disabled by exactly the
+    # untruthful-listing case that made `vercel_projects` stop refusing empties elsewhere.
+    if not live_count:
+        raise StageError(7, "the account lists no projects at all, moments after a deploy "
+                            "succeeded — so the listing cannot be believed, and the index "
+                            "cannot be checked against it. Nothing is lost; re-run.")
     shown = built.count('<li><a href="https://')
     if shown < live_count:
         raise StageError(7, f"the index went live with {shown} pages but the account now "
