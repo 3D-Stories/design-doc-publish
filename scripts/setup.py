@@ -174,6 +174,15 @@ def probe_scope(scope):
         return "failed", "`project ls --format json` did not return JSON"
     if not isinstance(payload, dict) or "contextName" not in payload:
         return "failed", "the listing named no tenant, so access cannot be judged"
+    # The publisher's own parser requires these too, so accepting a thinner payload here
+    # would report ready and then fail at stage 4 on the same CLI surface. An EMPTY projects
+    # list stays valid: an account with nothing in it yet is the bootstrap case.
+    if not isinstance(payload.get("projects"), list):
+        return "failed", "the listing carried no `projects` array"
+    pagination = payload.get("pagination")
+    if not isinstance(pagination, dict) or "next" not in pagination:
+        return "failed", ("the listing carried no `pagination.next`, so it cannot be "
+                          "judged complete")
     if payload["contextName"] != scope:
         return "denied", "the listing answered for %r" % payload["contextName"]
     return "ok", None
@@ -191,9 +200,12 @@ def _read_workspace(path):
         data = json.loads(raw)
     except ValueError:
         return "workspace_malformed", None
-    if not isinstance(data, dict) or not isinstance(data.get("projects", []), list):
+    # `projects` must be PRESENT. Treating `{}` as an empty list reported can_proceed while
+    # the publisher refused every project name — the two must not disagree.
+    if (not isinstance(data, dict) or "projects" not in data
+            or not isinstance(data["projects"], list)):
         return "workspace_malformed", None
-    return None, len(data.get("projects", []))
+    return None, len(data["projects"])
 
 
 def status(config_path=None, **_ignored):
@@ -267,7 +279,9 @@ def _finish(state, name, detail):
 # ------------------------------------------------------------------ recording your choices
 
 def _store(config_path, **updates):
-    data = CONFIG.load(config_path)
+    # The STRICT loader: a setter must never merge into a config it could not read and then
+    # replace the file, because that destroys the only copy of whatever was in it.
+    data = CONFIG.load_for_update(config_path)
     data["version"] = CONFIG.CONFIG_VERSION
     data.update(updates)
     CONFIG.write_config(data, config_path)
@@ -288,7 +302,16 @@ def cmd_init_workspace(config_path, raw):
     except CONFIG.ConfigError as e:
         sys.stderr.write("could not create %s: %s\n" % (target, e))
         return 2
-    _store(config_path, workspace_file=str(target), owned_workspace_file=str(target))
+    try:
+        _store(config_path, workspace_file=str(target), owned_workspace_file=str(target))
+    except CONFIG.ConfigError:
+        # Roll back the file we just made. A created-but-unrecorded workspace is one the
+        # user did not ask for and this tool will not use, so leaving it is litter.
+        try:
+            target.unlink()
+        except OSError:
+            pass
+        raise
     print("Created %s and recorded it. Add a project with --add-project <name>." % target)
     return 0
 
@@ -460,14 +483,22 @@ def main(argv=None):
         sys.stderr.write("%s\n" % e)
         return 2
 
-    if args.init_workspace is not None:
-        return cmd_init_workspace(config_path, args.init_workspace)
-    if args.set_workspace is not None:
-        return cmd_set_workspace(config_path, args.set_workspace)
-    if args.set_scope is not None:
-        return cmd_set_scope(config_path, args.set_scope)
-    if args.add_project is not None:
-        return cmd_add_project(config_path, args.add_project)
+    # Every setter reads the existing config before writing, so every setter can meet a
+    # config this build cannot read. Unguarded, that surfaced as a raw traceback from the one
+    # command meant to help someone out of exactly that state. A legible sentence is the
+    # whole contract here, and it has no carve-out for the setters.
+    try:
+        if args.init_workspace is not None:
+            return cmd_init_workspace(config_path, args.init_workspace)
+        if args.set_workspace is not None:
+            return cmd_set_workspace(config_path, args.set_workspace)
+        if args.set_scope is not None:
+            return cmd_set_scope(config_path, args.set_scope)
+        if args.add_project is not None:
+            return cmd_add_project(config_path, args.add_project)
+    except CONFIG.ConfigError as e:
+        sys.stderr.write("%s\n" % e)
+        return 2
 
     state = status(config_path=config_path)
 

@@ -137,6 +137,41 @@ def load(config_path: Path) -> dict:
     return data
 
 
+def load_for_update(config_path: Path) -> dict:
+    """The config, or a REFUSAL — the loader a mutation must use.
+
+    `load()` is deliberately lenient: it reads a malformed config as absent so that STATUS
+    can still report on a broken machine. A setter that merged into that empty mapping and
+    replaced the file atomically would destroy whatever was recoverable in it, which is the
+    opposite of helpful when the file is the only copy. So writing gets a strict loader and
+    reading keeps the lenient one.
+    """
+    path = Path(config_path)
+    if not path.exists():
+        return {}
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as e:
+        raise ConfigError(
+            f"{path} exists but cannot be read ({e.__class__.__name__}). Refusing to replace "
+            f"a file whose contents are unknown.") from e
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise ConfigError(
+            f"{path} is not valid JSON ({e}). Refusing to overwrite it — fix it or move it "
+            f"aside, because this is the only copy of whatever is in it.") from e
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"{path} holds {type(data).__name__}, not an object. Refusing to overwrite it.")
+    version = data.get("version", CONFIG_VERSION)
+    if version != CONFIG_VERSION:
+        raise ConfigError(
+            f"{path} declares version {version!r}, and this build understands "
+            f"{CONFIG_VERSION!r}. Refusing to read it rather than guessing at half a format.")
+    return data
+
+
 def validate_scope(value) -> str:
     """The Vercel team slug, or a refusal.
 
@@ -162,9 +197,13 @@ def validate_scope(value) -> str:
 def workspace_file(*, cli_value=UNSET, config_path=None) -> Path | None:
     """Where the workspace file is, or ``None`` when nothing is configured.
 
-    The last rung keeps the author's own machine working without a hardcode: the legacy path
-    is used only when it is really there, so nobody else is ever pointed at a file they do
-    not have.
+    There is deliberately NO implicit fallback to `~/rawgentic/.rawgentic_workspace.json`.
+    An earlier revision kept it "only when the file exists", which reads as harmless and is
+    not: a machine that happens to have a file at that path would silently adopt it, without
+    the setup run, and then validate project names and group the index against a file its
+    owner never pointed this tool at. AC4 says the hardcoded default is RETIRED and the
+    location setup recorded is used instead, and a conditional default is still a default.
+    Existing users run setup once, which is one command and says so.
     """
     chosen = _selected(cli_value, ENV_WORKSPACE, "--workspace-file")
     if chosen is not None:
@@ -174,9 +213,6 @@ def workspace_file(*, cli_value=UNSET, config_path=None) -> Path | None:
     declared = load(config_path).get("workspace_file")
     if isinstance(declared, str) and declared.strip():
         return Path(declared).expanduser().resolve()
-    legacy = Path.home() / "rawgentic" / ".rawgentic_workspace.json"
-    if legacy.is_file():
-        return legacy
     return None
 
 
@@ -224,7 +260,10 @@ def require_workspace_file(*, cli_value=UNSET, config_path=None) -> Path:
         raise ConfigError(
             f"the configured workspace file {resolved} is malformed and cannot be parsed "
             f"({e}). Run: {SETUP_COMMAND}") from e
-    if not isinstance(data, dict) or not isinstance(data.get("projects", []), list):
+    # `projects` must be PRESENT and a list. Defaulting an absent key to `[]` read `{}` as a
+    # valid-but-empty workspace, so setup reported ready while every --project was refused.
+    if (not isinstance(data, dict) or "projects" not in data
+            or not isinstance(data["projects"], list)):
         raise ConfigError(
             f"the configured workspace file {resolved} is malformed — it must be an object "
             f"whose `projects` is a list. Run: {SETUP_COMMAND}")

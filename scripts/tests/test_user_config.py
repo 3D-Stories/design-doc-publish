@@ -145,14 +145,22 @@ class TestResolvingTheWorkspaceFile:
     def test_unconfigured_resolves_to_none(self):
         assert user_config.workspace_file() is None
 
-    def test_the_legacy_path_is_used_only_when_it_exists(self, scrubbed):
-        assert user_config.workspace_file() is None
+    def test_the_old_hardcoded_path_is_NOT_an_implicit_fallback(self, scrubbed):
+        """An earlier revision kept `~/rawgentic/.rawgentic_workspace.json` as a last rung
+        "only when the file exists", which reads as harmless and is not. A machine that
+        happens to have a file there would silently adopt it, without the setup run, and then
+        validate project names and group the index against a file its owner never pointed
+        this tool at. AC4 says the hardcoded default is RETIRED and the location setup
+        recorded is used instead — and a conditional default is still a default.
+        """
         legacy = scrubbed / "rawgentic" / ".rawgentic_workspace.json"
         legacy.parent.mkdir(parents=True)
-        legacy.write_text("{}", encoding="utf-8")
-        assert user_config.workspace_file() == legacy
+        legacy.write_text(json.dumps({"projects": [{"name": "somebody-elses"}]}),
+                          encoding="utf-8")
+        assert user_config.workspace_file() is None, (
+            "a file at the old path must not be adopted without being configured")
 
-    def test_the_config_beats_the_legacy_path(self, tmp_path, scrubbed):
+    def test_the_config_is_what_points_at_a_workspace(self, tmp_path, scrubbed):
         legacy = scrubbed / "rawgentic" / ".rawgentic_workspace.json"
         legacy.parent.mkdir(parents=True)
         legacy.write_text("{}", encoding="utf-8")

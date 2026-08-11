@@ -410,6 +410,37 @@ class TestAddProject:
         assert "flock" in source, "the read-modify-write must be serialized, not just atomic"
 
 
+class TestNoSetterEverPrintsATraceback:
+    """Found by the Step-8a inline review, and reproduced before it was fixed.
+
+    `status()` handles an unreadable config and reports `config_version_unsupported`, but
+    every SETTER reached `user_config.load` unguarded — so a user whose config names a
+    version this build does not know got a raw traceback from the one command that was
+    supposed to help them out of it. AC5 says a legible message, not a traceback, and it does
+    not carve out the setters.
+    """
+
+    @pytest.mark.parametrize("args", [
+        ["--set-workspace", "WS"],
+        ["--add-project", "widget"],
+        ["--init-workspace", "NEW"],
+        ["--set-scope", SCOPE],
+    ])
+    def test_an_unknown_config_version_is_a_sentence(self, monkeypatch, cfg, tmp_path,
+                                                     capsys, args):
+        FakeVercel().install(monkeypatch)
+        _write(cfg, {"version": 99})
+        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": []})
+        args = [a.replace("WS", str(ws)).replace("NEW", str(tmp_path / "new.json"))
+                for a in args]
+
+        rc = setup_mod.main(args + ["--config", str(cfg)])
+        assert rc != 0
+        err = capsys.readouterr().err
+        assert "99" in err, "the message must name the version it could not read"
+        assert "Traceback" not in err
+
+
 class TestItNeverTouchesCredentials:
     def test_no_code_path_runs_vercel_login(self):
         """It is interactive and mutates machine-global authentication state. Setup prints the
@@ -443,3 +474,112 @@ class TestItNeverTouchesCredentials:
         for line in source.splitlines():
             if "teams" in line and ("split" in line or "regex" in line or "re." in line):
                 pytest.fail(f"the teams table must not be parsed: {line.strip()!r}")
+
+
+class TestTheStepEightAFindings:
+    """Six findings from the Step-8a cross-model review, each reproduced before it was fixed.
+
+    They share a shape worth naming: every one is a place where the code was LENIENT about
+    input in a context that mutates something. Leniency is right for reporting and wrong for
+    writing, and the split had not been drawn.
+    """
+
+    def test_a_malformed_config_is_never_overwritten_by_a_setter(self, monkeypatch, cfg,
+                                                                 tmp_path, capsys):
+        """`load()` reads a malformed config as absent so that STATUS can still report. A
+        setter then merged into that empty mapping and atomically replaced the file, which
+        destroyed whatever was recoverable in it."""
+        FakeVercel().install(monkeypatch)
+        cfg.parent.mkdir(parents=True, exist_ok=True)
+        original = '{"version": 1, "vercel_scope": "acme"  <-- hand-edited badly'
+        cfg.write_text(original, encoding="utf-8")
+        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": []})
+
+        rc = setup_mod.main(["--set-workspace", str(ws), "--config", str(cfg)])
+        assert rc != 0
+        assert cfg.read_text(encoding="utf-8") == original, (
+            "the unreadable config must survive; it is the only copy of whatever was in it")
+        assert "Traceback" not in capsys.readouterr().err
+
+    def test_a_workspace_with_no_projects_key_is_malformed_not_empty(self, monkeypatch, cfg,
+                                                                     tmp_path):
+        """`{}` is not an empty project list. Reading it as one made `--check` report
+        can_proceed while `--project` refused every name."""
+        ws = _write(tmp_path / "ws.json", {"version": 1})
+        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
+        s = _status(monkeypatch, FakeVercel(), cfg)
+        assert s["status"] == "workspace_malformed"
+        assert s["can_proceed"] is False
+
+    def test_the_publisher_agrees_that_it_is_malformed(self, tmp_path, monkeypatch):
+        """The two must not disagree: setup saying ready while publish refuses is the
+        confusion this closes."""
+        for name in ENV_VARS:
+            monkeypatch.delenv(name, raising=False)
+        ws = _write(tmp_path / "ws.json", {"version": 1})
+        cfg = _write(tmp_path / "config.json", {"version": 1, "workspace_file": str(ws)})
+        with pytest.raises(user_config.ConfigError) as excinfo:
+            user_config.require_workspace_file(config_path=cfg)
+        assert "malformed" in str(excinfo.value).lower()
+
+    def test_a_truncated_listing_is_not_accepted_as_proof_of_access(self, monkeypatch, cfg):
+        """`{"contextName": ...}` alone passed, so setup recorded the team and reported
+        ready while the publisher's stricter parser would reject the same CLI surface."""
+        FakeVercel(listing=json.dumps({"contextName": SCOPE})).install(monkeypatch)
+        rc = setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)])
+        assert rc != 0
+        assert not cfg.exists()
+
+    def test_an_empty_account_still_passes_the_probe(self, monkeypatch, cfg):
+        """The counterpart, so the stricter check does not break the bootstrap case: an
+        account holding no projects yet is legitimate."""
+        FakeVercel(listing=json.dumps({"projects": [], "pagination": {"next": None},
+                                       "contextName": SCOPE})).install(monkeypatch)
+        assert setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)]) == 0
+
+    def test_init_workspace_leaves_nothing_behind_when_it_cannot_record(self, monkeypatch,
+                                                                       cfg, tmp_path):
+        """A created-but-unrecorded workspace is a file the user did not ask for and this
+        tool will not use."""
+        FakeVercel().install(monkeypatch)
+        target = tmp_path / "mine.json"
+
+        def explode(*a, **kw):
+            # `setup_mod.CONFIG.ConfigError`, NOT the `user_config.ConfigError` this file
+            # imported by name. They are different class objects: setup loads the module by
+            # exact path under a private name, so `except CONFIG.ConfigError` there does not
+            # catch an exception raised through a second, separately-loaded copy. Raising the
+            # class setup actually catches is what makes this test about the rollback.
+            raise setup_mod.CONFIG.ConfigError("cannot write the config")
+
+        monkeypatch.setattr(setup_mod, "_store", explode)
+        rc = setup_mod.main(["--init-workspace", str(target), "--config", str(cfg)])
+        assert rc != 0
+        assert not target.exists(), "the workspace it created must be rolled back"
+
+    def test_each_entry_point_catches_its_own_loaded_error_class(self):
+        """The consequence of loading modules by path, stated so the next person does not
+        lose an afternoon to it: every entry point gets its OWN copy of `user_config`, so
+        `except CONFIG.ConfigError` catches only exceptions raised through that same copy.
+
+        It holds today because each entry point raises through the copy it loaded. It would
+        stop holding the moment one of them let another's ConfigError propagate, so this
+        pins the property rather than trusting it.
+        """
+        assert setup_mod.CONFIG.ConfigError is not user_config.ConfigError
+        assert setup_mod.CONFIG.ConfigError.__name__ == user_config.ConfigError.__name__
+        import publish_doc
+        assert publish_doc.CONFIG.ConfigError is not setup_mod.CONFIG.ConfigError
+
+
+class TestTheEntryPointIsExecutable:
+    def test_setup_can_be_run_the_way_the_skill_says_to_run_it(self):
+        """SKILL.md names `${CLAUDE_PLUGIN_ROOT}/scripts/setup.py` as a command. The other
+        two user-facing entry points in this package are 0755 for exactly that reason, and
+        setup shipping 0644 would make the documented first command fail on permissions."""
+        import os
+        import stat
+        path = SCRIPTS / "setup.py"
+        mode = os.stat(path).st_mode
+        assert mode & stat.S_IXUSR, f"{path} is not executable, but the skill says to run it"
+        assert path.read_text(encoding="utf-8").startswith("#!"), "and it needs a shebang"

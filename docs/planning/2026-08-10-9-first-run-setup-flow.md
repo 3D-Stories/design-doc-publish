@@ -76,12 +76,12 @@ Shape — every key optional, so a partially-configured state is representable:
 
 `owned_workspace_file` records **which exact path** this package created — not a boolean *(review
 R3-1, and the bug it names is real)*. A `workspace_owned: true` flag would go stale the moment a
-`--workspace-file` flag, an environment variable, the legacy rung, or a hand-edited `workspace_file`
+`--workspace-file` flag, an environment variable, or a hand-edited `workspace_file`
 selected a different file: the flag would still read `true` while resolution pointed somewhere else,
 and `--add-project` would write to a file this package never created. Binding ownership to the
 normalized path removes the gap. `--add-project` writes only when the **resolved** path equals
-`owned_workspace_file` exactly. Every other origin — flag, environment, legacy fallback, adopted
-through `--set-workspace` — is unowned by construction.
+`owned_workspace_file` exactly. Every other origin — flag, environment, adopted through
+`--set-workspace` — is unowned by construction.
 
 It holds **no credential**. Authentication stays entirely with the `vercel` CLI (AC3). It is written
 **atomically** — `tempfile` in the same directory, then `os.replace` — so an interrupted setup leaves
@@ -124,10 +124,15 @@ in this module reaches for process state.
 1. `cli_value`, when it is not `UNSET`;
 2. `DESIGN_DOC_PUBLISH_WORKSPACE_FILE` in the environment;
 3. `workspace_file` in the config file;
-4. `~/rawgentic/.rawgentic_workspace.json` **only if it already exists** — a fallback, not a
-   hardcode: the author's machine keeps working and nobody else is pointed at a path they do not
-   have;
-5. otherwise `None`, meaning unconfigured.
+4. otherwise `None`, meaning unconfigured.
+
+**There is no legacy rung, and revision 3 was wrong to keep one.** It read
+`~/rawgentic/.rawgentic_workspace.json` "only if it already exists", which sounds harmless. The
+Step-8a review named it correctly: a machine that happens to have a file there would silently adopt
+it, without the setup run, and then validate project names and group the index against a file its
+owner never pointed this tool at. AC4 says the hardcoded default is RETIRED and the location setup
+recorded is used instead — **a conditional default is still a default**. Existing users run setup
+once, which is one command, and which the refusal names.
 
 **Vercel team** — `vercel_scope(cli_value=…, config_path=…)`: `cli_value`, then
 `DESIGN_DOC_PUBLISH_VERCEL_SCOPE`, then `vercel_scope` in the config file, then `None`.
@@ -468,6 +473,11 @@ that string for exactly this reason.
 | Import-time resolution breaking test isolation | Resolution is a function call, never module-level. |
 | `Path.home()` ignoring a scrubbed `HOME` | **Probed live 2026-08-10**: `env -i HOME=/tmp/fake-home-probe python3` returns `Path.home() == /tmp/fake-home-probe`. The AC6 subprocess approach works on this host. |
 | Two setups racing | **Locked** *(review R3-2 reversed the earlier decision, correctly)*. Atomic replace keeps each write whole, but it does not make read-modify-write atomic: two `--add-project` runs can both read, both add, and the later replace erases the earlier addition. That is real data loss, not a tidiness point, and the fix is a sibling lock file held across the whole read-validate-modify-replace — stdlib `fcntl.flock`, about ten lines. Documenting a data-loss race as accepted was the wrong call. |
+| A setter merging into a config it could not read | Refused. `load()` stays lenient so STATUS can report on a broken machine, and mutations use a strict `load_for_update()` — merging into an empty mapping and replacing the file destroyed the only copy of whatever was in it *(review 8a-1)*. |
+| A workspace object with no `projects` key | `workspace_malformed`, in BOTH the setup state table and `require_workspace_file`. Defaulting an absent key to `[]` made setup report ready while the publisher refused every project name *(review 8a-2)*. |
+| A truncated listing accepted as proof of access | The probe requires `projects` as a list and `pagination.next`, the same fields the publisher's own parser requires. An empty `projects` stays valid — that is the bootstrap account *(review 8a-5)*. |
+| `--init-workspace` creating a file it then cannot record | The file it just created is removed. A created-but-unrecorded workspace is one the user did not ask for and this tool will not use *(review 8a-6)*. |
+| Two copies of `user_config` with two `ConfigError` classes | Each entry point catches the class from the copy IT loaded, which holds because each also raises through that copy. Pinned by a test rather than trusted, because it is invisible until it bites. |
 | A foreign `user_config.py` earlier on `sys.path` | Cannot be selected: the module is loaded by exact path under a private name, with the realpath containment check the other three load sites use *(review R7)*. |
 | `--add-project` pointed at a workspace this package does not own | Refuses, names the file, and points at `--set-workspace` *(review R4)*. It never writes to a file it did not create. |
 | A relative `--set-workspace PATH` recorded verbatim | Refused as a class: the setter stores an absolute normalized path, so a later publish from another directory cannot turn a configured workspace into a missing one *(review R3)*. |
@@ -659,10 +669,9 @@ rather than that a judgment was needed which the issue does not capture. All fou
 loop-back class, and each carried a concrete recommendation containing no owner-only decision.
 Writing a validator, normalizing a path and drawing a state table are what a design gate is for.
 
-**One residual, accepted rather than fixed** *(my finding 7)*: resolution rung 4 adopts
-`~/rawgentic/.rawgentic_workspace.json` when it exists. A stranger with an unrelated file at that
-exact path would have it adopted silently. The path is specific enough that this is contrived, and
-the rung is what keeps the author's machine working without a hardcode.
+**The residual this section used to accept is gone.** Revision 3 kept the legacy path as a
+conditional rung and called the risk contrived. The Step-8a review disagreed at 0.99 confidence, and
+was right on the criterion's own words, so the rung was removed rather than argued for.
 
 ## Design gate — revision 3
 
