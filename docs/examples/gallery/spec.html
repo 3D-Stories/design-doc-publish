@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Halyard webhook endpoint specification</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-spec{background:var(--bg)}
+.tpl-spec .wrap{max-width:760px;padding:0 20px 88px}
+.tpl-spec header{padding:60px 0 22px;border-bottom:1px solid var(--line);margin-bottom:28px}
+.tpl-spec h1{font-size:clamp(21px,3vw,27px)}
+.tpl-spec h2{font-size:17px;margin:2.2em 0 .5em}
+
+/* #76 — the reference's `.step-num`: the requirement id reads as an INDEX into a normative
+   list, not as prose. `review`'s gutter (D73) is right-aligned severity text, so the two
+   numbered-looking styles do not converge.
+
+   THE TRACK WIDTH IS NOT TOUCHED, and that is deliberate. A first attempt set
+   `grid-template-columns:34px 1fr` here and broke a measured decision this template already
+   carries: the id and the RFC-2119 level pill SHARE column one, and #40 T7 fixed it at a
+   >=90px track because `auto` sized it by the level WORD (44px MUST, 60px SHOULD, 36px MAY) so
+   every card's title began at a different x. `test_requirement_cards_share_one_gutter_width…`
+   caught the regression immediately — the guard did its job. Only the numeral is styled here;
+   the gutter that holds it is left exactly as it was. */
+.tpl-spec .sp-req .blk-n,.tpl-spec .sp-ac .blk-n{display:inline-flex;align-items:center;
+justify-content:center;min-width:26px;padding:2px 7px;border:1px solid var(--line);
+border-radius:8px;background:var(--bg);font:700 11px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--accent)}
+.tpl-spec h1{line-height:1.15;max-width:22ch}
+.tpl-spec header .eyebrow{display:inline-block;font-size:11.5px;letter-spacing:.13em;
+border:1px solid var(--line);border-radius:999px;padding:4px 12px;background:var(--surface)}
+
+.tpl-spec .sp-section{margin-top:24px}
+/* On-this-page index — the reference's `.toc` aside. Emitted by the shared section renderer
+   from `index_class`; nothing here parses headings. */
+.tpl-spec .sp-index{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+padding:10px 18px;margin:18px 0}
+.tpl-spec .sp-index ol{margin:.2em 0;padding-left:1.2em}
+.tpl-spec .sp-index li{margin:.25em 0}
+.tpl-spec .sp-index a{color:var(--ink-2);text-decoration:none;
+border-bottom:1px solid var(--line)}
+.tpl-spec .sp-index a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+/* Requirement cards — the reference's `.card`: a panel per requirement with the stable ID as a
+   mono index, rather than the bare left rule this was before. The RFC-2119 badge and the
+   optional MUST/SHOULD level come from the shared layer; only the frame is new. */
+.tpl-spec .sp-req{margin:18px 0}
+/* The grid goes on the `<ol>`, not on `.sp-req`. `.sp-req` has exactly ONE child — the list — so
+   gridding it spaced nothing; the cards are the `<li>`s inside. Review caught the no-op. */
+.tpl-spec .sp-req ol{display:grid;gap:10px;margin:0;padding:0}
+.tpl-spec .sp-req .blk-step{background:var(--surface);border:1px solid var(--line);
+border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:0;
+grid-template-columns:92px 1fr}
+/* The gutter is a FIXED width, not `auto`. The ID and the RFC-2119 level pill share column one,
+   and the pill's width follows its word — so on `auto` the column measured 44px for MUST, 60px
+   for SHOULD and 36px for MAY, and every card's title started at a different x. Browser-measured
+   across a five-level probe, not guessed.
+   92px, not 64px: the accepted set is must / must-not / should / should-not / may
+   (`_SEMANTIC_SETS["requirement level"]`), and the two hyphenated ones measure 72.1px and 88.6px
+   — both of which the first attempt's 64px track wrapped. Review measured them.
+   An UNRECOGNISED level is deliberately not dropped — `_semantic` warns and still renders the
+   author's text — so the pill is additionally constrained rather than trusted to fit: a long one
+   wraps inside the gutter instead of overlapping the title, which is what it did before. */
+.tpl-spec .sp-req .blk-level{justify-self:start;max-width:100%;overflow-wrap:anywhere}
+.tpl-spec .sp-req .blk-n{color:var(--accent);font-weight:700;
+font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.04em}
+.tpl-spec .sp-req .blk-title{font-size:15px}
+.tpl-spec .sp-ac .blk-step{border-bottom-style:dashed}
+.tpl-spec .sp-ac .blk-n{color:var(--ink-3)}
+.tpl-spec .sp-gate .blk-chip{border-radius:5px;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+.tpl-spec table th{color:var(--accent)}
+.tpl-spec li{margin:.2em 0}
+</style>
+</head>
+<body class="tpl-spec">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-03-02 09:00 MST</div>
+<h1>Halyard webhook endpoint specification</h1>
+
+</header>
+<main>
+<p>Behavior of the Halyard webhook endpoint, pinned precisely enough to build and test against.</p>
+<nav class="sp-index"><ol><li><a href="#s1">Requirements</a></li><li><a href="#s2">Acceptance criteria</a></li><li><a href="#s3">Vocabulary</a></li><li><a href="#s4">Out of scope</a></li></ol></nav>
+<section class="sp-section" id="s1"><h3>Requirements</h3><div class="blk blk-steps sp-req"><ol><li class="blk-step"><span class="blk-n">R1</span><span class="blk-title">The endpoint <span class="req req-must"><span class="req req-must">MUST</span></span> verify the signature before parsing the body</span><span class="blk-text">An unverified payload is untrusted input and must not reach the parser.</span></li><li class="blk-step"><span class="blk-n">R2</span><span class="blk-title">The endpoint <span class="req req-must"><span class="req req-must">MUST</span></span> return 202 for an accepted event</span><span class="blk-text">Acceptance means persisted, not processed.</span></li><li class="blk-step"><span class="blk-n">R3</span><span class="blk-title">The endpoint <span class="req req-must"><span class="req req-must">MUST</span></span> return 401 for a bad or absent signature</span><span class="blk-text">The body is discarded unread.</span></li><li class="blk-step"><span class="blk-n">R4</span><span class="blk-title">The endpoint <span class="req req-must"><span class="req req-must">MUST</span></span> be idempotent on (carrier, event_id)</span><span class="blk-text">A carrier may redeliver any event any number of times.</span></li><li class="blk-step"><span class="blk-n">R5</span><span class="blk-title">The endpoint <span class="req req-should"><span class="req req-should">SHOULD</span></span> respond within 200ms</span><span class="blk-text">Carriers retry aggressively past that.</span></li><li class="blk-step"><span class="blk-n">R6</span><span class="blk-title">The endpoint <span class="req req-must-not"><span class="req req-must-not">MUST NOT</span></span> call the carrier API synchronously</span><span class="blk-text">That couples our availability to theirs on the write path.</span></li></ol></div></section>
+<section class="sp-section" id="s2"><h3>Acceptance criteria</h3><div class="blk blk-steps sp-ac"><ol><li class="blk-step"><span class="blk-n">1</span><span class="blk-title">Signature precedes parse</span><span class="blk-text">Proven by a malformed body with a valid signature returning 400, and a malformed body with an invalid signature returning 401.</span></li><li class="blk-step"><span class="blk-n">2</span><span class="blk-title">Redelivery is safe</span><span class="blk-text">The same event delivered five times yields one row and five 202s.</span></li><li class="blk-step"><span class="blk-n">3</span><span class="blk-title">Cross-carrier ids do not collide</span><span class="blk-text">Two carriers sending event_id &quot;1&quot; yield two rows.</span></li><li class="blk-step"><span class="blk-n">4</span><span class="blk-title">Latency holds</span><span class="blk-text">p99 under 200ms at 500 events per second.</span></li></ol></div></section>
+<section class="sp-section" id="s3"><h3>Vocabulary</h3><div class="blk blk-legend"><dl><dt class="blk-swatch is-must">MUST</dt><dd>a conformance requirement; a build that fails it is not this spec</dd><dt class="blk-swatch is-should">SHOULD</dt><dd>strongly expected; deviation needs a stated reason</dd><dt class="blk-swatch is-note">event_id</dt><dd>the carrier&#x27;s own identifier, unique only within that carrier</dd></dl></div></section>
+<section class="sp-section" id="s4"><h3>Out of scope</h3><p>Ordering. Carriers do not promise it and this endpoint does not impose it. Consumers that need ordering must sort by the carrier&#x27;s scan timestamp, and must tolerate ties.</p></section>
+
+</main>
+<footer>Last updated: 2026-03-02 09:00 MST · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
