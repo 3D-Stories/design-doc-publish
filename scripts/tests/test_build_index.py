@@ -15,7 +15,7 @@ fixture cannot carry a comment:
 * `pagination` is made consistent with that subset (`count` 6, `prev` the newest row).
 
 The subset is load-bearing, not tidiness. The live account has since gained
-`claude-skills-design-12`, which `test_publish_doc.py` uses as its ABSENT project; shipping the
+`example-design-12`, which `test_publish_doc.py` uses as its ABSENT project; shipping the
 full 60-row capture would have made two reuse tests silently assert against a project that now
 exists. Every row is otherwise verbatim, key order included.
 
@@ -48,7 +48,7 @@ LS_TABLE = (FIXTURES / "vercel_project_ls.txt").read_text(encoding="utf-8")
 SCOPE = "example-team"
 
 EXPECTED = ["example-alpha-spike", "example-analysis-412",
-            "claude-skills-plan-786", "example-design-templates",
+            "example-plan-786", "example-design-templates",
             "example-uat-checklist"]
 
 
@@ -136,7 +136,7 @@ class TestTheCapturedListingParsesCleanly:
     def test_updated_at_becomes_an_absolute_timezone_aware_instant(self, index, cli):
         cli(stdout=LS_JSON)
         got = {p["name"]: p["deployed"] for p in index.vercel_projects(scope=SCOPE)}
-        one = got["claude-skills-plan-786"]
+        one = got["example-plan-786"]
         assert one.tzinfo is not None
         # 1785567949474 ms, read from the fixture's own row.
         assert one == datetime.fromtimestamp(1785567949474 / 1000, tz=timezone.utc).astimezone(
@@ -152,11 +152,11 @@ class TestTheCapturedListingParsesCleanly:
 
     def test_the_row_signature_is_stable_across_builds(self, index, cli, tmp_path):
         ws = tmp_path / "workspace.json"
-        ws.write_text(json.dumps({"projects": [{"name": "claude-skills"}]}), encoding="utf-8")
+        ws.write_text(json.dumps({"projects": [{"name": "example"}]}), encoding="utf-8")
         cli(stdout=LS_JSON)
-        a = index.signature(index.build_rows(index.vercel_projects(scope=SCOPE), ["claude-skills"], False))
+        a = index.signature(index.build_rows(index.vercel_projects(scope=SCOPE), ["example"], False))
         cli(stdout=LS_JSON)
-        b = index.signature(index.build_rows(index.vercel_projects(scope=SCOPE), ["claude-skills"], False))
+        b = index.signature(index.build_rows(index.vercel_projects(scope=SCOPE), ["example"], False))
         assert a == b
 
 
@@ -212,9 +212,9 @@ class TestItFailsClosedRatherThanGuessing:
     def test_a_coloured_name_inside_valid_json_is_refused_not_accepted(self, index, cli):
         """The nastier shape, and the reason the name check is not merely a JSON parse: escape
         bytes inside a JSON *string* keep the document valid, so `json.loads` alone would hand
-        back `\\x1b[1mclaude-skills-plan-786\\x1b[22m` as a project name and reproduce #125 in
+        back `\\x1b[1mexample-plan-786\\x1b[22m` as a project name and reproduce #125 in
         JSON clothing."""
-        cli(stdout=_payload([_row("\x1b[1mclaude-skills-plan-786\x1b[22m")]))
+        cli(stdout=_payload([_row("\x1b[1mexample-plan-786\x1b[22m")]))
         with pytest.raises(SystemExit):
             index.vercel_projects(scope=SCOPE)
 
@@ -229,7 +229,7 @@ class TestItFailsClosedRatherThanGuessing:
             index.vercel_projects(scope=SCOPE)
 
     def test_a_row_that_is_not_an_object_is_refused(self, index, cli):
-        cli(stdout=_payload(["claude-skills-plan-786"]))
+        cli(stdout=_payload(["example-plan-786"]))
         with pytest.raises(SystemExit):
             index.vercel_projects(scope=SCOPE)
 
@@ -243,10 +243,10 @@ class TestItFailsClosedRatherThanGuessing:
             index.vercel_projects(scope=SCOPE)
 
     @pytest.mark.parametrize("name", [
-        "[1mclaude-skills-plan-786",      # C1 CSI: one codepoint, same effect as ESC-[
-        "claude-skills​plan-786",          # zero-width space, a format character
+        "[1mexample-plan-786",      # C1 CSI: one codepoint, same effect as ESC-[
+        "example​plan-786",          # zero-width space, a format character
         "   ",                                  # printable, but not a name
-        " claude-skills-plan-786 ",             # padded: would not match the real project
+        " example-plan-786 ",             # padded: would not match the real project
     ])
     def test_a_name_that_is_not_plainly_printable_is_refused(self, index, cli, name):
         """A hand-rolled `ord(ch) < 0x20 or == 0x7F` check covered only C0 and DEL and let all
@@ -260,13 +260,13 @@ class TestItFailsClosedRatherThanGuessing:
         """`--scope` only ASKS for an account. The payload says which one it answered for, and
         checking it is what turns the pin into a guarantee — a listing for the wrong account
         would present every genuinely live project as absent."""
-        cli(stdout=_payload([_row("claude-skills-plan-786")], contextName="someone-else"))
+        cli(stdout=_payload([_row("example-plan-786")], contextName="someone-else"))
         with pytest.raises(SystemExit) as e:
             index.vercel_projects(scope=SCOPE)
         assert "someone-else" in str(e.value) and SCOPE in str(e.value)
 
     def test_a_listing_with_no_tenant_named_is_refused(self, index, cli):
-        doc = json.loads(_payload([_row("claude-skills-plan-786")]))
+        doc = json.loads(_payload([_row("example-plan-786")]))
         doc.pop("contextName")
         cli(stdout=json.dumps(doc))
         with pytest.raises(SystemExit):
@@ -288,12 +288,12 @@ class TestItFailsClosedRatherThanGuessing:
         The guarantee is unchanged and now held exactly rather than approximately: no partial
         listing is ever returned. A cursor followed to exhaustion IS the complete account.
         """
-        first = json.loads(_payload([_row("claude-skills-plan-786")]))
+        first = json.loads(_payload([_row("example-plan-786")]))
         first["pagination"]["next"] = 1785866993550
         got = None
         fake = cli(pages=[json.dumps(first), _payload([_row("second-page-project")])])
         got = index.vercel_projects(100, scope=SCOPE)
-        assert [p["name"] for p in got] == ["claude-skills-plan-786", "second-page-project"], \
+        assert [p["name"] for p in got] == ["example-plan-786", "second-page-project"], \
             "both pages must appear; the second one used to be invisible"
         assert len(fake.cmds) == 2, "the cursor must be followed, not refused"
         assert "--next" in fake.cmds[1], "the second call must carry the cursor"
@@ -326,7 +326,7 @@ class TestItFailsClosedRatherThanGuessing:
         assert "paginating" in str(e.value)
 
     def test_a_payload_with_no_pagination_cursor_is_refused(self, index, cli):
-        doc = json.loads(_payload([_row("claude-skills-plan-786")]))
+        doc = json.loads(_payload([_row("example-plan-786")]))
         doc.pop("pagination")
         cli(stdout=json.dumps(doc))
         with pytest.raises(SystemExit):
@@ -382,13 +382,13 @@ class TestOnlyTheAgeDegrades:
 
     @pytest.mark.parametrize("bad", [None, "3h", "", -1, 0, True, {}, [], float("nan")])
     def test_an_unusable_updated_at_keeps_the_row_and_drops_the_age(self, index, cli, bad):
-        cli(stdout=_payload([_row("claude-skills-plan-786", updated=bad)]))
+        cli(stdout=_payload([_row("example-plan-786", updated=bad)]))
         rows = index.vercel_projects(scope=SCOPE)
-        assert [p["name"] for p in rows] == ["claude-skills-plan-786"]
+        assert [p["name"] for p in rows] == ["example-plan-786"]
         assert rows[0]["deployed"] is None
 
     def test_a_missing_updated_at_key_keeps_the_row(self, index, cli):
-        row = _row("claude-skills-plan-786")
+        row = _row("example-plan-786")
         row.pop("updatedAt")
         cli(stdout=_payload([row]))
         rows = index.vercel_projects(scope=SCOPE)
@@ -398,16 +398,16 @@ class TestOnlyTheAgeDegrades:
         """Epoch SECONDS divided by 1000 lands in January 1970 and would then be both displayed
         and hashed into the change signature as though it were real. A magnitude window turns a
         unit change into a missing age rather than a confident wrong date."""
-        cli(stdout=_payload([_row("claude-skills-plan-786", updated=1785613860)]))
+        cli(stdout=_payload([_row("example-plan-786", updated=1785613860)]))
         rows = index.vercel_projects(scope=SCOPE)
-        assert [p["name"] for p in rows] == ["claude-skills-plan-786"]
+        assert [p["name"] for p in rows] == ["example-plan-786"]
         assert rows[0]["deployed"] is None
 
     def test_a_row_with_no_age_renders_an_em_dash_rather_than_vanishing(self, index, cli):
-        row = _row("claude-skills-plan-786")
+        row = _row("example-plan-786")
         row.pop("updatedAt")
         cli(stdout=_payload([row]))
-        built = index.build_rows(index.vercel_projects(scope=SCOPE), ["claude-skills"], False)
+        built = index.build_rows(index.vercel_projects(scope=SCOPE), ["example"], False)
         assert built[0]["updated_src"] == "none"
 
 
@@ -435,7 +435,7 @@ class TestTheBootstrapAccountStillPublishes:
         is what lets `--new-project` proceed."""
         cli(stdout=_payload([_row("docs-index")]))
         existing = {p["name"] for p in index.vercel_projects(scope=SCOPE)}
-        assert "claude-skills-design-12" not in existing
+        assert "example-design-12" not in existing
 
 
 # --------------------------------------------------------------- no quiet relapse
@@ -488,8 +488,8 @@ class TestDocumentLinksOpenInANewTab:
         mod = _index_module()
         now = datetime(2026, 8, 5, 18, 0, tzinfo=timezone.utc)
         rows = [
-            {"name": "claude-skills-design-130", "url": "https://claude-skills-design-130.vercel.app",
-             "title": "First read device", "group": "claude-skills", "chip": "design",
+            {"name": "example-design-130", "url": "https://example-design-130.vercel.app",
+             "title": "First read device", "group": "example", "chip": "design",
              "updated": datetime(2026, 8, 5, 6, 0, tzinfo=timezone.utc), "updated_src": "page"},
             {"name": "example-alpha-spike", "url": "https://example-alpha-spike.vercel.app",
              "title": "Alpha spike", "group": "example-team", "chip": "analysis",

@@ -7,6 +7,6 @@ Fetching projects in example-team
   example-alpha-spike                   https://example-alpha-spike.vercel.app               3h        24.x           
   docs-index                              https://docs-index.vercel.app                          6h        24.x           
   example-analysis-412           https://example-analysis-412.vercel.app       6h        24.x           
-  claude-skills-plan-786                  https://claude-skills-plan-786.vercel.app              16h       24.x           
+  example-plan-786                  https://example-plan-786.vercel.app              16h       24.x           
   example-design-templates          https://example-design-templates.vercel.app      16h       24.x           
   example-uat-checklist                  https://example-uat-checklist.vercel.app              16h       24.x           

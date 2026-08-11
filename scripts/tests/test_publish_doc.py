@@ -49,8 +49,8 @@ LS_OUTPUT = (FIXTURES / "vercel_project_ls.json").read_text(encoding="utf-8")
 LS_BANNER = "Vercel CLI 56.5.0 (Node.js 22.22.1)\nFetching projects in 3d-stories\n"
 
 # A project that IS in the captured output, and one that is not.
-EXISTING = "claude-skills-plan-786"
-ABSENT = "claude-skills-design-12"
+EXISTING = "example-plan-786"
+ABSENT = "example-design-12"
 
 # RECONSTRUCTED, not captured: recording a real `vercel deploy` transcript would mean
 # publishing a page. The shape follows the CLI's documented output, and the parser under
@@ -249,7 +249,7 @@ def workspace(tmp_path):
     """A real-shaped workspace file, so `known_projects()` is exercised, not stubbed."""
     p = tmp_path / "workspace.json"
     p.write_text(json.dumps({"projects": [
-        {"name": "claude-skills"}, {"name": "rawgentic"}, {"name": "herdr-dashboard"},
+        {"name": "example"}, {"name": "rawgentic"}, {"name": "herdr-dashboard"},
     ]}), encoding="utf-8")
     return p
 
@@ -302,7 +302,7 @@ def run(monkeypatch, workspace, doc):
         monkeypatch.setattr(subprocess, "run", fr)
         monkeypatch.setattr(urllib.request, "urlopen", fu)
         monkeypatch.setattr(publish_doc, "VERIFY_DELAY", 0)   # the suite does not wait
-        argv = ["--md", str(doc), "--project", "claude-skills", "--type", "design",
+        argv = ["--md", str(doc), "--project", "example", "--type", "design",
                 "--ref", "12", "--title", "A Real Doc",
                 "--workspace-file", str(workspace), "--vercel-scope", SCOPE, *extra]
         return publish_doc.main(argv), fr, fu
@@ -322,7 +322,7 @@ class TestTheNameIsDerivedFromValidatedComponents:
 
     def test_the_happy_name(self, workspace):
         assert publish_doc.derive_name(
-            "claude-skills", "design", "12", workspace) == "claude-skills-design-12"
+            "example", "design", "12", workspace) == "example-design-12"
 
     @pytest.mark.parametrize("project", ["deploy", "site", "copy", "final-final", "vercel"])
     def test_a_project_that_does_not_exist_is_refused(self, project, workspace):
@@ -342,28 +342,28 @@ class TestTheNameIsDerivedFromValidatedComponents:
     @pytest.mark.parametrize("ref", ["design", "plan", "spec"])
     def test_a_ref_that_is_itself_a_purpose_token_is_refused(self, ref, workspace):
         with pytest.raises(publish_doc.StageError):
-            publish_doc.derive_name("claude-skills", "design", ref, workspace)
+            publish_doc.derive_name("example", "design", ref, workspace)
 
     @pytest.mark.parametrize("ref", ["", "a b", "Slug/With", "-lead", "trail-",
                                      "y" * 41, "under_score", "x"])
     def test_a_malformed_ref_is_refused(self, ref, workspace):
         with pytest.raises(publish_doc.StageError):
-            publish_doc.derive_name("claude-skills", "design", ref, workspace)
+            publish_doc.derive_name("example", "design", ref, workspace)
 
     @pytest.mark.parametrize("ref", ["1", "12", "735", "network-topology", "aa"])
     def test_an_issue_number_or_a_real_slug_is_accepted(self, ref, workspace):
-        assert publish_doc.derive_name("claude-skills", "design", ref, workspace)
+        assert publish_doc.derive_name("example", "design", ref, workspace)
 
     def test_issue_one_is_publishable(self, workspace):
         """Under a flat 2-char minimum it was not — issue #1 could not be published."""
         assert publish_doc.derive_name(
-            "claude-skills", "design", "1", workspace) == "claude-skills-design-1"
+            "example", "design", "1", workspace) == "example-design-1"
 
     @pytest.mark.parametrize("ref", ["01", "007", "0"])
     def test_a_non_canonical_issue_number_is_refused(self, ref, workspace):
         """`-01` and `-1` would be two Vercel projects for one issue."""
         with pytest.raises(publish_doc.StageError):
-            publish_doc.derive_name("claude-skills", "design", ref, workspace)
+            publish_doc.derive_name("example", "design", ref, workspace)
 
     def test_there_is_no_flag_that_accepts_a_name(self):
         parser = publish_doc.build_parser()
@@ -462,7 +462,7 @@ class TestThePathsItRefuses:
         fr = FakeRun()
         monkeypatch.setattr(subprocess, "run", fr)
         rc = publish_doc.main(["--md", str(link), "--out", str(tmp_path / "o.html"),
-                               "--project", "claude-skills", "--type", "design",
+                               "--project", "example", "--type", "design",
                                "--ref", "12", "--title", "T",
                                "--workspace-file", str(workspace),
                                "--vercel-scope", SCOPE])
@@ -636,7 +636,7 @@ class TestTheDeployIsBoundToTheRenderedFile:
 
     @pytest.mark.parametrize("junk", [
         "Production: https://old.vercel.app.evil/x [8s]\n",
-        "see https://claude-skills-design-12.vercel.app.attacker.test/ [8s]\n",
+        "see https://example-design-12.vercel.app.attacker.test/ [8s]\n",
     ])
     def test_a_host_that_merely_contains_vercel_app_is_not_a_url(self, run, junk):
         assert run("--new-project", fake_run=FakeRun(deploy_log=junk))[0] == code(5)
@@ -719,7 +719,7 @@ class TestVerificationIsCacheBustedAndContentChecked:
         fr = FakeRun()
         monkeypatch.setattr(subprocess, "run", fr)
         monkeypatch.setattr(urllib.request, "urlopen", FakeUrlopen(runner=fr))
-        rc = publish_doc.main(["--md", str(doc), "--project", "claude-skills",
+        rc = publish_doc.main(["--md", str(doc), "--project", "example",
                                "--type", "design", "--ref", "12",
                                "--title", "Design & Build <now>",
                                "--workspace-file", str(workspace),
@@ -867,7 +867,7 @@ class TestItRunsAsAnExecutable:
         elsewhere.mkdir()
         proc = subprocess.run(
             [str(SCRIPTS / "publish_doc.py"), "--md", str(doc),
-             "--out", str(tmp_path / "o.html"), "--project", "claude-skills",
+             "--out", str(tmp_path / "o.html"), "--project", "example",
              "--type", "design", "--ref", "12", "--title", "A Real Doc",
              "--workspace-file", str(workspace), "--dry-run"],
             cwd=str(elsewhere), capture_output=True, text=True, check=False)
@@ -1146,7 +1146,7 @@ class TestRelativeAssetsShipWithThePage:
         self._doc_with(doc, "![d](diagram.png)")
         rc, fr, _ = run("--new-project")
         assert rc == 0, "the publish must succeed"
-        shipped = fr.shipped["claude-skills-design-12"]
+        shipped = fr.shipped["example-design-12"]
         assert "index.html" in shipped
         assert shipped.get("diagram.png") == b"\x89PNG\r\n\x1a\nfake", sorted(shipped)
 
@@ -1156,7 +1156,7 @@ class TestRelativeAssetsShipWithThePage:
         self._doc_with(doc, "![d](assets/diagram.png)")
         rc, fr, _ = run("--new-project")
         assert rc == 0
-        shipped = fr.shipped["claude-skills-design-12"]
+        shipped = fr.shipped["example-design-12"]
         assert shipped.get("assets/diagram.png") == b"nested", sorted(shipped)
 
     def test_several_references_to_one_file_ship_it_once(self, run, doc, tmp_path):
@@ -1164,7 +1164,7 @@ class TestRelativeAssetsShipWithThePage:
         self._doc_with(doc, "![a](d.png) and ![b](d.png)")
         rc, fr, _ = run("--new-project")
         assert rc == 0
-        assert sorted(fr.shipped["claude-skills-design-12"]) == ["d.png", "index.html"]
+        assert sorted(fr.shipped["example-design-12"]) == ["d.png", "index.html"]
 
     def test_a_missing_asset_is_refused_rather_than_published_as_a_404(self, run, doc, capsys):
         """AC2's negative case, and the whole point of AC1: the failure used to be SILENT."""
@@ -1210,20 +1210,20 @@ class TestRelativeAssetsShipWithThePage:
         """The whole existing corpus is this case, so it must be untouched."""
         rc, fr, _ = run("--new-project")
         assert rc == 0
-        assert sorted(fr.shipped["claude-skills-design-12"]) == ["index.html"]
+        assert sorted(fr.shipped["example-design-12"]) == ["index.html"]
 
     def test_a_fragment_and_a_data_uri_are_not_assets(self, run, doc):
         self._doc_with(doc, "[jump](#heading) and ![i](data:image/png;base64,AAAA)")
         rc, fr, _ = run("--new-project")
         assert rc == 0
-        assert sorted(fr.shipped["claude-skills-design-12"]) == ["index.html"]
+        assert sorted(fr.shipped["example-design-12"]) == ["index.html"]
 
     def test_a_percent_encoded_space_resolves_to_the_real_file(self, run, doc, tmp_path):
         (tmp_path / "my diagram.png").write_bytes(b"spaced")
         self._doc_with(doc, "![d](my%20diagram.png)")
         rc, fr, _ = run("--new-project")
         assert rc == 0
-        shipped = fr.shipped["claude-skills-design-12"]
+        shipped = fr.shipped["example-design-12"]
         assert shipped.get("my diagram.png") == b"spaced", sorted(shipped)
 
     def test_a_query_string_is_stripped_before_the_file_is_found(self, run, doc, tmp_path):
@@ -1231,7 +1231,7 @@ class TestRelativeAssetsShipWithThePage:
         self._doc_with(doc, "![d](d.png?v=2)")
         rc, fr, _ = run("--new-project")
         assert rc == 0
-        assert fr.shipped["claude-skills-design-12"].get("d.png") == b"queried"
+        assert fr.shipped["example-design-12"].get("d.png") == b"queried"
 
 
 class TestTheAssetRuleIsDocumented:
@@ -1288,7 +1288,7 @@ class TestOnlyDeclaredAssetTypesTravel:
         self._doc_with(doc, f"![x]({name})")
         rc, fr, _ = run("--new-project")
         assert rc == 0, name
-        assert fr.shipped["claude-skills-design-12"].get(name) == b"asset-bytes"
+        assert fr.shipped["example-design-12"].get(name) == b"asset-bytes"
 
     def test_the_suffix_check_is_case_insensitive_and_uses_the_real_suffix(self, run, doc,
                                                                           tmp_path):
