@@ -19,6 +19,7 @@ no JavaScript bundle, and nothing fetched at runtime.
 </p>
 
 <p align="center">
+  <a href="#the-gallery--every-template-on-a-real-shaped-document">Gallery</a> ·
   <a href="#what-the-output-looks-like">Output</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#publishing-one-setup-run-first">Publishing</a> ·
@@ -42,6 +43,33 @@ Both halves of that are committed, so neither can rot into a promise:
 went in — no styling, no HTML — and
 [`docs/examples/example-roadmap.html`](docs/examples/example-roadmap.html) is the page that came out.
 Open the HTML in a browser and it is exactly what you see above.
+
+## The gallery — every template, on a real-shaped document
+
+One example per template. **Each is a different invented document**, written to suit that
+template's purpose, so a plan does not read like an audit. The subject is a fictional parcel
+carrier called Halyard. None of it comes from anyone's real work.
+
+Click a thumbnail's **source** link to see the plain markdown that went in, and **rendered** to get
+the HTML that came out. GitHub shows raw source for a committed `.html`, so download it or open it
+from a clone to see the page itself.
+
+| | |
+| --- | --- |
+| <a href="docs/examples/gallery/design.html"><img src="docs/examples/gallery/design.png" alt="A design document rendered in the design template" width="400"></a><br>**`--type design`** · proposing how something should be built<br>[source](docs/examples/gallery/design.md) · [rendered](docs/examples/gallery/design.html) | <a href="docs/examples/gallery/roadmap.html"><img src="docs/examples/gallery/roadmap.png" alt="A delivery plan rendered in the roadmap template" width="400"></a><br>**`--type plan`** · sequencing work with phases<br>[source](docs/examples/gallery/roadmap.md) · [rendered](docs/examples/gallery/roadmap.html) |
+| <a href="docs/examples/gallery/uat.html"><img src="docs/examples/gallery/uat.png" alt="An acceptance pass rendered in the uat template" width="400"></a><br>**`--type uat`** · someone ticks things off<br>[source](docs/examples/gallery/uat.md) · [rendered](docs/examples/gallery/uat.html) | <a href="docs/examples/gallery/review.html"><img src="docs/examples/gallery/review.png" alt="A code review rendered in the review template" width="400"></a><br>**`--type audit`** · judging work that exists<br>[source](docs/examples/gallery/review.md) · [rendered](docs/examples/gallery/review.html) |
+| <a href="docs/examples/gallery/report.html"><img src="docs/examples/gallery/report.png" alt="An incident report rendered in the report template" width="400"></a><br>**`--type report`** · telling people what happened<br>[source](docs/examples/gallery/report.md) · [rendered](docs/examples/gallery/report.html) | <a href="docs/examples/gallery/workflow.html"><img src="docs/examples/gallery/workflow.png" alt="A runbook rendered in the workflow template" width="400"></a><br>**`--type runbook`** · followed under pressure<br>[source](docs/examples/gallery/workflow.md) · [rendered](docs/examples/gallery/workflow.html) |
+| <a href="docs/examples/gallery/analysis.html"><img src="docs/examples/gallery/analysis.png" alt="An analysis rendered in the analysis template" width="400"></a><br>**`--type analysis`** · explaining until understood<br>[source](docs/examples/gallery/analysis.md) · [rendered](docs/examples/gallery/analysis.html) | <a href="docs/examples/gallery/spec.html"><img src="docs/examples/gallery/spec.png" alt="A specification rendered in the spec template" width="400"></a><br>**`--type spec`** · pinning behaviour precisely<br>[source](docs/examples/gallery/spec.md) · [rendered](docs/examples/gallery/spec.html) |
+| <a href="docs/examples/gallery/design-system.html"><img src="docs/examples/gallery/design-system.png" alt="Design tokens rendered in the design-system template" width="400"></a><br>**`--type tokens`** · colours, type and components<br>[source](docs/examples/gallery/design-system.md) · [rendered](docs/examples/gallery/design-system.html) | <a href="docs/examples/gallery/module-map.html"><img src="docs/examples/gallery/module-map.png" alt="A system map rendered in the module-map template" width="400"></a><br>**`--type map`** · how parts connect<br>[source](docs/examples/gallery/module-map.md) · [rendered](docs/examples/gallery/module-map.html) |
+| <a href="docs/examples/gallery/slide-deck.html"><img src="docs/examples/gallery/slide-deck.png" alt="A deck rendered in the slide-deck template" width="400"></a><br>**`--type deck`** · presented rather than read<br>[source](docs/examples/gallery/slide-deck.md) · [rendered](docs/examples/gallery/slide-deck.html) | <a href="docs/examples/gallery/dashboard.html"><img src="docs/examples/gallery/dashboard.png" alt="A programme dashboard rendered in the dashboard template" width="400"></a><br>**`--style dashboard`** · a rolling status page<br>[source](docs/examples/gallery/dashboard.md) · [rendered](docs/examples/gallery/dashboard.html) |
+| <a href="docs/examples/gallery/plain.html"><img src="docs/examples/gallery/plain.png" alt="Prose rendered in the plain template" width="400"></a><br>**`--style plain`** · no template CSS at all<br>[source](docs/examples/gallery/plain.md) · [rendered](docs/examples/gallery/plain.html) | |
+
+**`dashboard` and `plain` have no `--type`** and are reachable only through `--style`. Everything
+else in the table is both.
+
+Want the component set instead of a realistic document? [`docs/rendered-styles/`](docs/rendered-styles/)
+renders every template from one fixture that exercises every typed block, so each page shows its
+template's full vocabulary.
 
 ## Features
 
