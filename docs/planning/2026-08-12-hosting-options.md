@@ -7,18 +7,6 @@ owner decision pending | note
 live exposure found | blocked
 ```
 
-```callout
-warn | Found during review: two PRIVATE repos are serving their whole docs trees publicly, today
-Measured 2026-08-12, unauthenticated probes. `3D-Stories/rawgentic` (repo visibility
-PRIVATE, 510 files under docs/) and `3D-Stories/3dstories-studio` (PRIVATE, 170 files)
-both have Pages enabled with `public: true` — review reports, measurement CSVs and a
-container-security-posture document all answer HTTP 200 to a bare curl. This predates this
-design and is exactly the hazard the eligibility rule below exists to catch. These two
-repos are the FIRST inputs to that gate, and whether each stays served is the owner's
-call — options: make the repo public deliberately, disable Pages, or prune what docs/
-carries.
-```
-
 ## Why move: the custody chain
 
 Every design doc in this workspace already ships as a committed `.md` + `.html` pair inside
@@ -31,13 +19,27 @@ URL from the repo's history. That is the custody-chain break this document desig
 construction, not by a one-shot check.
 
 ```callout
+warn | Found during review: two PRIVATE repos are serving their whole docs trees publicly, today
+Measured 2026-08-12, unauthenticated probes. `3D-Stories/rawgentic` (repo visibility
+PRIVATE, 510 files under docs/) and `3D-Stories/3dstories-studio` (PRIVATE, 170 files)
+both have Pages enabled with `public: true` — review reports, measurement CSVs and a
+container-security-posture document all answer HTTP 200 to a bare curl. This predates this
+design and is exactly the hazard the eligibility rule below exists to catch. These two
+repos are the FIRST inputs to that gate, and whether each stays served is the owner's
+call — options: make the repo public deliberately, disable Pages, or prune what docs/
+carries. The served-folder rule below (owner decision, PR #22 review round) exists so a
+mistake of this shape can never again expose more than one deliberately-curated folder.
+```
+
+```callout
 info | Evidence: Pages serves the committed bytes faithfully — measured, with its scope stated
 Measured 2026-08-12 on `3D-Stories/rawgentic`: the live
 `3d-stories.github.io/rawgentic/workflow-diagram.html` is **byte-identical** to
 `origin/main:docs/workflow-diagram.html` (both sha256 `af7d74c5…9659c0d`). Scope of this
-evidence: one file, one repo, with `docs/.nojekyll` present (§1) — it proves fidelity of
-the serving path, and it does NOT bless the configuration it was measured on: that repo is
-private and should not be serving publicly at all (see the exposure callout above).
+evidence: one file, one repo, on the legacy build with `docs/.nojekyll` present — it
+proves fidelity of the serving path, and it does NOT bless the configuration it was
+measured on: that repo is private and should not be serving publicly at all (see the
+exposure callout above).
 ```
 
 ## Freshness: what "the diagram is stale" actually was
@@ -53,76 +55,109 @@ Lesson for this design: a hosting migration fixes custody, not freshness. Freshn
 the status-surface convention already states), and the README documentation list in §3 is
 the surface that makes a missed update visible.
 
-## 1. Doc hosting: how the committed HTML gets served
+## 0. The generic shape: hosting is a configured backend
+
+Owner decision (PR #22 review round): the plugin must stay usable by ANYBODY, so this
+design does not replace one hardcoded host with another. The plugin's identity is the
+contract, not the host: **render → lint → deliver → prove the served bytes equal the
+committed bytes**. Any backend that can satisfy that verify step is a valid path.
+
+- **Stages 1–3 (render, name, lint) are shared** across every backend — they already run
+  with no account of any kind.
+- **Stages 4–7 (eligibility, deliver, verify, index) dispatch per backend.**
+- The backend is chosen in the plugin's own configuration (the same file `setup.py`
+  manages today), with a per-repo override so one machine can publish personal docs to
+  Pages and a work repo to nothing at all. The manifest (§2) records each doc's canonical
+  URL, so the index never cares which backend served a row.
 
 ```options
-Pages, legacy build from main:/docs | Zero per-repo build config — one settings toggle; serves exactly what merges; fidelity of the serving path measured live | Serving waits on an async Pages build after merge; soft limit of 10 branch builds per hour per site; ONE bad file fails the whole site build, so blast radius is the site, not the doc; no live preview before merge | chosen
-Pages, Actions deploy | Deploy step is visible and gate-able in CI; exempt from the 10-builds-per-hour soft limit; can re-lint and preview-artifact in the workflow | A workflow file to roll out and maintain in every repo; needs pages:write + id-token:write permissions; more moving parts for the same bytes |
-Status quo: Vercel per-doc projects | Already built and verified; instant alias and pre-merge preview URL; per-doc blast radius; hosting survives repo deletion | Custody chain broken by design (separate copy); one Vercel project per doc (~37 already, measured on #12); team-scope pinning and SSO-wall failure modes are permanent carrying costs | rejected
+vercel | Zero repo requirements; instant pre-merge preview URL; per-doc blast radius; today's working default — existing users keep working with no action | Custody chain broken by design (a separate copy is served); one project per doc; team-scope pin and SSO-wall carrying costs; auto-alias truncates project names past ~35 chars (measured live 2026-08-12) | rejected
+pages-actions: Actions deploy of ONE designated folder | Serves exactly the folder you name (e.g. docs/public/) — publishing is an explicit placement, a stray file is never served; no Jekyll, so no .nojekyll hazard and no whole-site failure; exempt from the 10-builds-per-hour limit; can attach the rendered page as a PR preview artifact | A small workflow file per repo (three lines when it references one org-level reusable workflow); needs pages:write + id-token:write; serving still waits on the post-merge run | chosen
+pages-legacy: branch build of /docs or root | Zero per-repo build config — one settings toggle; the rawgentic diagram proves the serving path today | GitHub allows ONLY the repo root or /docs as the source — a chosen subfolder is impossible, so committing under docs/ IS publishing, all 510 files of it; Jekyll runs unless docs/.nojekyll exists, and one bad Liquid file fails the WHOLE site; 10 builds/hour soft limit |
+none: render and commit only | No account, no egress, no hosting — the committed pair is the deliverable; the right floor for repos whose docs must not be served | No live URL at all; readers open the committed .html locally |
 ```
 
-**Two preconditions for Option A, both load-bearing.** First: `docs/.nojekyll` must exist
-before Pages is enabled. The legacy build IS the Jekyll build; without that file Jekyll
-processes the tree, and six committed markdown files in `rawgentic/docs` alone carry
-Liquid syntax (`{{`/`{%`) that would fail the WHOLE site build. Both live sites carry the
-file today, which is why the fidelity evidence above holds. Second: the served scope is
-the **entire `docs/` directory** — committing under `docs/` IS publishing under Option A.
-Review reports, measurements, session notes: everything there is served. Audience is
-therefore a property of the DIRECTORY, not of any manifest or index — a repo either keeps
-`docs/` fully publishable or does not enable Pages.
-
-**What replaces the pre-merge preview.** Vercel gave the author a live URL before the PR
-existed. Under Option A nothing serves until after merge, so review happens on the
-committed `.html` — opened locally (`file://` or a one-line local server), or attached as
-a PR CI artifact if a repo wants a click-through. This loss is real and is the row most
-likely to matter to the owner; it is stated here rather than discovered later.
-
-**URL scheme (both Pages options).** A doc at `docs/planning/<file>.html` serves at
-`https://<owner>.github.io/<repo>/planning/<file>.html` — the `/docs` prefix is the served
-root. `<owner>` is a **per-repo fact**, not a workspace constant: most projects live under
-`3D-Stories`, but e.g. `daimonia` and `xtoys` live under `crandrosoff` (measured). Stable
-identity moves from a minted Vercel project name to **repo + committed path**, which is
-exactly the custody property we want. The `{project}-{purpose}-{ref}` naming convention
-survives as the index key and the recommended file slug. Accepted residual (peer finding,
-now recorded): a repo rename, transfer, or default-branch change breaks every URL under
-it — the manifest's stable ids and redirect entries cover *document* renames only, and
-URL permanence beyond that would need a custom domain, which this design does not build.
-
-**How the byte-identity verify carries over.** Stage 6's contract ("the URL serves exactly
-the bytes just published") transfers intact and gets stronger: the comparison target is the
-committed blob on `main`, so the check proves custody, not just delivery. The mechanics
-change in three named ways. (1) Verify runs **after merge**: the publishing session (the
-same actor that runs `publish_doc.py` today — a WF2/WF3 run or the owner) runs a
-`verify-published` command post-merge; a repo may additionally wire it as a docs-verify
-Action, but the session-run command is the baseline so Option A carries no mandatory
-workflow file. (2) The wait loop polls the Pages build API
-(`GET /repos/{owner}/{repo}/pages/builds/latest` until `status: built` for the merged
-SHA) on a budget that must EXCEED the 10-minute build ceiling — today's ~25s stage-6
-budget does not transfer. (3) **The merge is the publication trigger, never its
-completion** — a doc is pending until its verify passes, and pending has a concrete home:
-the docs-index lists a row only after its verify passes, so an unverified doc is visibly
-absent, and a failed or delayed build is the verify command's reported failure, never a
-silent success. Scope note (qwen finding): this verify path applies to **publicly served**
-Pages only — every option chosen here serves publicly or routes to Confluence. An
-access-controlled Enterprise Pages site answers with a login redirect, which the verifier
-already refuses; verifying one would need an authenticated fetch this design deliberately
-does not build.
+**Why the stances land there for THIS workspace.** `vercel` is rejected as this
+workspace's doc host by the custody argument — but it remains a fully supported backend,
+because it is the current install base and the only path with a pre-merge live preview.
+`pages-legacy` is not rejected generically — a public repo that already serves `/docs` and
+wants zero setup is a legitimate user — but its cons row is exactly the whole-tree
+property the owner declined, so it is not chosen here. `pages-actions` is the chosen
+backend for this workspace, and the served folder is the point:
 
 ```callout
-warn | The private-repo caveat — the axis is PUBLIC vs NOT-PUBLIC, never personal vs work
+info | The served-folder rule (owner decision, PR #22 review round)
+The whole docs/ tree is NOT served. One designated folder is (default `docs/public/`,
+configurable per repo). The publishable `.md` + `.html` pair LIVES in that folder and only
+there — one copy, no sync step, no drift. Everything else under docs/ (reviews,
+measurements, planning notes, session records) stays unserved. Publishing a doc IS the PR
+that places its pair in the folder and adds its manifest row — an explicit, reviewable
+act. This replaces the serving-side role of today's stage-5 asset allowlist: nothing
+reaches the served folder except what a reviewed PR deliberately put there.
+```
+
+## 1. The chosen path in detail (pages-actions)
+
+**Delivery.** One org-level reusable workflow does the deploy; each repo's own workflow
+file is three lines referencing it. Trigger: push to the default branch filtered on the
+served folder's path. Steps: `configure-pages` → `upload-pages-artifact` with
+`path: docs/public` → `deploy-pages` (permissions `pages: write`, `id-token: write` — the
+canonical shape in `actions/starter-workflows/pages/static.yml`). Jekyll never runs; the
+artifact is served raw.
+
+**URL scheme.** A doc at `docs/public/<file>.html` serves at
+`https://<owner>.github.io/<repo>/<file>.html`. `<owner>` is a **per-repo fact**, not a
+workspace constant: most projects live under `3D-Stories`, but e.g. `daimonia` and
+`xtoys` live under `crandrosoff` (measured). Stable identity moves from a minted Vercel
+project name to **repo + committed path**. The `{project}-{purpose}-{ref}` naming
+convention survives as the index key and the recommended file slug. Accepted residual
+(peer finding, recorded): a repo rename, transfer, or default-branch change breaks every
+URL under it — the manifest's stable ids and redirect entries cover *document* renames
+only, and URL permanence beyond that would need a custom domain, which this design does
+not build.
+
+**How the byte-identity verify carries over.** Stage 6's contract ("the URL serves exactly
+the bytes just published") transfers intact and gets stronger: the comparison target is
+the committed blob on `main`, so the check proves custody, not just delivery. The
+mechanics, in three named parts. (1) Verify runs **after merge**: the publishing session
+(the same actor that runs `publish_doc.py` today — a WF2/WF3 run or the owner) runs a
+`verify-published` command post-merge; the deploy workflow's own completion is the wake
+signal, and a repo may add a verify job inside the workflow itself. (2) The wait budget is
+bounded by the deploy workflow's runtime plus propagation — and must comfortably exceed
+today's ~25-second stage-6 budget, which does not transfer (the pages-legacy backend
+instead polls `GET /repos/{owner}/{repo}/pages/builds/latest` past its 10-minute build
+ceiling). (3) **The merge is the publication trigger, never its completion** — a doc is
+pending until its verify passes, and pending has a concrete home: the docs-index lists a
+row only after its verify passes, so an unverified doc is visibly absent, and a failed or
+delayed deploy is the verify command's reported failure, never a silent success. Scope
+note (qwen finding): this verify path applies to **publicly served** Pages only — an
+access-controlled Enterprise Pages site answers with a login redirect, which the verifier
+already refuses.
+
+**What replaces the pre-merge preview.** Vercel gave the author a live URL before the PR
+existed. Under any Pages backend nothing serves until after merge, so review happens on
+the committed `.html` — opened locally, or attached by the deploy workflow's PR-run as a
+CI artifact. This loss is real and stated here rather than discovered later. A setup that
+cannot live without pre-merge preview keeps the `vercel` backend — that is what generic
+means.
+
+```callout
+warn | The eligibility gate — the axis is PUBLIC vs NOT-PUBLIC, never personal vs work
 GitHub's own docs: Pages is available for PUBLIC repos on Free, and for public AND private
 repos on Pro/Team/Enterprise. But access-controlled (privately visible) Pages sites require
 **GitHub Enterprise Cloud**. Below that plan, a private repo's Pages site is **public to
 the whole internet** — which is not a hypothetical: it is the measured state of two repos
-in this workspace today (top of page). Fail CLOSED: eligibility is the PAIR of facts
+in this workspace today (top of page). The served-folder rule shrinks the blast radius of
+a mistake; it does NOT change this gate. Fail CLOSED: eligibility is the PAIR of facts
 `repo.visibility == public` OR `pages.public == false` (access control confirmed) — read
 from the API, never inferred from who owns the repo. A private repo is ineligible until
 the owner explicitly flips it public or approves the exposure, whether it is a personal
-project or a work mirror. A later visibility or plan change can expose a site while
-nothing publishes, so eligibility is re-checked on a SCHEDULE (a small daily workflow
-where the index lives), and again at every index rebuild (qwen finding: coupling the check
-to publish events alone leaves a downgraded repo exposed until the next unrelated
-publish).
+project or a work mirror (`chorestory` and `saystory` are private personal repos today
+and are treated exactly like work repos until then). A later visibility or plan change
+can expose a site while nothing publishes, so eligibility is re-checked on a SCHEDULE (a
+small daily workflow where the index lives), and again at every index rebuild (qwen
+finding: coupling the check to publish events alone leaves a downgraded repo exposed
+until the next unrelated publish).
 ```
 
 ```callout
@@ -134,7 +169,7 @@ published HTML stays script-inert beyond the renderer's own inline behavior — 
 gate already enforces.
 ```
 
-### Publish flow today (Vercel) — for comparison
+### Publish flow today (vercel backend) — for comparison
 
 ```nodes
 publish_doc.py
@@ -145,25 +180,26 @@ publish_doc.py
   commit + PR | the SAME bytes, on their own separate track | AC6
 ```
 
-### Publish flow, Option A (Pages legacy) — proposed
+### Publish flow, pages-actions (chosen) — proposed
 
 ```nodes
 publish_doc.py
   render + lint | stages 1-3 unchanged, still local, still gated
-    commit + PR + merge | the pair lands on main — the merge IS the deploy | ~
-      Pages build | GitHub builds main:/docs; poll builds/latest past the 10-min ceiling | ~
-        verify-published | run by the publishing session; byte-compare vs the committed blob | ~
-          index refresh | row appears only after verify passes — pending = absent | ~
+    place the pair in docs/public/ | publishing IS this placement, inside the PR | ~
+      merge | the reviewed pair lands on main | ~
+        deploy workflow | upload-pages-artifact serves ONLY the designated folder | ~
+          verify-published | run by the publishing session; byte-compare vs the committed blob | ~
+            index refresh | row appears only after verify passes — pending = absent | ~
 ```
 
-### Publish flow, Option B (Pages via Actions) — proposed
+### Publish flow, pages-legacy — supported, not chosen here
 
 ```nodes
-merge to main
-  docs-deploy workflow | triggers on docs/** path filter | push event ~
-    upload-pages-artifact | packages the docs tree | ~
-      deploy-pages | pages:write + id-token:write, exempt from build soft limit | ~
-        verify job | same byte-identity fetch, inside the workflow run | ~
+publish_doc.py
+  render + lint | stages 1-3 unchanged
+    commit + PR + merge | the pair lands anywhere under docs/ — ALL of docs/ is served | ~
+      Pages build | Jekyll unless docs/.nojekyll; poll builds/latest past the 10-min ceiling | ~
+        verify-published | same byte-identity contract | ~
 ```
 
 **Limits that matter (official docs, fetched 2026-08-12):** published site max 1 GB; soft
@@ -174,8 +210,7 @@ largest doc pages here are single-digit MB.
 
 The split below is about **where readers look**, never about what may be served — serving
 eligibility is §1's public/not-public gate, and it applies identically to personal and
-work repos. A private personal repo (`chorestory` and `saystory` are both private today)
-is treated exactly like a work repo until the owner flips it public.
+work repos.
 
 ```options
 Public-eligible repos: keep the Vercel docs-index, rows link into github.io | No new hosting; the index page and its verify loop already exist; one-line change per row target | Keeps one Vercel project alive after the docs leave — so the vercel CLI, its team-scope pin and its SSO-wall failure mode stay in the loop for the index alone | chosen
@@ -186,21 +221,20 @@ A Pages-hosted index (owner site or dedicated repo) | Zero external dependencies
 **Derivation, all options — from the manifest, and ONLY the manifest.** The index is
 derived, never hand-edited (the #125 rule survives). Each repo commits a small
 `docs/publications.json`: one entry per published doc — stable id, title, purpose, source
-path, HTML path, audience, canonical URL. The index reads manifests and nothing else: the
-GitHub API's only job is to LOCATE manifests (which repos have one) — it is never a second
-derivation source, and no `docs/**/*.html` scan exists anywhere (one source, so the three
-consumers cannot disagree). A rename is an explicit redirect entry instead of a silent
-identity change, and the README table (§3) generates from the same rows. To be precise
-about what the manifest governs (final-review finding): it governs what is **indexed**.
-Under Option A the server serves the whole `docs/` tree regardless — a stray HTML file
-never self-INDEXES, but it is still served, which is why §1 makes audience a property of
-the directory. **Freshness:** rebuilt in the same post-merge step that verifies the doc
-(option a), by the Actions job itself (option b), or on `repository_dispatch` (option c).
-**The stage-7 anti-race check has a successor:** today's guard compares the built index
-against a live `vercel project ls` count; its replacement invariant is "every index row
-equals a manifest entry at the commit the rebuild enumerated" — the source is versioned
-data, so an interleaved publisher's row is picked up by the next rebuild rather than
-silently lost, and the rebuild reports the SHAs it read.
+path, HTML path, audience, canonical URL, **and the backend that serves it**. The index
+reads manifests and nothing else: the GitHub API's only job is to LOCATE manifests (which
+repos have one) — it is never a second derivation source, and no `docs/**/*.html` scan
+exists anywhere (one source, so the three consumers cannot disagree). A rename is an
+explicit redirect entry instead of a silent identity change, and the README table (§3)
+generates from the same rows. Under the served-folder rule the manifest and the folder say
+the same thing two ways, and the PR-CI check (§3) fails a PR where they disagree.
+**Freshness:** rebuilt in the same post-merge step that verifies the doc (option a), by
+the Actions job itself (option b), or on `repository_dispatch` (option c). **The stage-7
+anti-race check has a successor:** today's guard compares the built index against a live
+`vercel project ls` count; its replacement invariant is "every index row equals a manifest
+entry at the commit the rebuild enumerated" — the source is versioned data, so an
+interleaved publisher's row is picked up by the next rebuild rather than silently lost,
+and the rebuild reports the SHAs it read.
 
 **The custody rule for Confluence.** The repo stays the document of record, always. For
 repos Pages cannot serve, the Confluence page carries the content too — a **labeled
@@ -218,7 +252,7 @@ hand-written prose:
     <!-- docs-list:begin -->
     | Doc | Purpose | Source | Live |
     | --- | ------- | ------ | ---- |
-    | Hosting options | design | docs/planning/2026-08-12-hosting-options.md | (URL) |
+    | Hosting options | design | docs/public/2026-08-12-hosting-options.md | (URL) |
     <!-- docs-list:end -->
 
 **The rule that keeps it fresh:** the row is added or updated **inside the same PR that
@@ -227,36 +261,37 @@ status-surface convention applied to documentation, and it is the process fix fo
 freshness gap measured in the rawgentic diagram (a REV convention with no visible surface
 drifted five releases; a README table makes the same drift visible in review).
 Enforcement lives in **PR CI** (final-review correction: once the merge is the publish,
-a publish-time refusal has nothing left to refuse) — a check that fails the PR when a doc
-under `docs/` changes without its manifest row and README row.
+a publish-time refusal has nothing left to refuse) — a check that fails the PR when the
+served folder changes without its manifest row and README row, or vice versa.
 
 ## 4. Plugin impact and the retirement of vercel.app URLs
 
-Stage-by-stage, for the chosen options:
+Stage-by-stage. Stages 1–3 stay one shared implementation; stages 4–7 become the backend
+interface, and each backend implements the four:
 
 ```nodes
 publish_doc.py
-  stages 1-3 | render, name, lint — unchanged, still refuse before any network call
-  stage 4 | becomes the eligibility PAIR: repo.visibility + pages.public, fail closed | gh api
-  stage 5 | replaced by the PR merge; the asset allowlist moves to PR CI (see below) | ~
-  stage 6 | verify-published: post-merge, poll past the build ceiling, byte-compare | ~
-  stage 7 | index refresh per section 2, manifest-derived | ~
+  stages 1-3 | render, name, lint — shared, unchanged, refuse before any network call
+  stage 4 eligibility | vercel: project inspect · pages: the visibility/public PAIR, fail closed · none: always | backend
+  stage 5 deliver | vercel: CLI deploy · pages-actions: place pair in the served folder · legacy: commit under docs/ · none: commit | backend
+  stage 6 verify | ONE shared contract: byte-identity vs the committed blob, per-backend wait strategy | backend
+  stage 7 index | manifest-derived rows, per audience (section 2) | backend
 setup.py
-  checks | ADDS gh auth + Pages eligibility; KEEPS the vercel checks while the index stays on Vercel | ~
+  checks | per configured backend: gh auth + Pages eligibility, or the existing vercel checks, or nothing for none | ~
 build_index.py
   source | manifests located via the GitHub API replace vercel project ls | ~
 ```
 
-**What goes, what stays, what grows (final-review correction — the first draft claimed the
-whole security surface "disappears", which was wrong in both directions).** Goes: the
-duplicate-project minting hazard (stages 4-5's hardest-won code) — there is no project to
-mint. Stays: the team-scope pin and the SSO-wall failure mode, exactly as long as the
-docs-index remains a Vercel project (§2 option a keeps `refresh_index`'s CLI call and its
-pinned scope). Grows: `stage_assets` is today the gate that refuses shipping a non-image
-reference — the measured `.env`/`credentials.json` case — and under Pages every file under
-`docs/` is served whatever its suffix, so that allowlist has NO serving-side equivalent.
-Its successor is the PR-CI check on the `docs/` diff (§3), plus §1's rule that a repo
-either keeps `docs/` fully publishable or does not enable Pages.
+**What goes, what stays, what grows (final-review correction — an earlier draft claimed
+the whole security surface "disappears", which was wrong in both directions).** Goes, on
+Pages backends: the duplicate-project minting hazard — there is no project to mint. Stays:
+the team-scope pin and the SSO-wall failure mode, for every setup that keeps a `vercel`
+backend or the Vercel docs-index (§2 option a keeps `refresh_index`'s CLI call and its
+pinned scope). Grows, then shrinks: `stage_assets` is today the gate that refuses shipping
+a non-image reference — the measured `.env`/`credentials.json` case — and a served TREE
+has no serving-side equivalent; the served-FOLDER rule closes most of that gap (nothing is
+served that a reviewed PR did not place), and the PR-CI check on the served folder's diff
+(§3) is the explicit successor.
 
 **Existing vercel.app URLs (~37 projects).** Retirement is evidence-gated and ordered so
 no reader ever holds a dead link (final-review corrections applied): (1) publish and
@@ -275,7 +310,18 @@ every destination verified live and the docs-index carrying zero vercel.app rows
 codex peer consult | done
 qwen adversarial review | done
 opus final review | done
+owner review round 1 | done
 ```
+
+**Owner review round 1 (PR #22, 2026-08-12).** Two directions, both applied. First: do
+NOT serve the whole `docs/` tree — a designated folder is served, and it must exist as an
+explicit thing. That requirement is impossible on the legacy build (root or `/docs` only),
+so it flipped the chosen backend from pages-legacy to pages-actions and produced the
+served-folder rule (§0). Second: the plugin must stay generic — several paths, picked by
+each user's setup — which produced the backend model in §0 (`vercel`, `pages-actions`,
+`pages-legacy`, `none`, sharing stages 1–3 and the byte-identity verify contract). The
+owner also named the workspace-wide documentation inconsistency as its own problem;
+that is filed as a separate rawgentic issue, not solved here.
 
 **Codex peer consult (gpt-5.6-sol, 2026-08-12, report:
 `docs/reviews/peer-2026-08-12-hosting-options-2026-08-12.md`).** Adopted: the
@@ -288,7 +334,7 @@ fan-in, and a scheduled reconciliation fleet — right for a many-team platform,
 proportion for ~37 documents with one owner; the post-merge verify plus manifest-derived
 index covers the same failure classes at this scale, and the catalog repo remains §2
 option (c) if the personal side ever drops Vercel entirely. The rename/transfer risk the
-peer raised is now RECORDED (§1) as an accepted residual rather than silently dropped.
+peer raised is RECORDED (§1) as an accepted residual rather than silently dropped.
 
 **Qwen adversarial review (qwen3.8-max-preview, 2026-08-12, report:
 `docs/reviews/2026-08-12-hosting-options-md-2026-08-12.md`; 1 High, 2 Medium).** Adopted:
@@ -304,19 +350,19 @@ the top of this page.
 **Opus final review (2026-08-12; 2 Critical, 6 High, 6 Medium, 3 Low — all 17
 dispositioned).** Its lead finding was VERIFIED INDEPENDENTLY before anything was acted
 on: the two private repos serving publicly (exposure callout, top of page). Applied: the
-evidence callout now states its own scope and the violation it sits on (C1); the
-recommendation axis is public/not-public, never personal/work (C2); manifest wording
-corrected to self-INDEXES with the served-tree consequence stated (H1); the redirect step
-moved outside the lint gate, with the gate's refusal executed and quoted (H2); the
-security-surface claim replaced by goes/stays/grows (H3); the post-merge verify got a
-named runner and pending got a concrete home — absence from the index (H4);
-`docs/.nojekyll` is a stated precondition and whole-site build failure a stated con (H5,
-count corrected to six Liquid files); the pre-merge preview loss is acknowledged with its
-replacement (H6); one derivation source (M1); the poll budget must exceed the build
-ceiling (M2); verify-before-switch ordering (M3); the eligibility pair read from the API
-(M4); the anti-race successor invariant named (M5); the rename residual recorded (M6);
-`<owner>` made per-repo (L1); README enforcement moved to PR CI (L2); the evidence scoped
-(L3).
+evidence callout states its own scope and the violation it sits on (C1); the
+recommendation axis is public/not-public, never personal/work (C2); the served-tree
+consequence is stated wherever the manifest is discussed (H1 — now largely superseded by
+the served-folder rule); the redirect step moved outside the lint gate, with the gate's
+refusal executed and quoted (H2); the security-surface claim replaced by goes/stays/grows
+(H3); the post-merge verify got a named runner and pending got a concrete home — absence
+from the index (H4); `.nojekyll` and whole-site build failure are stated as pages-legacy
+properties (H5, count corrected to six Liquid files); the pre-merge preview loss is
+acknowledged with its replacement and with the vercel backend as the keep-preview path
+(H6); one derivation source (M1); the wait budget must exceed the backend's ceiling (M2);
+verify-before-switch ordering (M3); the eligibility pair read from the API (M4); the
+anti-race successor invariant named (M5); the rename residual recorded (M6); `<owner>`
+made per-repo (L1); README enforcement moved to PR CI (L2); the evidence scoped (L3).
 
 Research notes: GitHub Pages limits, plan availability, and access-control gating fetched
 from official GitHub docs 2026-08-12. Confluence pipeline options surveyed via Exa (REST
@@ -327,8 +373,8 @@ returned no matching rows for the Pages deploy workflow; the canonical
 ## Recommendation
 
 ```verdict
-ship | Option A (Pages legacy main:/docs) for doc hosting, gated per repo on the PUBLIC/NOT-PUBLIC pair — never on personal vs work. Eligible today: public repos only (13 of 51 in 3D-Stories; a private repo becomes eligible only when the owner deliberately flips it public). Index split by where readers look: the existing Vercel docs-index for public-eligible repos, a Confluence index+mirror for everything Pages cannot serve. README Documentation sections everywhere, generated from the per-repo manifest, updated inside each issue's own PR, enforced in PR CI.
-risk | Two private repos are serving publicly TODAY (top of page) — that decision precedes any migration work. One bad file under docs/ fails a whole site's Jekyll-legacy build, so docs/.nojekyll is a precondition. Serving waits on an async Pages build, so the verify poll budget must exceed the 10-minute ceiling. Pre-merge preview is lost and replaced by the committed .html. A repo rename still breaks its URLs — accepted residual.
+ship | Make hosting a configured backend with one shared contract (render, lint, byte-identity verify): vercel stays supported as the zero-setup path with pre-merge preview; pages-actions serves ONE designated folder (default docs/public/) and is this workspace's choice; pages-legacy remains for public repos that accept whole-tree serving; none covers repos whose docs must not be served. Eligibility for any Pages backend is the public/not-public pair, per repo. Index split by where readers look: the Vercel docs-index for public-eligible repos, Confluence index+mirror otherwise. README Documentation sections everywhere, generated from the per-repo manifest, updated inside each issue's own PR, enforced in PR CI.
+risk | Two private repos are serving publicly TODAY (top of page) — that decision precedes any migration work, and the served-folder rule only shrinks future blast radius. Serving on Pages backends waits on a post-merge run, and pre-merge preview exists only on the vercel backend. A repo rename still breaks its URLs — accepted residual. The backend abstraction is the largest plugin change in this design: stages 4-7 become an interface, and that is an epic, not an issue.
 ```
 
 ```provenance
