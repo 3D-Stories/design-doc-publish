@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Docs hosting: Vercel to GitHub Pages</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+.blk-options{display:flex;flex-wrap:wrap;gap:12px}
+.blk-options .blk-opt{flex:1 1 220px;background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:12px 14px}
+.blk-options .is-chosen{border-color:var(--accent);border-width:2px}
+.blk-options .is-rejected{opacity:.72}
+.blk-options .blk-title{display:block;font-weight:700;margin-bottom:6px}
+.blk-options .blk-for,.blk-options .blk-against{display:block;font-size:13px}
+/* #134 — the stance label is MARKUP now (`_options` emits `.blk-lbl`), not `content:"+ "`/`"- "`
+   on a pseudo-element. Generated content is not dependable semantic markup, and keeping a copy
+   here beside the real one would both drift and double-announce. A word also beats a bare sign at
+   a glance and does not lean on colour alone — the argument `design.py` had already made for its
+   own labels. Styled, never hidden: with the glyphs gone, hiding this leaves no stance signal.
+
+   The gap between label and prose is a REAL SPACE in the markup, not a margin here. The old
+   `content:"+ "` carried its own trailing space; an early version of this dropped it and leaned on
+   `margin-right`, which separates the label visually while leaving the DOM text fused as
+   "Forfewest files" — so text extraction, copy-paste, and any consumer that concatenates text nodes
+   got the exact failure this change exists to prevent. One space does both jobs, so there is no
+   margin here to keep in sync with it. Found twice independently: in a browser, and by review. */
+.blk-options .blk-lbl{font-weight:700}
+.blk-options .blk-for .blk-lbl{color:var(--req-c)}
+.blk-options .blk-against .blk-lbl{color:var(--sev-high)}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-12 10:07 MDT</div>
+<h1>Docs hosting: Vercel to GitHub Pages</h1>
+
+</header>
+<main>
+<div class="blk blk-chips"><span class="blk-chip is-wip">design options</span><span class="blk-chip is-note">nothing implemented</span><span class="blk-chip is-note">owner decision pending</span><span class="blk-chip is-blocked">live exposure found</span></div>
+<div class="blk blk-callout"><div class="blk-callout is-warn"><div class="blk-title">Found during review: two PRIVATE repos are serving their whole docs trees publicly, today</div><p>Measured 2026-08-12, unauthenticated probes. <code>3D-Stories/rawgentic</code> (repo visibility
+PRIVATE, 510 files under docs/) and <code>3D-Stories/3dstories-studio</code> (PRIVATE, 170 files)
+both have Pages enabled with <code>public: true</code> — review reports, measurement CSVs and a
+container-security-posture document all answer HTTP 200 to a bare curl. This predates this
+design and is exactly the hazard the eligibility rule below exists to catch. These two
+repos are the FIRST inputs to that gate, and whether each stays served is the owner&#x27;s
+call — options: make the repo public deliberately, disable Pages, or prune what docs/
+carries.</p></div></div>
+<h2>Why move: the custody chain</h2>
+<p>Every design doc in this workspace already ships as a committed <code>.md</code> + <code>.html</code> pair inside its own repo. The Vercel deploy then publishes a <strong>separate copy</strong> of those bytes from a temp directory (<code>publish_doc.py</code> stage 5). The served page and the committed page are only provably the same at the moment stage 6 verifies them — after that, nothing ties them together. A re-deploy, a stale alias, or a project rename can silently decouple the public URL from the repo&#x27;s history. That is the custody-chain break this document designs away: <strong>the repo should BE the host</strong>, so the served bytes are the committed bytes by construction, not by a one-shot check.</p>
+<div class="blk blk-callout"><div class="blk-callout is-info"><div class="blk-title">Evidence: Pages serves the committed bytes faithfully — measured, with its scope stated</div><p>Measured 2026-08-12 on <code>3D-Stories/rawgentic</code>: the live
+<code>3d-stories.github.io/rawgentic/workflow-diagram.html</code> is <strong>byte-identical</strong> to
+<code>origin/main:docs/workflow-diagram.html</code> (both sha256 <code>af7d74c5…9659c0d</code>). Scope of this
+evidence: one file, one repo, with <code>docs/.nojekyll</code> present (§1) — it proves fidelity of
+the serving path, and it does NOT bless the configuration it was measured on: that repo is
+private and should not be serving publicly at all (see the exposure callout above).</p></div></div>
+<h2>Freshness: what &quot;the diagram is stale&quot; actually was</h2>
+<p>The owner observed the workflow diagram &quot;hasn&#x27;t been updated in forever&quot;. Measured: the <strong>hosting is not the stale part</strong>. The live copy exactly matches <code>main</code> (above), and <code>main</code> last touched the file 2026-08-10 (<code>b29135be</code>). What IS stale is the content: the diagram&#x27;s newest REV entry says <strong>plugin 3.158.0</strong> while <code>origin/main</code> declares <strong>3.163.0</strong> — five releases with no REV entry, despite the rev-diagram convention requiring a decision per PR.</p>
+<p>Lesson for this design: a hosting migration fixes custody, not freshness. Freshness is a <strong>process</strong> property — content updates must ride inside each issue&#x27;s own PR (the same rule the status-surface convention already states), and the README documentation list in §3 is the surface that makes a missed update visible.</p>
+<h2>1. Doc hosting: how the committed HTML gets served</h2>
+<div class="blk blk-options dz-options"><div class="blk-opt is-chosen"><span class="blk-title">Pages, legacy build from main:/docs</span><span class="blk-for"><span class="blk-lbl">For</span> Zero per-repo build config — one settings toggle; serves exactly what merges; fidelity of the serving path measured live</span><span class="blk-against"><span class="blk-lbl">Against</span> Serving waits on an async Pages build after merge; soft limit of 10 branch builds per hour per site; ONE bad file fails the whole site build, so blast radius is the site, not the doc; no live preview before merge</span></div><div class="blk-opt"><span class="blk-title">Pages, Actions deploy</span><span class="blk-for"><span class="blk-lbl">For</span> Deploy step is visible and gate-able in CI; exempt from the 10-builds-per-hour soft limit; can re-lint and preview-artifact in the workflow</span><span class="blk-against"><span class="blk-lbl">Against</span> A workflow file to roll out and maintain in every repo; needs pages:write + id-token:write permissions; more moving parts for the same bytes</span></div><div class="blk-opt is-rejected"><span class="blk-title">Status quo: Vercel per-doc projects</span><span class="blk-for"><span class="blk-lbl">For</span> Already built and verified; instant alias and pre-merge preview URL; per-doc blast radius; hosting survives repo deletion</span><span class="blk-against"><span class="blk-lbl">Against</span> Custody chain broken by design (separate copy); one Vercel project per doc (~37 already, measured on #12); team-scope pinning and SSO-wall failure modes are permanent carrying costs</span></div></div>
+<p><strong>Two preconditions for Option A, both load-bearing.</strong> First: <code>docs/.nojekyll</code> must exist before Pages is enabled. The legacy build IS the Jekyll build; without that file Jekyll processes the tree, and six committed markdown files in <code>rawgentic/docs</code> alone carry Liquid syntax (<code>{{</code>/<code>{%</code>) that would fail the WHOLE site build. Both live sites carry the file today, which is why the fidelity evidence above holds. Second: the served scope is the <strong>entire <code>docs/</code> directory</strong> — committing under <code>docs/</code> IS publishing under Option A. Review reports, measurements, session notes: everything there is served. Audience is therefore a property of the DIRECTORY, not of any manifest or index — a repo either keeps <code>docs/</code> fully publishable or does not enable Pages.</p>
+<p><strong>What replaces the pre-merge preview.</strong> Vercel gave the author a live URL before the PR existed. Under Option A nothing serves until after merge, so review happens on the committed <code>.html</code> — opened locally (<code>file://</code> or a one-line local server), or attached as a PR CI artifact if a repo wants a click-through. This loss is real and is the row most likely to matter to the owner; it is stated here rather than discovered later.</p>
+<p><strong>URL scheme (both Pages options).</strong> A doc at <code>docs/planning/&lt;file&gt;.html</code> serves at <code>https://&lt;owner&gt;.github.io/&lt;repo&gt;/planning/&lt;file&gt;.html</code> — the <code>/docs</code> prefix is the served root. <code>&lt;owner&gt;</code> is a <strong>per-repo fact</strong>, not a workspace constant: most projects live under <code>3D-Stories</code>, but e.g. <code>daimonia</code> and <code>xtoys</code> live under <code>crandrosoff</code> (measured). Stable identity moves from a minted Vercel project name to <strong>repo + committed path</strong>, which is exactly the custody property we want. The <code>{project}-{purpose}-{ref}</code> naming convention survives as the index key and the recommended file slug. Accepted residual (peer finding, now recorded): a repo rename, transfer, or default-branch change breaks every URL under it — the manifest&#x27;s stable ids and redirect entries cover <em>document</em> renames only, and URL permanence beyond that would need a custom domain, which this design does not build.</p>
+<p><strong>How the byte-identity verify carries over.</strong> Stage 6&#x27;s contract (&quot;the URL serves exactly the bytes just published&quot;) transfers intact and gets stronger: the comparison target is the committed blob on <code>main</code>, so the check proves custody, not just delivery. The mechanics change in three named ways. (1) Verify runs <strong>after merge</strong>: the publishing session (the same actor that runs <code>publish_doc.py</code> today — a WF2/WF3 run or the owner) runs a <code>verify-published</code> command post-merge; a repo may additionally wire it as a docs-verify Action, but the session-run command is the baseline so Option A carries no mandatory workflow file. (2) The wait loop polls the Pages build API (<code>GET /repos/{owner}/{repo}/pages/builds/latest</code> until <code>status: built</code> for the merged SHA) on a budget that must EXCEED the 10-minute build ceiling — today&#x27;s ~25s stage-6 budget does not transfer. (3) <strong>The merge is the publication trigger, never its completion</strong> — a doc is pending until its verify passes, and pending has a concrete home: the docs-index lists a row only after its verify passes, so an unverified doc is visibly absent, and a failed or delayed build is the verify command&#x27;s reported failure, never a silent success. Scope note (qwen finding): this verify path applies to <strong>publicly served</strong> Pages only — every option chosen here serves publicly or routes to Confluence. An access-controlled Enterprise Pages site answers with a login redirect, which the verifier already refuses; verifying one would need an authenticated fetch this design deliberately does not build.</p>
+<div class="blk blk-callout"><div class="blk-callout is-warn"><div class="blk-title">The private-repo caveat — the axis is PUBLIC vs NOT-PUBLIC, never personal vs work</div><p>GitHub&#x27;s own docs: Pages is available for PUBLIC repos on Free, and for public AND private
+repos on Pro/Team/Enterprise. But access-controlled (privately visible) Pages sites require
+<strong>GitHub Enterprise Cloud</strong>. Below that plan, a private repo&#x27;s Pages site is <strong>public to
+the whole internet</strong> — which is not a hypothetical: it is the measured state of two repos
+in this workspace today (top of page). Fail CLOSED: eligibility is the PAIR of facts
+<code>repo.visibility == public</code> OR <code>pages.public == false</code> (access control confirmed) — read
+from the API, never inferred from who owns the repo. A private repo is ineligible until
+the owner explicitly flips it public or approves the exposure, whether it is a personal
+project or a work mirror. A later visibility or plan change can expose a site while
+nothing publishes, so eligibility is re-checked on a SCHEDULE (a small daily workflow
+where the index lives), and again at every index rebuild (qwen finding: coupling the check
+to publish events alone leaves a downgraded repo exposed until the next unrelated
+publish).</p></div></div>
+<div class="blk blk-callout"><div class="blk-callout is-info"><div class="blk-title">Shared origin (peer finding)</div><p>Every project site under one owner shares the <code>&lt;owner&gt;.github.io</code> origin. A script on one
+published page can read another page&#x27;s storage on that origin. These docs are
+self-contained by the existing lint gate (no external requests); the rule to keep is that
+published HTML stays script-inert beyond the renderer&#x27;s own inline behavior — which the
+gate already enforces.</p></div></div>
+<h3>Publish flow today (Vercel) — for comparison</h3>
+<div class="blk blk-nodes"><ul><li class="blk-node"><span class="blk-label">publish_doc.py</span><ul><li class="blk-node"><span class="blk-label">render + lint</span><span class="blk-text">stages 1-3, local bytes gated before any network call</span><ul><li class="blk-node"><span class="blk-edge">upload</span><span class="blk-label">vercel link + deploy</span><span class="blk-text">stage 5 uploads a SEPARATE copy from a temp dir</span><ul><li class="blk-node"><span class="blk-edge">fetch</span><span class="blk-label">verify_live</span><span class="blk-text">stage 6 byte-compares the alias, retried over ~25s</span><ul><li class="blk-node"><span class="blk-edge">deploy</span><span class="blk-label">docs-index refresh</span><span class="blk-text">stage 7 rebuilds from vercel project ls</span></li></ul></li></ul></li></ul></li><li class="blk-node"><span class="blk-edge">AC6</span><span class="blk-label">commit + PR</span><span class="blk-text">the SAME bytes, on their own separate track</span></li></ul></li></ul></div>
+<h3>Publish flow, Option A (Pages legacy) — proposed</h3>
+<div class="blk blk-nodes"><ul><li class="blk-node"><span class="blk-label">publish_doc.py</span><ul><li class="blk-node"><span class="blk-label">render + lint</span><span class="blk-text">stages 1-3 unchanged, still local, still gated</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">commit + PR + merge</span><span class="blk-text">the pair lands on main — the merge IS the deploy</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">Pages build</span><span class="blk-text">GitHub builds main:/docs; poll builds/latest past the 10-min ceiling</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">verify-published</span><span class="blk-text">run by the publishing session; byte-compare vs the committed blob</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">index refresh</span><span class="blk-text">row appears only after verify passes — pending = absent</span></li></ul></li></ul></li></ul></li></ul></li></ul></li></ul></div>
+<h3>Publish flow, Option B (Pages via Actions) — proposed</h3>
+<div class="blk blk-nodes"><ul><li class="blk-node"><span class="blk-label">merge to main</span><ul><li class="blk-node"><span class="blk-edge is-proposed">push event</span><span class="blk-label">docs-deploy workflow</span><span class="blk-text">triggers on docs/** path filter</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">upload-pages-artifact</span><span class="blk-text">packages the docs tree</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">deploy-pages</span><span class="blk-text">pages:write + id-token:write, exempt from build soft limit</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">verify job</span><span class="blk-text">same byte-identity fetch, inside the workflow run</span></li></ul></li></ul></li></ul></li></ul></li></ul></div>
+<p><strong>Limits that matter (official docs, fetched 2026-08-12):</strong> published site max 1 GB; soft 100 GB/month bandwidth; deploys time out at 10 minutes. None binds this workload — the largest doc pages here are single-digit MB.</p>
+<h2>2. Index hosting, by audience</h2>
+<p>The split below is about <strong>where readers look</strong>, never about what may be served — serving eligibility is §1&#x27;s public/not-public gate, and it applies identically to personal and work repos. A private personal repo (<code>chorestory</code> and <code>saystory</code> are both private today) is treated exactly like a work repo until the owner flips it public.</p>
+<div class="blk blk-options dz-options"><div class="blk-opt is-chosen"><span class="blk-title">Public-eligible repos: keep the Vercel docs-index, rows link into github.io</span><span class="blk-for"><span class="blk-lbl">For</span> No new hosting; the index page and its verify loop already exist; one-line change per row target</span><span class="blk-against"><span class="blk-lbl">Against</span> Keeps one Vercel project alive after the docs leave — so the vercel CLI, its team-scope pin and its SSO-wall failure mode stay in the loop for the index alone</span></div><div class="blk-opt is-chosen"><span class="blk-title">Not-public repos (work mirrors, private personal): a Confluence index page, updated by Actions on merge</span><span class="blk-for"><span class="blk-lbl">For</span> Docs list lives where work already looks; REST API v2 is a 40-line script or an off-the-shelf action (md2cf, confluence-updater, atlcli all fit)</span><span class="blk-against"><span class="blk-lbl">Against</span> Needs an API token as a repo secret; page updates must GET the version and increment it — on a 409 the job re-fetches the version and retries on a bounded backoff, and a persistent failure surfaces as a workflow annotation, never a silent skip</span></div><div class="blk-opt"><span class="blk-title">A Pages-hosted index (owner site or dedicated repo)</span><span class="blk-for"><span class="blk-lbl">For</span> Zero external dependencies — the whole system becomes GitHub-only; same custody property as the docs</span><span class="blk-against"><span class="blk-lbl">Against</span> Needs a cross-repo rebuild trigger (repository_dispatch or schedule) since one repo cannot watch another; a new repo to own</span></div></div>
+<p><strong>Derivation, all options — from the manifest, and ONLY the manifest.</strong> The index is derived, never hand-edited (the #125 rule survives). Each repo commits a small <code>docs/publications.json</code>: one entry per published doc — stable id, title, purpose, source path, HTML path, audience, canonical URL. The index reads manifests and nothing else: the GitHub API&#x27;s only job is to LOCATE manifests (which repos have one) — it is never a second derivation source, and no <code>docs/**/*.html</code> scan exists anywhere (one source, so the three consumers cannot disagree). A rename is an explicit redirect entry instead of a silent identity change, and the README table (§3) generates from the same rows. To be precise about what the manifest governs (final-review finding): it governs what is <strong>indexed</strong>. Under Option A the server serves the whole <code>docs/</code> tree regardless — a stray HTML file never self-INDEXES, but it is still served, which is why §1 makes audience a property of the directory. <strong>Freshness:</strong> rebuilt in the same post-merge step that verifies the doc (option a), by the Actions job itself (option b), or on <code>repository_dispatch</code> (option c). <strong>The stage-7 anti-race check has a successor:</strong> today&#x27;s guard compares the built index against a live <code>vercel project ls</code> count; its replacement invariant is &quot;every index row equals a manifest entry at the commit the rebuild enumerated&quot; — the source is versioned data, so an interleaved publisher&#x27;s row is picked up by the next rebuild rather than silently lost, and the rebuild reports the SHAs it read.</p>
+<p><strong>The custody rule for Confluence.</strong> The repo stays the document of record, always. For repos Pages cannot serve, the Confluence page carries the content too — a <strong>labeled mirror</strong>, stamped with the source commit and content digest so drift is detectable — but it never becomes canonical.</p>
+<h2>3. The README &quot;Documentation&quot; section</h2>
+<p>Every project README gains a maintained <code>## Documentation</code> section: one table row per published doc — title, purpose, the committed <code>.md</code> path, and the live URL. <strong>Generated from the same <code>docs/publications.json</code> the index reads (§2)</strong>, so the README, the index and the manifest cannot disagree. Marker-fenced so tooling can rewrite it without touching hand-written prose:</p>
+<p>    &lt;!-- docs-list:begin --&gt;</p>
+<table>
+<thead><tr><th>Doc</th><th>Purpose</th><th>Source</th><th>Live</th></tr></thead>
+<tbody>
+<tr><td>Hosting options</td><td>design</td><td>docs/planning/2026-08-12-hosting-options.md</td><td>(URL)</td></tr>
+</tbody>
+</table>
+<p>    &lt;!-- docs-list:end --&gt;</p>
+<p><strong>The rule that keeps it fresh:</strong> the row is added or updated <strong>inside the same PR that adds or changes the doc</strong> — never batched into a trailing docs PR. This is the existing status-surface convention applied to documentation, and it is the process fix for the freshness gap measured in the rawgentic diagram (a REV convention with no visible surface drifted five releases; a README table makes the same drift visible in review). Enforcement lives in <strong>PR CI</strong> (final-review correction: once the merge is the publish, a publish-time refusal has nothing left to refuse) — a check that fails the PR when a doc under <code>docs/</code> changes without its manifest row and README row.</p>
+<h2>4. Plugin impact and the retirement of vercel.app URLs</h2>
+<p>Stage-by-stage, for the chosen options:</p>
+<div class="blk blk-nodes"><ul><li class="blk-node"><span class="blk-label">publish_doc.py</span><ul><li class="blk-node"><span class="blk-label">stages 1-3</span><span class="blk-text">render, name, lint — unchanged, still refuse before any network call</span></li><li class="blk-node"><span class="blk-edge">gh api</span><span class="blk-label">stage 4</span><span class="blk-text">becomes the eligibility PAIR: repo.visibility + pages.public, fail closed</span></li><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">stage 5</span><span class="blk-text">replaced by the PR merge; the asset allowlist moves to PR CI (see below)</span></li><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">stage 6</span><span class="blk-text">verify-published: post-merge, poll past the build ceiling, byte-compare</span></li><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">stage 7</span><span class="blk-text">index refresh per section 2, manifest-derived</span></li></ul></li><li class="blk-node"><span class="blk-label">setup.py</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">checks</span><span class="blk-text">ADDS gh auth + Pages eligibility; KEEPS the vercel checks while the index stays on Vercel</span></li></ul></li><li class="blk-node"><span class="blk-label">build_index.py</span><ul><li class="blk-node"><span class="blk-edge is-proposed"></span><span class="blk-label">source</span><span class="blk-text">manifests located via the GitHub API replace vercel project ls</span></li></ul></li></ul></div>
+<p><strong>What goes, what stays, what grows (final-review correction — the first draft claimed the whole security surface &quot;disappears&quot;, which was wrong in both directions).</strong> Goes: the duplicate-project minting hazard (stages 4-5&#x27;s hardest-won code) — there is no project to mint. Stays: the team-scope pin and the SSO-wall failure mode, exactly as long as the docs-index remains a Vercel project (§2 option a keeps <code>refresh_index</code>&#x27;s CLI call and its pinned scope). Grows: <code>stage_assets</code> is today the gate that refuses shipping a non-image reference — the measured <code>.env</code>/<code>credentials.json</code> case — and under Pages every file under <code>docs/</code> is served whatever its suffix, so that allowlist has NO serving-side equivalent. Its successor is the PR-CI check on the <code>docs/</code> diff (§3), plus §1&#x27;s rule that a repo either keeps <code>docs/</code> fully publishable or does not enable Pages.</p>
+<p><strong>Existing vercel.app URLs (~37 projects).</strong> Retirement is evidence-gated and ordered so no reader ever holds a dead link (final-review corrections applied): (1) publish and <strong>verify each new destination live</strong>; (2) only then switch that doc&#x27;s index row to the github.io URL; (3) replace each vercel.app page with a meta-refresh redirect to its new home — written and deployed by a small dedicated redirect script OUTSIDE <code>publish_doc.py</code>, because the lint gate refuses a meta refresh as an external request (executed against the gate 2026-08-12, finding <code>external-requests: external request via meta refresh</code>) and that refusal is correct for real documents; (4) after a grace period the owner deletes the Vercel projects — the only destructive step, and it is theirs. Exit criterion for (4): every destination verified live and the docs-index carrying zero vercel.app rows.</p>
+<h2>Review trail</h2>
+<div class="blk blk-chips"><span class="blk-chip is-done">codex peer consult</span><span class="blk-chip is-done">qwen adversarial review</span><span class="blk-chip is-done">opus final review</span></div>
+<p><strong>Codex peer consult (gpt-5.6-sol, 2026-08-12, report: <code>docs/reviews/peer-2026-08-12-hosting-options-2026-08-12.md</code>).</strong> Adopted: the <code>docs/publications.json</code> manifest as the derivation source for index and README (no scan-to-publish, stable ids, explicit rename redirects); fail-closed Pages eligibility with re-checks on rebuild; the shared-origin note; pending-until-verified publication state; Confluence work mirrors labeled with source commit and digest. <strong>Rejected, with reasons:</strong> an external publication-state store, a dedicated catalog repo with <code>repository_dispatch</code> fan-in, and a scheduled reconciliation fleet — right for a many-team platform, out of proportion for ~37 documents with one owner; the post-merge verify plus manifest-derived index covers the same failure classes at this scale, and the catalog repo remains §2 option (c) if the personal side ever drops Vercel entirely. The rename/transfer risk the peer raised is now RECORDED (§1) as an accepted residual rather than silently dropped.</p>
+<p><strong>Qwen adversarial review (qwen3.8-max-preview, 2026-08-12, report: <code>docs/reviews/2026-08-12-hosting-options-md-2026-08-12.md</code>; 1 High, 2 Medium).</strong> Adopted: the Confluence 409 retry rule; the scheduled eligibility re-check. <strong>Partially declined, with the reason recorded:</strong> the High finding asked stage-6 verify to authenticate with a repo-scoped token — measured false on the mechanism (a private repo&#x27;s public Pages site answers an unauthenticated fetch with 200), and an access-controlled site would hit the verifier&#x27;s existing redirect-refusal. The kernel kept: the verify path is explicitly scoped to publicly served Pages. The final review then correctly turned the decline&#x27;s own premise — &quot;every option chosen here serves publicly&quot; — into the eligibility question at the top of this page.</p>
+<p><strong>Opus final review (2026-08-12; 2 Critical, 6 High, 6 Medium, 3 Low — all 17 dispositioned).</strong> Its lead finding was VERIFIED INDEPENDENTLY before anything was acted on: the two private repos serving publicly (exposure callout, top of page). Applied: the evidence callout now states its own scope and the violation it sits on (C1); the recommendation axis is public/not-public, never personal/work (C2); manifest wording corrected to self-INDEXES with the served-tree consequence stated (H1); the redirect step moved outside the lint gate, with the gate&#x27;s refusal executed and quoted (H2); the security-surface claim replaced by goes/stays/grows (H3); the post-merge verify got a named runner and pending got a concrete home — absence from the index (H4); <code>docs/.nojekyll</code> is a stated precondition and whole-site build failure a stated con (H5, count corrected to six Liquid files); the pre-merge preview loss is acknowledged with its replacement (H6); one derivation source (M1); the poll budget must exceed the build ceiling (M2); verify-before-switch ordering (M3); the eligibility pair read from the API (M4); the anti-race successor invariant named (M5); the rename residual recorded (M6); <code>&lt;owner&gt;</code> made per-repo (L1); README enforcement moved to PR CI (L2); the evidence scoped (L3).</p>
+<p>Research notes: GitHub Pages limits, plan availability, and access-control gating fetched from official GitHub docs 2026-08-12. Confluence pipeline options surveyed via Exa (REST API v2, md2cf, confluence-updater, atlcli). Context7 was queried per the run&#x27;s method but returned no matching rows for the Pages deploy workflow; the canonical <code>actions/starter-workflows/pages/static.yml</code> was read directly instead.</p>
+<h2>Recommendation</h2>
+<div class="blk blk-verdict"><div class="blk-row is-ship"><span class="blk-key">ship</span><span class="blk-text">Option A (Pages legacy main:/docs) for doc hosting, gated per repo on the PUBLIC/NOT-PUBLIC pair — never on personal vs work. Eligible today: public repos only (13 of 51 in 3D-Stories; a private repo becomes eligible only when the owner deliberately flips it public). Index split by where readers look: the existing Vercel docs-index for public-eligible repos, a Confluence index+mirror for everything Pages cannot serve. README Documentation sections everywhere, generated from the per-repo manifest, updated inside each issue&#x27;s own PR, enforced in PR CI.</span></div><div class="blk-row is-risk"><span class="blk-key">risk</span><span class="blk-text">Two private repos are serving publicly TODAY (top of page) — that decision precedes any migration work. One bad file under docs/ fails a whole site&#x27;s Jekyll-legacy build, so docs/.nojekyll is a precondition. Serving waits on an async Pages build, so the verify poll budget must exceed the 10-minute ceiling. Pre-merge preview is lost and replaced by the committed .html. A repo rename still breaks its URLs — accepted residual.</span></div></div>
+<div class="blk blk-provenance"><dl><dt>source</dt><dd>docs/planning/2026-08-12-hosting-options.md</dd><dt>project</dt><dd>design-doc-publish</dd><dt>measured</dt><dd>2026-08-12</dd></dl></div>
+
+</main>
+<footer>Last updated: 2026-08-12 10:07 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
