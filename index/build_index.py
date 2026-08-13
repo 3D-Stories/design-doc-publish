@@ -126,6 +126,26 @@ def _refuse(detail: str, blob: str = "") -> None:
     sys.exit(f"build_index: {detail}\n{_UPGRADE_HINT}" + (f"\n{blob[:500]}" if blob else ""))
 
 
+def _skip_row(detail: str) -> None:
+    """Drop ONE untrustworthy row, loudly, and keep building the index.
+
+    Why this is not `_refuse`. A row-level defect used to abort the whole rebuild, so a
+    single project whose reported domain was not its own froze the entire docs index and
+    every doc published afterwards went unlisted. Measured live 2026-08-13:
+    `rawgentic-analysis-713` reported `deploy-713.vercel.app`, the index stopped rebuilding
+    at 07:37, and two already-deployed docs were stranded off it with no signal on the page
+    itself. The guard was right about the row and wrong about the blast radius.
+
+    What is preserved: the untrustworthy value is still NEVER emitted as an href, which is
+    the security property #23 bought. It is dropped rather than guessed at. A listing where
+    EVERY row is skipped still refuses, because `main()` refuses an empty row set.
+
+    Payload-level defects — unparseable stdout, the wrong account, a missing `projects`
+    array — stay fatal. Those describe the response, not one project in it.
+    """
+    print(f"build_index: skipped {detail}", file=sys.stderr)
+
+
 def _clean_name(value: object) -> bool:
     r"""A project name is a non-empty, fully printable string with no surrounding whitespace.
 
@@ -229,20 +249,22 @@ def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
             _refuse(f"projects[{i}] is {type(p).__name__}, not an object", blob)
         name = p.get("name")
         if not _clean_name(name):
-            _refuse(f"projects[{i}] has no usable `name` ({name!r})", blob)
+            _skip_row(f"projects[{i}]: no usable `name` ({name!r})")
+            continue
         # #23: the href is the domain Vercel REPORTS, never one constructed from the name
         # — five live projects have a truncated domain, and a constructed link to them is
-        # permanently dead. Fail closed like `name`: a row without its real domain can
+        # permanently dead. Skipped like a bad `name`: a row without its real domain can
         # only be indexed as a guess, which is the defect this field replaces.
         url = p.get("latestProductionUrl")
         if not _clean_name(url) or not _PROD_URL.match(url):
-            _refuse(f"projects[{i}] ({name}) has no usable `latestProductionUrl` "
-                    f"({url!r}) — the index emits the reported domain, never a "
-                    f"constructed one (#23)", blob)
+            _skip_row(f"projects[{i}] ({name}): no usable `latestProductionUrl` "
+                      f"({url!r}) — the index emits the reported domain, never a "
+                      f"constructed one (#23)")
+            continue
         # 8a finding: the SHAPE check alone admits any vercel.app tenant. The host must
         # be THIS project's own — its name exactly, or (only past the alias cap, where
         # truncation exists) its 34-35 char truncation. A renamed project whose domain
-        # kept the old name refuses here LOUDLY rather than indexing a mismatched link.
+        # kept the old name is dropped here LOUDLY rather than indexing a mismatched link.
         # The cap mirrors publish_doc.MAX_ALIAS_LABEL; the two files deliberately do not
         # import each other, so the value is restated with this pointer.
         label = url[len("https://"):-len(".vercel.app")]
@@ -251,9 +273,11 @@ def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
         # foreign tenant squatting a resembling prefix must not become the href).
         expected_cut = name[:_ALIAS_CAP].rstrip("-") if len(name) > _ALIAS_CAP else ""
         if label != name and not (expected_cut and label == expected_cut):
-            _refuse(f"projects[{i}] ({name}) reports a domain that is not this "
-                    f"project's own ({url!r}) — refusing to emit a foreign link "
-                    f"target (#23)", blob)
+            _skip_row(f"projects[{i}] ({name}): reports a domain that is not this "
+                      f"project's own ({url!r}) — refusing to emit a foreign link "
+                      f"target (#23). Fix the project's production alias to unlist-proof "
+                      f"it; every other row still indexes")
+            continue
         rows.append({"name": name, "url": url,
                      "deployed": _instant(p.get("updatedAt"))})
     return rows, pagination["next"]
