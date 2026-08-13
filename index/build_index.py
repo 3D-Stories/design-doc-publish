@@ -246,8 +246,11 @@ def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
         # The cap mirrors publish_doc.MAX_ALIAS_LABEL; the two files deliberately do not
         # import each other, so the value is restated with this pointer.
         label = url[len("https://"):-len(".vercel.app")]
-        if label != name and not (len(name) > _ALIAS_CAP and name.startswith(label)
-                                  and _ALIAS_CAP - 1 <= len(label) <= _ALIAS_CAP):
+        # The acceptable truncation is THE deterministic cut (cap, trailing hyphens
+        # stripped) — never any prefix that merely resembles one (Step 11 finding: a
+        # foreign tenant squatting a resembling prefix must not become the href).
+        expected_cut = name[:_ALIAS_CAP].rstrip("-") if len(name) > _ALIAS_CAP else ""
+        if label != name and not (expected_cut and label == expected_cut):
             _refuse(f"projects[{i}] ({name}) reports a domain that is not this "
                     f"project's own ({url!r}) — refusing to emit a foreign link "
                     f"target (#23)", blob)

@@ -530,6 +530,20 @@ class TestTheVerifierUsesTheDomainTheDeployReported:
         assert publish_doc.aliased_host(
             log, "example-design-12") == "example-design-12.vercel.app"
 
+    def test_a_failure_line_containing_the_word_aliased_is_not_a_grant(self):
+        """Step 11 finding: `was not aliased to https://…` contains the word — only a
+        line that STARTS with the Aliased verdict is the deploy's grant."""
+        log = ("Error: project was not aliased to https://example-design-12.vercel.app\n")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, "example-design-12")
+
+    def test_a_resembling_prefix_that_is_not_the_deterministic_cut_is_refused(self):
+        """Step 11 finding: the acceptable truncation is THE cut (name[:35], trailing
+        hyphens stripped) — a 34-char prefix that is not that cut is a foreign host."""
+        log = f"Aliased to https://{self.NAME41[:34]}.vercel.app\n"   # one short of the cut
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, self.NAME41)
+
     def test_a_34_char_prefix_of_an_at_cap_name_is_not_an_alias(self):
         """8a finding: a 35-char name aliases INTACT in reality — truncation exists only
         past the cap, so a 34-char prefix of an at-cap name is a foreign host."""

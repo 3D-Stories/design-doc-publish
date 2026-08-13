@@ -480,6 +480,14 @@ class TestRowsCarryTheDomainVercelReports:
         with pytest.raises(SystemExit):
             index.vercel_projects(scope=SCOPE)
 
+    def test_a_resembling_prefix_that_is_not_the_deterministic_cut_is_refused(self, index, cli):
+        """Step 11 finding: only THE cut (name[:35], trailing hyphens stripped) binds —
+        a tenant squatting a shorter resembling prefix must never become the href."""
+        cli(stdout=_payload([_row(self.NAME41,
+                                  latestProductionUrl=f"https://{self.NAME41[:34]}.vercel.app")]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
     @pytest.mark.parametrize("bad", ["", None, 7,
                                      "http://example-plan-786.vercel.app",
                                      "https://evil.example.com",

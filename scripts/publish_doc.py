@@ -522,6 +522,11 @@ def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
 
 # --- stage 5: the deploy -------------------------------------------------------------
 
+# A line that STARTS the Aliased verdict: optional non-alphanumeric marker glyphs
+# (the CLI's `▲`), then the word. `Error: … was not aliased …` starts with `Error`,
+# so it can never match (#23, Step 11 finding).
+_ALIASED_LINE = re.compile(r"^[^A-Za-z0-9]*aliased\b", re.I)
+
 # A COMPLETE host token: the lookahead is what stops `https://old.vercel.app.evil/x`
 # from reading as a vercel.app host, which a trailing `\S*` happily accepted.
 _URL_HOST = re.compile(r"https://([a-z0-9][a-z0-9.-]*\.vercel\.app)(?=[/\s]|$)", re.I)
@@ -570,20 +575,25 @@ def aliased_host(log: str, name: str, stage: int = 6) -> str:
     """
     exact = truncated = None
     suffix = ".vercel.app"
-    # Anchored to the Aliased line(s) — 8a finding: a same-name URL in an error or
-    # diagnostic line is not an alias the deploy granted. Both observed CLI forms match:
-    # `Aliased to https://…` (56.5.0 capture) and `▲ Aliased https://…` (live 2026-08-12).
+    # Anchored to lines that START with the Aliased verdict (8a + Step 11 findings): a
+    # same-name URL in an error or diagnostic line — including one that merely contains
+    # the word, like `Error: project was not aliased to https://…` — is not an alias the
+    # deploy granted. Both observed success forms match: `Aliased to https://…` (56.5.0
+    # capture) and `▲ Aliased https://…` (live 2026-08-12); both START with the word
+    # after at most a marker glyph.
     aliased_lines = "\n".join(
-        ln for ln in log.splitlines() if "aliased" in ln.lower())
+        ln for ln in log.splitlines() if _ALIASED_LINE.match(ln))
+    # The truncation Vercel applies is DETERMINISTIC — cut at the cap, strip trailing
+    # hyphens — so the acceptable truncated label is THE truncation, never any prefix
+    # that merely resembles one (Step 11 finding). Empty when the name is at or under
+    # the cap: those names alias intact, so only the exact label can match.
+    expected_cut = name[:MAX_ALIAS_LABEL].rstrip("-") if len(name) > MAX_ALIAS_LABEL else ""
     for host in _URL_HOST.findall(aliased_lines):
         h = host.lower()
         label = h[:-len(suffix)]
         if label == name:
             exact = h
-        # Truncation exists ONLY past the cap — 8a finding: an at-or-under-cap name
-        # aliases intact, so a shorter prefix of it is a foreign host, never its alias.
-        elif (len(name) > MAX_ALIAS_LABEL and name.startswith(label)
-                and MAX_ALIAS_LABEL - 1 <= len(label) <= MAX_ALIAS_LABEL):
+        elif expected_cut and label == expected_cut:
             truncated = h
     if exact or truncated:
         return exact or truncated
