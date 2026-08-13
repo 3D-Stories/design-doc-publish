@@ -543,6 +543,49 @@ def deployed_hosts(log: str, name: str) -> list[str]:
     return out
 
 
+def aliased_host(log: str, name: str, stage: int = 6) -> str:
+    """The host the deploy itself reported as THIS project's alias (#23).
+
+    Stage 6 used to fetch a URL CONSTRUCTED from the project name, and for any name over
+    `MAX_ALIAS_LABEL` that URL is permanently absent (Vercel truncates the label), so a
+    perfect deploy read as `HTTP 404 — not live`. The deploy's own `Aliased` line is the
+    truth, and it is already in the log stage 5 receives — zero extra CLI calls, and the
+    same trust boundary `deployed_hosts` uses for the stage-5 binding check.
+
+    Two host shapes are THIS project's alias, judged per host from the same `_URL_HOST`
+    scan `deployed_hosts` uses:
+    * the label equals the name — the intact alias, preferred;
+    * the label is a PREFIX of the name no shorter than `MAX_ALIAS_LABEL - 1` — the
+      cap-truncated alias (35, or 34 after Vercel strips a trailing hyphen the cut left).
+      The floor matters: without it, a stray short host like `design.vercel.app` would
+      read as "a prefix of the name" and point the verifier at somebody else's project.
+
+    The deployment URL (`<name>-<hash>-<team>`) matches neither: its label is LONGER
+    than the name, and a longer string is not a prefix. With the stage-2 cap in place the
+    truncated branch is defense-in-depth — no new over-cap name can be minted — but the
+    cap is a measured constant, not a contract, so the reader stays tolerant.
+
+    Refuses rather than constructing when the log names no alias: verifying a guessed
+    URL is exactly the defect this function replaces.
+    """
+    exact = truncated = None
+    suffix = ".vercel.app"
+    for host in _URL_HOST.findall(log):
+        h = host.lower()
+        label = h[:-len(suffix)]
+        if label == name:
+            exact = h
+        elif (len(label) < len(name) and name.startswith(label)
+                and len(label) >= MAX_ALIAS_LABEL - 1):
+            truncated = h
+    if exact or truncated:
+        return exact or truncated
+    raise StageError(stage, f"the deploy log reports no alias for {name!r} — refusing "
+                            f"to fetch a URL constructed from the name: for a truncated "
+                            f"domain that guess is permanently absent and a perfect "
+                            f"deploy reads as not-live (#23).")
+
+
 # A reference is only shippable if it names one of these. Step 11 found the real hole: with
 # `is_file()` as the only content gate, `![x](.env)` published the file's bytes to a public URL —
 # measured, `AWS_SECRET=hunter2` and a `credentials.json` both shipped. Containment stops a
@@ -810,7 +853,9 @@ def refresh_index(workdir: Path, workspace_file: Path, scope: str) -> None:
     if not deployed_hosts(_log(dep), INDEX_PROJECT):
         raise StageError(7, f"the index deploy log names no {INDEX_PROJECT} URL:\n{_log(dep)}")
 
-    verify_live(f"https://{INDEX_PROJECT}.vercel.app/", built, stage=7)
+    # Same #23 rule as stage 6: the index's own deploy just reported its alias — use it.
+    verify_live(f"https://{aliased_host(_log(dep), INDEX_PROJECT, stage=7)}/",
+                built, stage=7)
 
     # Byte identity proves the page we built is the page that is live. It does NOT prove
     # the page is CURRENT: two publishers interleaving — A builds N rows, B publishes and
@@ -995,7 +1040,8 @@ def main(argv=None) -> int:
         print(f"publish_doc: 5/7 deployed\n{log.strip()}")
 
         stage = 6
-        url = f"https://{name}.vercel.app/"
+        # The domain the deploy REPORTED, never one constructed from the name (#23).
+        url = f"https://{aliased_host(log, name)}/"
         verify_live(url, page)
         print(f"publish_doc: 6/7 verified live — {url} serves exactly what was linted")
 
