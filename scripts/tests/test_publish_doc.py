@@ -516,6 +516,28 @@ class TestTheVerifierUsesTheDomainTheDeployReported:
             publish_doc.aliased_host("no hosts here", "example-design-12", stage=7)
         assert e.value.stage == 7
 
+    def test_a_host_on_a_non_aliased_line_is_never_selected(self):
+        """8a finding: the scan must be anchored to the Aliased line — a same-name URL in
+        an error or diagnostic line is not an alias the deploy granted."""
+        log = ("Error: could not alias https://example-design-12.vercel.app this time\n"
+               "Production: https://example-design-12-8qk3nr2-3d-stories.vercel.app\n")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, "example-design-12")
+
+    def test_the_unicode_aliased_line_form_is_recognized(self):
+        """The live CLI prints `\u25b2 Aliased https://...` (observed 2026-08-12)."""
+        log = "\u25b2 Aliased         https://example-design-12.vercel.app\n"
+        assert publish_doc.aliased_host(
+            log, "example-design-12") == "example-design-12.vercel.app"
+
+    def test_a_34_char_prefix_of_an_at_cap_name_is_not_an_alias(self):
+        """8a finding: a 35-char name aliases INTACT in reality — truncation exists only
+        past the cap, so a 34-char prefix of an at-cap name is a foreign host."""
+        name = "a" * publish_doc.MAX_ALIAS_LABEL          # 35, never truncates
+        log = f"Aliased to https://{'a' * 34}.vercel.app\n"
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, name)
+
     def test_a_log_with_no_alias_refuses_instead_of_guessing(self, run):
         """END TO END: the old code would fetch the constructed URL here and verify a
         guess. The fix refuses at stage 6 and fetches NOTHING."""

@@ -463,6 +463,23 @@ class TestRowsCarryTheDomainVercelReports:
             index.vercel_projects(scope=SCOPE)
         assert "latestProductionUrl" in str(e.value)
 
+    def test_a_foreign_tenants_vercel_domain_is_refused(self, index, cli):
+        """8a finding: a vercel.app SHAPE is not enough — the host must be THIS row's
+        project (its name, or its cap-truncation). `attacker.vercel.app` is a perfectly
+        valid tenant and must never become this row's href."""
+        cli(stdout=_payload([_row("example-plan-786",
+                                  latestProductionUrl="https://attacker.vercel.app")]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    def test_a_prefix_of_an_under_cap_name_is_refused(self, index, cli):
+        """Truncation exists only past the 35-char cap; a shorter name's domain is its
+        name, exactly."""
+        cli(stdout=_payload([_row("example-plan-786",
+                                  latestProductionUrl="https://example-plan.vercel.app")]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
     @pytest.mark.parametrize("bad", ["", None, 7,
                                      "http://example-plan-786.vercel.app",
                                      "https://evil.example.com",

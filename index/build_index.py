@@ -153,6 +153,12 @@ def _clean_name(value: object) -> bool:
 # also what keeps a hostile payload from injecting a foreign link target.
 _PROD_URL = re.compile(r"^https://[a-z0-9][a-z0-9-]*\.vercel\.app$")
 
+# Vercel's auto-alias label cap (#23) — mirrors publish_doc.MAX_ALIAS_LABEL, restated
+# because the two files deliberately do not import each other. Truncation exists only
+# for names PAST this cap, and a truncated label lands at cap or cap-minus-one (the cut
+# strips a trailing hyphen).
+_ALIAS_CAP = 35
+
 
 # Vercel reports `updatedAt` in epoch MILLISECONDS. The magnitude window rejects a value in the
 # wrong unit rather than believing it: epoch SECONDS would divide down to a 1970 date and then be
@@ -233,6 +239,18 @@ def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
             _refuse(f"projects[{i}] ({name}) has no usable `latestProductionUrl` "
                     f"({url!r}) — the index emits the reported domain, never a "
                     f"constructed one (#23)", blob)
+        # 8a finding: the SHAPE check alone admits any vercel.app tenant. The host must
+        # be THIS project's own — its name exactly, or (only past the alias cap, where
+        # truncation exists) its 34-35 char truncation. A renamed project whose domain
+        # kept the old name refuses here LOUDLY rather than indexing a mismatched link.
+        # The cap mirrors publish_doc.MAX_ALIAS_LABEL; the two files deliberately do not
+        # import each other, so the value is restated with this pointer.
+        label = url[len("https://"):-len(".vercel.app")]
+        if label != name and not (len(name) > _ALIAS_CAP and name.startswith(label)
+                                  and _ALIAS_CAP - 1 <= len(label) <= _ALIAS_CAP):
+            _refuse(f"projects[{i}] ({name}) reports a domain that is not this "
+                    f"project's own ({url!r}) — refusing to emit a foreign link "
+                    f"target (#23)", blob)
         rows.append({"name": name, "url": url,
                      "deployed": _instant(p.get("updatedAt"))})
     return rows, pagination["next"]

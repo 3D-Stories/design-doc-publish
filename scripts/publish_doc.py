@@ -570,13 +570,20 @@ def aliased_host(log: str, name: str, stage: int = 6) -> str:
     """
     exact = truncated = None
     suffix = ".vercel.app"
-    for host in _URL_HOST.findall(log):
+    # Anchored to the Aliased line(s) — 8a finding: a same-name URL in an error or
+    # diagnostic line is not an alias the deploy granted. Both observed CLI forms match:
+    # `Aliased to https://…` (56.5.0 capture) and `▲ Aliased https://…` (live 2026-08-12).
+    aliased_lines = "\n".join(
+        ln for ln in log.splitlines() if "aliased" in ln.lower())
+    for host in _URL_HOST.findall(aliased_lines):
         h = host.lower()
         label = h[:-len(suffix)]
         if label == name:
             exact = h
-        elif (len(label) < len(name) and name.startswith(label)
-                and len(label) >= MAX_ALIAS_LABEL - 1):
+        # Truncation exists ONLY past the cap — 8a finding: an at-or-under-cap name
+        # aliases intact, so a shorter prefix of it is a foreign host, never its alias.
+        elif (len(name) > MAX_ALIAS_LABEL and name.startswith(label)
+                and MAX_ALIAS_LABEL - 1 <= len(label) <= MAX_ALIAS_LABEL):
             truncated = h
     if exact or truncated:
         return exact or truncated
