@@ -138,6 +138,14 @@ WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic pro
 INDEX_PROJECT = "docs-index"
 MAX_NAME = 100
 
+# Vercel cuts the auto-assigned `<name>.vercel.app` label at 35 characters and strips a
+# trailing hyphen left by the cut (#23; measured 2026-08-13 across the 20 live projects:
+# longest intact label 33, every truncated label 34-35, shortest truncated name 36 — and
+# confirmed on the 2026-08-12 deploy where a 41-char name aliased to a 35-char label).
+# An over-cap name deploys FINE and then 404s at its conventional URL forever, so stage 2
+# refuses it: refusing before the deploy is cheaper than stage 6 discovering it after.
+MAX_ALIAS_LABEL = 35
+
 
 class StageError(Exception):
     """A stage refused. The process exits ``EXIT_BASE + stage``."""
@@ -310,6 +318,16 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
         raise StageError(2, f"the derived name {name!r} is not a usable Vercel project "
                             f"name (lowercase letters, digits and hyphens, "
                             f"{MAX_NAME} chars max)")
+    # The alias cap comes AFTER name validity so the two limits stay distinguishable: an
+    # unusable name gets the message above; a usable one that cannot round-trip to its
+    # own `.vercel.app` domain gets this one (#23).
+    if len(name) > MAX_ALIAS_LABEL:
+        raise StageError(2, f"the derived name {name!r} is {len(name)} characters, over "
+                            f"the {MAX_ALIAS_LABEL}-char cap Vercel puts on a "
+                            f".vercel.app label. A longer name deploys, but its domain "
+                            f"gets TRUNCATED and the conventional URL 404s forever "
+                            f"(#23, measured live). Shorten --ref by at least "
+                            f"{len(name) - MAX_ALIAS_LABEL} character(s).")
     return name
 
 

@@ -413,6 +413,50 @@ class TestTheNameIsDerivedFromValidatedComponents:
             publish_doc.derive_name("chorestory_business", "design", "5", ws)
 
 
+# --------------------------------------------------------------------------- #23
+class TestTheAliasCapIsEnforcedAtNaming:
+    """#23. Vercel cuts the auto-assigned `<name>.vercel.app` label at 35 characters, so a
+    36+-char name deploys fine and then 404s at its conventional URL forever. Measured
+    2026-08-13 across 20 live projects: longest intact label 33, every truncated label
+    34-35, shortest truncated name 36. Stage 2 refuses over-cap names because refusing
+    before the deploy is cheaper than stage 6 discovering a permanent 404 after it."""
+
+    def test_a_name_at_the_cap_is_accepted(self, workspace):
+        ref = "x" * (publish_doc.MAX_ALIAS_LABEL - len("example-design-"))
+        name = publish_doc.derive_name("example", "design", ref, workspace)
+        assert len(name) == publish_doc.MAX_ALIAS_LABEL
+
+    def test_one_char_over_the_cap_is_refused_toward_ref(self, workspace):
+        """The refusal must say what to do: shorten --ref."""
+        ref = "x" * (publish_doc.MAX_ALIAS_LABEL + 1 - len("example-design-"))
+        with pytest.raises(publish_doc.StageError, match=r"--ref"):
+            publish_doc.derive_name("example", "design", ref, workspace)
+
+    def test_the_message_names_the_cap(self, workspace):
+        ref = "x" * (publish_doc.MAX_ALIAS_LABEL + 1 - len("example-design-"))
+        with pytest.raises(publish_doc.StageError,
+                           match=str(publish_doc.MAX_ALIAS_LABEL)):
+            publish_doc.derive_name("example", "design", ref, workspace)
+
+    def test_the_live_defect_case_is_refused(self, tmp_path):
+        """The measured 2026-08-12 case: a 41-char name whose alias truncated to
+        `design-doc-publish-design-hosting-o` and whose conventional URL 404s."""
+        ws = tmp_path / "live.json"
+        ws.write_text(json.dumps({"projects": [{"name": "design-doc-publish"}]}),
+                      encoding="utf-8")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.derive_name("design-doc-publish", "design", "hosting-options", ws)
+
+    def test_the_cap_fires_only_past_the_name_validity_rules(self, tmp_path):
+        """An over-100 name still gets the original name-validity refusal, so the two
+        limits stay distinguishable."""
+        long_project = "a" * 70
+        ws = tmp_path / "long.json"
+        ws.write_text(json.dumps({"projects": [{"name": long_project}]}), encoding="utf-8")
+        with pytest.raises(publish_doc.StageError, match="not a usable Vercel"):
+            publish_doc.derive_name(long_project, "design", "b" * 40, ws)
+
+
 # --------------------------------------------------------------------------- §2b
 
 class TestPurposeAndStyleAreDifferentVocabularies:
