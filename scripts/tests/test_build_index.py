@@ -209,14 +209,13 @@ class TestItFailsClosedRatherThanGuessing:
         with pytest.raises(SystemExit):
             index.vercel_projects(scope=SCOPE)
 
-    def test_a_coloured_name_inside_valid_json_is_refused_not_accepted(self, index, cli):
+    def test_a_coloured_name_inside_valid_json_is_skipped_not_accepted(self, index, cli):
         """The nastier shape, and the reason the name check is not merely a JSON parse: escape
         bytes inside a JSON *string* keep the document valid, so `json.loads` alone would hand
         back `\\x1b[1mexample-plan-786\\x1b[22m` as a project name and reproduce #125 in
         JSON clothing."""
         cli(stdout=_payload([_row("\x1b[1mexample-plan-786\x1b[22m")]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     def test_a_bare_array_is_refused(self, index, cli):
         cli(stdout=json.dumps([_row("a-project")]))
@@ -234,13 +233,12 @@ class TestItFailsClosedRatherThanGuessing:
             index.vercel_projects(scope=SCOPE)
 
     @pytest.mark.parametrize("bad", [{}, {"name": ""}, {"name": None}, {"name": 7}])
-    def test_a_row_without_a_usable_name_is_refused(self, index, cli, bad):
+    def test_a_row_without_a_usable_name_is_skipped(self, index, cli, bad):
         row = _row("fine")
         row.pop("name")
         row.update(bad)
         cli(stdout=_payload([row]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     @pytest.mark.parametrize("name", [
         "[1mexample-plan-786",      # C1 CSI: one codepoint, same effect as ESC-[
@@ -248,13 +246,12 @@ class TestItFailsClosedRatherThanGuessing:
         "   ",                                  # printable, but not a name
         " example-plan-786 ",             # padded: would not match the real project
     ])
-    def test_a_name_that_is_not_plainly_printable_is_refused(self, index, cli, name):
+    def test_a_name_that_is_not_plainly_printable_is_skipped(self, index, cli, name):
         """A hand-rolled `ord(ch) < 0x20 or == 0x7F` check covered only C0 and DEL and let all
         four of these through. Cross-model review caught it; `str.isprintable()` plus a strip
         comparison is both shorter and correct."""
         cli(stdout=_payload([_row(name)]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     def test_a_listing_answered_for_another_tenant_is_refused(self, index, cli):
         """`--scope` only ASKS for an account. The payload says which one it answered for, and
@@ -454,14 +451,37 @@ class TestRowsCarryTheDomainVercelReports:
         assert built[0]["url"] == self.TRUNC_URL
         assert self.NAME41 + ".vercel.app" not in built[0]["url"]
 
+
+    def test_one_untrustworthy_row_does_not_take_the_whole_index_down(self, index, cli, capsys):
+        """The reason this behaviour changed. A single project whose reported domain is not
+        its own froze the ENTIRE docs index for every other project, so every doc published
+        afterwards went unlisted (measured live 2026-08-13: `rawgentic-analysis-713` reported
+        `deploy-713.vercel.app`, and the index stopped rebuilding). Refusing the row is right.
+        Refusing every other row with it is not."""
+        cli(stdout=_payload([_row("example-plan-786",
+                                  latestProductionUrl="https://attacker.vercel.app"),
+                             _row("example-design-12")]))
+        rows = index.vercel_projects(scope=SCOPE)
+        assert [r["name"] for r in rows] == ["example-design-12"]
+        warned = capsys.readouterr().err
+        assert "example-plan-786" in warned and "skipped" in warned.lower()
+
+    def test_a_skipped_row_never_becomes_a_link(self, index, cli):
+        """The security property #23 bought must survive the change: a foreign tenant is
+        still never emitted as an href. It is dropped instead of aborting."""
+        cli(stdout=_payload([_row("example-plan-786",
+                                  latestProductionUrl="https://attacker.vercel.app"),
+                             _row("example-design-12")]))
+        built = index.build_rows(index.vercel_projects(scope=SCOPE), ["example"], False)
+        assert all("attacker.vercel.app" not in r["url"] for r in built)
+
     def test_a_row_with_no_reported_domain_is_refused(self, index, cli):
         """A row without its real domain can only be indexed as a guess — the defect."""
         row = _row("example-plan-786")
         row.pop("latestProductionUrl")
         cli(stdout=_payload([row]))
-        with pytest.raises(SystemExit) as e:
-            index.vercel_projects(scope=SCOPE)
-        assert "latestProductionUrl" in str(e.value)
+        rows = index.vercel_projects(scope=SCOPE)
+        assert rows == []
 
     def test_a_foreign_tenants_vercel_domain_is_refused(self, index, cli):
         """8a finding: a vercel.app SHAPE is not enough — the host must be THIS row's
@@ -469,33 +489,29 @@ class TestRowsCarryTheDomainVercelReports:
         valid tenant and must never become this row's href."""
         cli(stdout=_payload([_row("example-plan-786",
                                   latestProductionUrl="https://attacker.vercel.app")]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     def test_a_prefix_of_an_under_cap_name_is_refused(self, index, cli):
         """Truncation exists only past the 35-char cap; a shorter name's domain is its
         name, exactly."""
         cli(stdout=_payload([_row("example-plan-786",
                                   latestProductionUrl="https://example-plan.vercel.app")]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     def test_a_resembling_prefix_that_is_not_the_deterministic_cut_is_refused(self, index, cli):
         """Step 11 finding: only THE cut (name[:35], trailing hyphens stripped) binds —
         a tenant squatting a shorter resembling prefix must never become the href."""
         cli(stdout=_payload([_row(self.NAME41,
                                   latestProductionUrl=f"https://{self.NAME41[:34]}.vercel.app")]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     @pytest.mark.parametrize("bad", ["", None, 7,
                                      "http://example-plan-786.vercel.app",
                                      "https://evil.example.com",
                                      "https://x.vercel.app.evil.com"])
-    def test_an_unusable_reported_domain_is_refused(self, index, cli, bad):
+    def test_an_unusable_reported_domain_is_skipped(self, index, cli, bad):
         cli(stdout=_payload([_row("example-plan-786", latestProductionUrl=bad)]))
-        with pytest.raises(SystemExit):
-            index.vercel_projects(scope=SCOPE)
+        assert index.vercel_projects(scope=SCOPE) == []
 
     def test_the_title_fetch_goes_to_the_reported_domain(self, index, cli, monkeypatch):
         """page_meta must fetch where the page actually lives, or every truncated-domain
