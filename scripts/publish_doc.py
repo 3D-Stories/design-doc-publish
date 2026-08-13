@@ -138,6 +138,14 @@ WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic pro
 INDEX_PROJECT = "docs-index"
 MAX_NAME = 100
 
+# Vercel cuts the auto-assigned `<name>.vercel.app` label at 35 characters and strips a
+# trailing hyphen left by the cut (#23; measured 2026-08-13 across the 20 live projects:
+# longest intact label 33, every truncated label 34-35, shortest truncated name 36 — and
+# confirmed on the 2026-08-12 deploy where a 41-char name aliased to a 35-char label).
+# An over-cap name deploys FINE and then 404s at its conventional URL forever, so stage 2
+# refuses it: refusing before the deploy is cheaper than stage 6 discovering it after.
+MAX_ALIAS_LABEL = 35
+
 
 class StageError(Exception):
     """A stage refused. The process exits ``EXIT_BASE + stage``."""
@@ -310,6 +318,16 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
         raise StageError(2, f"the derived name {name!r} is not a usable Vercel project "
                             f"name (lowercase letters, digits and hyphens, "
                             f"{MAX_NAME} chars max)")
+    # The alias cap comes AFTER name validity so the two limits stay distinguishable: an
+    # unusable name gets the message above; a usable one that cannot round-trip to its
+    # own `.vercel.app` domain gets this one (#23).
+    if len(name) > MAX_ALIAS_LABEL:
+        raise StageError(2, f"the derived name {name!r} is {len(name)} characters, over "
+                            f"the {MAX_ALIAS_LABEL}-char cap Vercel puts on a "
+                            f".vercel.app label. A longer name deploys, but its domain "
+                            f"gets TRUNCATED and the conventional URL 404s forever "
+                            f"(#23, measured live). Shorten --ref by at least "
+                            f"{len(name) - MAX_ALIAS_LABEL} character(s).")
     return name
 
 
@@ -504,6 +522,11 @@ def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
 
 # --- stage 5: the deploy -------------------------------------------------------------
 
+# A line that STARTS the Aliased verdict: optional non-alphanumeric marker glyphs
+# (the CLI's `▲`), then the word. `Error: … was not aliased …` starts with `Error`,
+# so it can never match (#23, Step 11 finding).
+_ALIASED_LINE = re.compile(r"^[^A-Za-z0-9]*aliased\b", re.I)
+
 # A COMPLETE host token: the lookahead is what stops `https://old.vercel.app.evil/x`
 # from reading as a vercel.app host, which a trailing `\S*` happily accepted.
 _URL_HOST = re.compile(r"https://([a-z0-9][a-z0-9.-]*\.vercel\.app)(?=[/\s]|$)", re.I)
@@ -523,6 +546,61 @@ def deployed_hosts(log: str, name: str) -> list[str]:
         if h == f"{name}.vercel.app" or h.startswith(f"{name}-"):
             out.append(h)
     return out
+
+
+def aliased_host(log: str, name: str, stage: int = 6) -> str:
+    """The host the deploy itself reported as THIS project's alias (#23).
+
+    Stage 6 used to fetch a URL CONSTRUCTED from the project name, and for any name over
+    `MAX_ALIAS_LABEL` that URL is permanently absent (Vercel truncates the label), so a
+    perfect deploy read as `HTTP 404 — not live`. The deploy's own `Aliased` line is the
+    truth, and it is already in the log stage 5 receives — zero extra CLI calls, and the
+    same trust boundary `deployed_hosts` uses for the stage-5 binding check.
+
+    Two host shapes are THIS project's alias, judged per host from the same `_URL_HOST`
+    scan `deployed_hosts` uses:
+    * the label equals the name — the intact alias, preferred;
+    * the label is a PREFIX of the name no shorter than `MAX_ALIAS_LABEL - 1` — the
+      cap-truncated alias (35, or 34 after Vercel strips a trailing hyphen the cut left).
+      The floor matters: without it, a stray short host like `design.vercel.app` would
+      read as "a prefix of the name" and point the verifier at somebody else's project.
+
+    The deployment URL (`<name>-<hash>-<team>`) matches neither: its label is LONGER
+    than the name, and a longer string is not a prefix. With the stage-2 cap in place the
+    truncated branch is defense-in-depth — no new over-cap name can be minted — but the
+    cap is a measured constant, not a contract, so the reader stays tolerant.
+
+    Refuses rather than constructing when the log names no alias: verifying a guessed
+    URL is exactly the defect this function replaces.
+    """
+    exact = truncated = None
+    suffix = ".vercel.app"
+    # Anchored to lines that START with the Aliased verdict (8a + Step 11 findings): a
+    # same-name URL in an error or diagnostic line — including one that merely contains
+    # the word, like `Error: project was not aliased to https://…` — is not an alias the
+    # deploy granted. Both observed success forms match: `Aliased to https://…` (56.5.0
+    # capture) and `▲ Aliased https://…` (live 2026-08-12); both START with the word
+    # after at most a marker glyph.
+    aliased_lines = "\n".join(
+        ln for ln in log.splitlines() if _ALIASED_LINE.match(ln))
+    # The truncation Vercel applies is DETERMINISTIC — cut at the cap, strip trailing
+    # hyphens — so the acceptable truncated label is THE truncation, never any prefix
+    # that merely resembles one (Step 11 finding). Empty when the name is at or under
+    # the cap: those names alias intact, so only the exact label can match.
+    expected_cut = name[:MAX_ALIAS_LABEL].rstrip("-") if len(name) > MAX_ALIAS_LABEL else ""
+    for host in _URL_HOST.findall(aliased_lines):
+        h = host.lower()
+        label = h[:-len(suffix)]
+        if label == name:
+            exact = h
+        elif expected_cut and label == expected_cut:
+            truncated = h
+    if exact or truncated:
+        return exact or truncated
+    raise StageError(stage, f"the deploy log reports no alias for {name!r} — refusing "
+                            f"to fetch a URL constructed from the name: for a truncated "
+                            f"domain that guess is permanently absent and a perfect "
+                            f"deploy reads as not-live (#23).")
 
 
 # A reference is only shippable if it names one of these. Step 11 found the real hole: with
@@ -792,7 +870,9 @@ def refresh_index(workdir: Path, workspace_file: Path, scope: str) -> None:
     if not deployed_hosts(_log(dep), INDEX_PROJECT):
         raise StageError(7, f"the index deploy log names no {INDEX_PROJECT} URL:\n{_log(dep)}")
 
-    verify_live(f"https://{INDEX_PROJECT}.vercel.app/", built, stage=7)
+    # Same #23 rule as stage 6: the index's own deploy just reported its alias — use it.
+    verify_live(f"https://{aliased_host(_log(dep), INDEX_PROJECT, stage=7)}/",
+                built, stage=7)
 
     # Byte identity proves the page we built is the page that is live. It does NOT prove
     # the page is CURRENT: two publishers interleaving — A builds N rows, B publishes and
@@ -977,7 +1057,8 @@ def main(argv=None) -> int:
         print(f"publish_doc: 5/7 deployed\n{log.strip()}")
 
         stage = 6
-        url = f"https://{name}.vercel.app/"
+        # The domain the deploy REPORTED, never one constructed from the name (#23).
+        url = f"https://{aliased_host(log, name)}/"
         verify_live(url, page)
         print(f"publish_doc: 6/7 verified live — {url} serves exactly what was linted")
 

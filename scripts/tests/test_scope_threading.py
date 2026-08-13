@@ -49,7 +49,8 @@ def _one_row(index):
     """`render` reads `order[0]` for its own accent CSS, so an index of nothing has never
     been renderable. That predates #9 and is not what these tests are about."""
     return index.build_rows(
-        [{"name": "example-plan-1", "deployed": None}], ["example"], fetch_titles=False)
+        [{"name": "example-plan-1", "url": "https://example-plan-1.vercel.app",
+          "deployed": None}], ["example"], fetch_titles=False)
 
 
 class TestEveryAccountTargetingCallIsPinned:
@@ -126,6 +127,8 @@ class TestTheIndexChildIsHandedTheResolvedValues:
         monkeypatch.setattr(subprocess, "run", fake_run)
         monkeypatch.setattr(publish_doc, "deployed_hosts", lambda log, name: ["x.vercel.app"])
         monkeypatch.setattr(publish_doc, "verify_live", lambda *a, **kw: None)
+        monkeypatch.setattr(publish_doc, "aliased_host",
+                            lambda log, name, stage=6: f"{name}.vercel.app")
         # A believable listing: stage 7 now refuses an empty one, because moments after a
         # successful deploy an account cannot truthfully hold nothing.
         monkeypatch.setattr(publish_doc.INDEX, "vercel_projects",
@@ -378,6 +381,8 @@ class TestStageSevenDoesNotBelieveAnEmptyListing:
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _index_written(cmd, tmp_path))
         monkeypatch.setattr(publish_doc, "deployed_hosts", lambda log, name: ["x.vercel.app"])
         monkeypatch.setattr(publish_doc, "verify_live", lambda *a, **kw: None)
+        monkeypatch.setattr(publish_doc, "aliased_host",
+                            lambda log, name, stage=6: f"{name}.vercel.app")
         monkeypatch.setattr(publish_doc.INDEX, "vercel_projects", lambda *a, **kw: [])
         with pytest.raises(publish_doc.StageError) as excinfo:
             publish_doc.refresh_index(tmp_path, tmp_path / "ws.json", SCOPE)
@@ -387,6 +392,8 @@ class TestStageSevenDoesNotBelieveAnEmptyListing:
         monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: _index_written(cmd, tmp_path))
         monkeypatch.setattr(publish_doc, "deployed_hosts", lambda log, name: ["x.vercel.app"])
         monkeypatch.setattr(publish_doc, "verify_live", lambda *a, **kw: None)
+        monkeypatch.setattr(publish_doc, "aliased_host",
+                            lambda log, name, stage=6: f"{name}.vercel.app")
         monkeypatch.setattr(publish_doc.INDEX, "vercel_projects",
                             lambda *a, **kw: [{"name": "one"}])
         publish_doc.refresh_index(tmp_path, tmp_path / "ws.json", SCOPE)

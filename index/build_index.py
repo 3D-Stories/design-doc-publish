@@ -146,6 +146,20 @@ def _clean_name(value: object) -> bool:
             and value.isprintable() and value == value.strip())
 
 
+# The shape of a reported production URL (#23): https, a single vercel.app host, nothing
+# after it. Anchored at BOTH ends — `https://x.vercel.app.evil.com` carries the suffix
+# mid-host and must not read as a Vercel domain (the same lookahead lesson publish_doc's
+# `_URL_HOST` documents). The index emits this value verbatim as an href, so the check is
+# also what keeps a hostile payload from injecting a foreign link target.
+_PROD_URL = re.compile(r"^https://[a-z0-9][a-z0-9-]*\.vercel\.app$")
+
+# Vercel's auto-alias label cap (#23) — mirrors publish_doc.MAX_ALIAS_LABEL, restated
+# because the two files deliberately do not import each other. Truncation exists only
+# for names PAST this cap, and a truncated label lands at cap or cap-minus-one (the cut
+# strips a trailing hyphen).
+_ALIAS_CAP = 35
+
+
 # Vercel reports `updatedAt` in epoch MILLISECONDS. The magnitude window rejects a value in the
 # wrong unit rather than believing it: epoch SECONDS would divide down to a 1970 date and then be
 # displayed AND hashed into the change signature as though it were real, which is exactly the
@@ -216,7 +230,32 @@ def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
         name = p.get("name")
         if not _clean_name(name):
             _refuse(f"projects[{i}] has no usable `name` ({name!r})", blob)
-        rows.append({"name": name, "deployed": _instant(p.get("updatedAt"))})
+        # #23: the href is the domain Vercel REPORTS, never one constructed from the name
+        # — five live projects have a truncated domain, and a constructed link to them is
+        # permanently dead. Fail closed like `name`: a row without its real domain can
+        # only be indexed as a guess, which is the defect this field replaces.
+        url = p.get("latestProductionUrl")
+        if not _clean_name(url) or not _PROD_URL.match(url):
+            _refuse(f"projects[{i}] ({name}) has no usable `latestProductionUrl` "
+                    f"({url!r}) — the index emits the reported domain, never a "
+                    f"constructed one (#23)", blob)
+        # 8a finding: the SHAPE check alone admits any vercel.app tenant. The host must
+        # be THIS project's own — its name exactly, or (only past the alias cap, where
+        # truncation exists) its 34-35 char truncation. A renamed project whose domain
+        # kept the old name refuses here LOUDLY rather than indexing a mismatched link.
+        # The cap mirrors publish_doc.MAX_ALIAS_LABEL; the two files deliberately do not
+        # import each other, so the value is restated with this pointer.
+        label = url[len("https://"):-len(".vercel.app")]
+        # The acceptable truncation is THE deterministic cut (cap, trailing hyphens
+        # stripped) — never any prefix that merely resembles one (Step 11 finding: a
+        # foreign tenant squatting a resembling prefix must not become the href).
+        expected_cut = name[:_ALIAS_CAP].rstrip("-") if len(name) > _ALIAS_CAP else ""
+        if label != name and not (expected_cut and label == expected_cut):
+            _refuse(f"projects[{i}] ({name}) reports a domain that is not this "
+                    f"project's own ({url!r}) — refusing to emit a foreign link "
+                    f"target (#23)", blob)
+        rows.append({"name": name, "url": url,
+                     "deployed": _instant(p.get("updatedAt"))})
     return rows, pagination["next"]
 
 
@@ -379,10 +418,13 @@ def _parse_stamp(body: str) -> datetime | None:
     return None
 
 
-def page_meta(name: str, timeout: float = 15.0) -> tuple[str, datetime | None]:
+def page_meta(name: str, url: str, timeout: float = 15.0) -> tuple[str, datetime | None]:
     """(title, self-declared updated-at) for one page. Falls back to the project name and
-    None — a fetch failure must not silently drop a row."""
-    url = f"https://{name}.vercel.app/"
+    None — a fetch failure must not silently drop a row.
+
+    `url` is the row's REPORTED domain (#23): fetching a constructed
+    `https://{name}.vercel.app/` 404s for every truncated-domain project, so their titles
+    silently degraded to the bare project name."""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "docs-index-builder"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
@@ -399,7 +441,8 @@ def build_rows(entries: list[dict], projects: list[str], fetch_titles: bool) -> 
     meta: dict[str, tuple[str, datetime | None]] = {}
     if fetch_titles:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            meta = dict(zip(names, pool.map(page_meta, names)))
+            meta = dict(zip(names, pool.map(
+                lambda e: page_meta(e["name"], e["url"] + "/"), entries)))
     rows = []
     for e in entries:
         n = e["name"]
@@ -408,7 +451,7 @@ def build_rows(entries: list[dict], projects: list[str], fetch_titles: bool) -> 
         # Declared beats deployed. Same rule the VDL packs use: what the artifact says
         # about itself wins over what the platform infers about it.
         updated, source = (declared, "page") if declared else (e["deployed"], "deploy")
-        rows.append({"name": n, "url": f"https://{n}.vercel.app",
+        rows.append({"name": n, "url": e["url"],
                      "title": title, "group": group, "chip": chip,
                      "updated": updated, "updated_src": source if updated else "none"})
     return rows

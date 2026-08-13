@@ -432,6 +432,84 @@ class TestOnlyTheAgeDegrades:
         assert built[0]["updated_src"] == "none"
 
 
+# --------------------------------------------------------------- #23: read, never construct
+
+class TestRowsCarryTheDomainVercelReports:
+    """#23. The index used to construct every href as `https://<name>.vercel.app` — and for
+    any name Vercel truncated, that link is permanently dead. Measured 2026-08-13: five of
+    the twenty live projects have a domain that does not match their name. The CLI already
+    reports the real one per row as `latestProductionUrl`; the index emits THAT."""
+
+    NAME41 = "design-doc-publish-design-hosting-options"
+    TRUNC_URL = "https://design-doc-publish-design-hosting-o.vercel.app"
+
+    def test_a_truncated_domain_is_carried_verbatim(self, index, cli):
+        cli(stdout=_payload([_row(self.NAME41, latestProductionUrl=self.TRUNC_URL)]))
+        rows = index.vercel_projects(scope=SCOPE)
+        assert rows[0]["url"] == self.TRUNC_URL
+
+    def test_the_href_is_the_reported_domain_not_the_name(self, index, cli):
+        cli(stdout=_payload([_row(self.NAME41, latestProductionUrl=self.TRUNC_URL)]))
+        built = index.build_rows(index.vercel_projects(scope=SCOPE), ["example"], False)
+        assert built[0]["url"] == self.TRUNC_URL
+        assert self.NAME41 + ".vercel.app" not in built[0]["url"]
+
+    def test_a_row_with_no_reported_domain_is_refused(self, index, cli):
+        """A row without its real domain can only be indexed as a guess — the defect."""
+        row = _row("example-plan-786")
+        row.pop("latestProductionUrl")
+        cli(stdout=_payload([row]))
+        with pytest.raises(SystemExit) as e:
+            index.vercel_projects(scope=SCOPE)
+        assert "latestProductionUrl" in str(e.value)
+
+    def test_a_foreign_tenants_vercel_domain_is_refused(self, index, cli):
+        """8a finding: a vercel.app SHAPE is not enough — the host must be THIS row's
+        project (its name, or its cap-truncation). `attacker.vercel.app` is a perfectly
+        valid tenant and must never become this row's href."""
+        cli(stdout=_payload([_row("example-plan-786",
+                                  latestProductionUrl="https://attacker.vercel.app")]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    def test_a_prefix_of_an_under_cap_name_is_refused(self, index, cli):
+        """Truncation exists only past the 35-char cap; a shorter name's domain is its
+        name, exactly."""
+        cli(stdout=_payload([_row("example-plan-786",
+                                  latestProductionUrl="https://example-plan.vercel.app")]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    def test_a_resembling_prefix_that_is_not_the_deterministic_cut_is_refused(self, index, cli):
+        """Step 11 finding: only THE cut (name[:35], trailing hyphens stripped) binds —
+        a tenant squatting a shorter resembling prefix must never become the href."""
+        cli(stdout=_payload([_row(self.NAME41,
+                                  latestProductionUrl=f"https://{self.NAME41[:34]}.vercel.app")]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    @pytest.mark.parametrize("bad", ["", None, 7,
+                                     "http://example-plan-786.vercel.app",
+                                     "https://evil.example.com",
+                                     "https://x.vercel.app.evil.com"])
+    def test_an_unusable_reported_domain_is_refused(self, index, cli, bad):
+        cli(stdout=_payload([_row("example-plan-786", latestProductionUrl=bad)]))
+        with pytest.raises(SystemExit):
+            index.vercel_projects(scope=SCOPE)
+
+    def test_the_title_fetch_goes_to_the_reported_domain(self, index, cli, monkeypatch):
+        """page_meta must fetch where the page actually lives, or every truncated-domain
+        title degrades to the project name."""
+        fetched = []
+        def fake_urlopen(req, timeout=None):
+            fetched.append(req.full_url if hasattr(req, "full_url") else str(req))
+            raise OSError("no network in tests")
+        monkeypatch.setattr(index.urllib.request, "urlopen", fake_urlopen)
+        cli(stdout=_payload([_row(self.NAME41, latestProductionUrl=self.TRUNC_URL)]))
+        index.build_rows(index.vercel_projects(scope=SCOPE), ["example"], True)
+        assert fetched and fetched[0].startswith(self.TRUNC_URL)
+
+
 # --------------------------------------------------------------- a declined "fix", pinned
 
 class TestTheBootstrapAccountStillPublishes:

@@ -413,6 +413,155 @@ class TestTheNameIsDerivedFromValidatedComponents:
             publish_doc.derive_name("chorestory_business", "design", "5", ws)
 
 
+# --------------------------------------------------------------------------- #23
+class TestTheAliasCapIsEnforcedAtNaming:
+    """#23. Vercel cuts the auto-assigned `<name>.vercel.app` label at 35 characters, so a
+    36+-char name deploys fine and then 404s at its conventional URL forever. Measured
+    2026-08-13 across 20 live projects: longest intact label 33, every truncated label
+    34-35, shortest truncated name 36. Stage 2 refuses over-cap names because refusing
+    before the deploy is cheaper than stage 6 discovering a permanent 404 after it."""
+
+    def test_a_name_at_the_cap_is_accepted(self, workspace):
+        ref = "x" * (publish_doc.MAX_ALIAS_LABEL - len("example-design-"))
+        name = publish_doc.derive_name("example", "design", ref, workspace)
+        assert len(name) == publish_doc.MAX_ALIAS_LABEL
+
+    def test_one_char_over_the_cap_is_refused_toward_ref(self, workspace):
+        """The refusal must say what to do: shorten --ref."""
+        ref = "x" * (publish_doc.MAX_ALIAS_LABEL + 1 - len("example-design-"))
+        with pytest.raises(publish_doc.StageError, match=r"--ref"):
+            publish_doc.derive_name("example", "design", ref, workspace)
+
+    def test_the_message_names_the_cap(self, workspace):
+        ref = "x" * (publish_doc.MAX_ALIAS_LABEL + 1 - len("example-design-"))
+        with pytest.raises(publish_doc.StageError,
+                           match=str(publish_doc.MAX_ALIAS_LABEL)):
+            publish_doc.derive_name("example", "design", ref, workspace)
+
+    def test_the_live_defect_case_is_refused(self, tmp_path):
+        """The measured 2026-08-12 case: a 41-char name whose alias truncated to
+        `design-doc-publish-design-hosting-o` and whose conventional URL 404s."""
+        ws = tmp_path / "live.json"
+        ws.write_text(json.dumps({"projects": [{"name": "design-doc-publish"}]}),
+                      encoding="utf-8")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.derive_name("design-doc-publish", "design", "hosting-options", ws)
+
+    def test_the_cap_fires_only_past_the_name_validity_rules(self, tmp_path):
+        """An over-100 name still gets the original name-validity refusal, so the two
+        limits stay distinguishable."""
+        long_project = "a" * 70
+        ws = tmp_path / "long.json"
+        ws.write_text(json.dumps({"projects": [{"name": long_project}]}), encoding="utf-8")
+        with pytest.raises(publish_doc.StageError, match="not a usable Vercel"):
+            publish_doc.derive_name(long_project, "design", "b" * 40, ws)
+
+
+class TestTheVerifierUsesTheDomainTheDeployReported:
+    """#23. Stage 6 used to fetch `https://{name}.vercel.app/` — a URL CONSTRUCTED from
+    the project name. For any name Vercel truncated, that URL is permanently absent, so a
+    perfect deploy read as `HTTP 404 — not live`. The domain the deploy itself reports on
+    its Aliased line is the truth; `aliased_host` extracts it and refuses to guess."""
+
+    # The 2026-08-12 live failure, verbatim shape: the deployment URL passes stage 5's
+    # binding check, and the alias is the 35-char truncation of the 41-char name.
+    NAME41 = "design-doc-publish-design-hosting-options"
+    LIVE_LOG = (
+        "Vercel CLI 56.5.0 (Node.js 22.22.1)\n"
+        "Production: https://design-doc-publish-design-hosting-options-89c6xr0sk-3d-stories.vercel.app [8s]\n"
+        "Aliased to https://design-doc-publish-design-hosting-o.vercel.app\n")
+
+    def test_an_exact_alias_is_returned(self):
+        log = DEPLOY_LOG.format(name="example-design-12")
+        assert publish_doc.aliased_host(
+            log, "example-design-12") == "example-design-12.vercel.app"
+
+    def test_the_live_truncated_alias_is_returned(self):
+        assert publish_doc.aliased_host(
+            self.LIVE_LOG, self.NAME41) == "design-doc-publish-design-hosting-o.vercel.app"
+
+    def test_the_hyphen_stripped_truncation_is_recognized(self):
+        """Vercel cuts at 35 then strips a trailing hyphen — the measured 34-char case."""
+        name = "stars-coc-mvp-design-arewethereyet-integration"
+        log = "Aliased to https://stars-coc-mvp-design-arewethereyet.vercel.app\n"
+        assert publish_doc.aliased_host(
+            log, name) == "stars-coc-mvp-design-arewethereyet.vercel.app"
+
+    def test_an_exact_alias_wins_over_a_truncated_one(self):
+        log = ("Aliased to https://example-design-12.vercel.app\n"
+               + self.LIVE_LOG)
+        assert publish_doc.aliased_host(
+            log, "example-design-12") == "example-design-12.vercel.app"
+
+    def test_the_deployment_url_is_never_the_answer(self):
+        """`<name>-<hash>-<team>` is where the deploy LIVES, not where the doc is served."""
+        log = ("Production: https://example-design-12-8qk3nr2-3d-stories.vercel.app\n")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, "example-design-12")
+
+    def test_a_short_prefix_host_cannot_hijack_the_verification(self):
+        """`design.vercel.app` is a prefix of the name but far under the cap — accepting
+        it would point the verifier at somebody else's project."""
+        log = "Aliased to https://design.vercel.app\n"
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, self.NAME41)
+
+    def test_a_foreign_host_is_not_an_alias(self):
+        log = "Aliased to https://some-other-project.vercel.app\n"
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, "example-design-12")
+
+    def test_the_refusal_carries_the_callers_stage(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.aliased_host("no hosts here", "example-design-12", stage=7)
+        assert e.value.stage == 7
+
+    def test_a_host_on_a_non_aliased_line_is_never_selected(self):
+        """8a finding: the scan must be anchored to the Aliased line — a same-name URL in
+        an error or diagnostic line is not an alias the deploy granted."""
+        log = ("Error: could not alias https://example-design-12.vercel.app this time\n"
+               "Production: https://example-design-12-8qk3nr2-3d-stories.vercel.app\n")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, "example-design-12")
+
+    def test_the_unicode_aliased_line_form_is_recognized(self):
+        """The live CLI prints `\u25b2 Aliased https://...` (observed 2026-08-12)."""
+        log = "\u25b2 Aliased         https://example-design-12.vercel.app\n"
+        assert publish_doc.aliased_host(
+            log, "example-design-12") == "example-design-12.vercel.app"
+
+    def test_a_failure_line_containing_the_word_aliased_is_not_a_grant(self):
+        """Step 11 finding: `was not aliased to https://…` contains the word — only a
+        line that STARTS with the Aliased verdict is the deploy's grant."""
+        log = ("Error: project was not aliased to https://example-design-12.vercel.app\n")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, "example-design-12")
+
+    def test_a_resembling_prefix_that_is_not_the_deterministic_cut_is_refused(self):
+        """Step 11 finding: the acceptable truncation is THE cut (name[:35], trailing
+        hyphens stripped) — a 34-char prefix that is not that cut is a foreign host."""
+        log = f"Aliased to https://{self.NAME41[:34]}.vercel.app\n"   # one short of the cut
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, self.NAME41)
+
+    def test_a_34_char_prefix_of_an_at_cap_name_is_not_an_alias(self):
+        """8a finding: a 35-char name aliases INTACT in reality — truncation exists only
+        past the cap, so a 34-char prefix of an at-cap name is a foreign host."""
+        name = "a" * publish_doc.MAX_ALIAS_LABEL          # 35, never truncates
+        log = f"Aliased to https://{'a' * 34}.vercel.app\n"
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.aliased_host(log, name)
+
+    def test_a_log_with_no_alias_refuses_instead_of_guessing(self, run):
+        """END TO END: the old code would fetch the constructed URL here and verify a
+        guess. The fix refuses at stage 6 and fetches NOTHING."""
+        log = ("Vercel CLI 56.5.0 (Node.js 22.22.1)\n"
+               "Production: https://example-design-12-8qk3nr2-3d-stories.vercel.app [8s]\n")
+        rc, fr, fu = run("--new-project", deploy_log=log)
+        assert rc == code(6)
+        assert not [u for u in fu.urls if "example-design-12" in u]
+
+
 # --------------------------------------------------------------------------- §2b
 
 class TestPurposeAndStyleAreDifferentVocabularies:
