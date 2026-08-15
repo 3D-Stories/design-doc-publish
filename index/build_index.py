@@ -524,8 +524,15 @@ _AGE_JS = """
     if (document.hidden) return;
     var now = Date.now();
     ages.forEach(function(el){
-      var then = parseInt(el.getAttribute('data-updated'), 10);
-      if (!isFinite(then)) return;              // unreadable: the row keeps its build-time text
+      // The WHOLE value must be digits, and it must be a plausible instant. `parseInt` takes a
+      // numeric PREFIX, so `1786757518797-corrupt` used to pass and overwrite the build-time
+      // text with an age, and `17e9` used to become epoch 17ms — the exact opposite of what the
+      // comment on this line promised (cross-model review finding, 2026-08-14). The bounds are
+      // `_instant()`'s own: 1e11 ms is 1973 and 1e14 is the year 5138.
+      var raw = el.getAttribute('data-updated');
+      if (!/^[0-9]+$/.test(raw)) return;        // unreadable: the row keeps its build-time text
+      var then = Number(raw);
+      if (!(then >= 1e11 && then < 1e14)) return;
       el.textContent = (el.hasAttribute('data-approx') ? '~' : '') + ago(then, now);
     });
   }
@@ -658,9 +665,12 @@ def render(rows: list[dict], stamp: str, now: datetime, sig: str,
         exact = r["updated"].strftime("%Y-%m-%d %H:%M")
         src = ("declared by the page" if r["updated_src"] == "page"
                else "inferred from the Vercel deploy age (coarse)")
-        stamp = int(r["updated"].timestamp() * 1000)
+        # NOT named `stamp`: `render()` already takes a `stamp` parameter (the build stamp the
+        # footer prints), and shadowing it here would hand a future editor an integer where they
+        # reasonably expect that string.
+        epoch_ms = int(r["updated"].timestamp() * 1000)
         approx = ' data-approx="1"' if tilde else ""
-        return (f'<span class="when" data-updated="{stamp}"{approx} '
+        return (f'<span class="when" data-updated="{epoch_ms}"{approx} '
                 f'title="{exact} America/Edmonton — {src}">'
                 f'{tilde}{_ago(r["updated"], now)}</span>')
 

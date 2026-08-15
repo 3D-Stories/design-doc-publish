@@ -823,15 +823,26 @@ class TestEachRowCarriesItsAbsoluteInstant:
 # in the PR.
 
 NODE = shutil.which("node")
-needs_node = pytest.mark.skipif(NODE is None,
-                                reason="node is absent; it runs the shipped client-side renderer")
+# The skip reason names the CONSEQUENCE, because a bare "node is absent" understates it: with these
+# tests skipped, a syntactically broken script ships and takes the filter and the auto-refresh down
+# with the ages (cross-model review finding, 2026-08-14). `requirements-dev.txt` records the same
+# thing where the gate's dependencies are declared. Two guards do run without node — the brace-
+# artifact check below, and every markup test, which fail loudly on a render-time error.
+needs_node = pytest.mark.skipif(
+    NODE is None,
+    reason="node is absent, so the SHIPPED client-side renderer is not executed by this run — "
+           "install node to close that gap (see requirements-dev.txt)")
 
-# A stub `document` is all the fragment touches. `NODES` is defined by each caller.
+# A stub `document` is all the fragment touches. `NODES` and `NOW` are defined by each caller.
+#
+# `Date` is stubbed too, deliberately: the wiring tests below assert the exact text a cell ends up
+# with, and reading the real wall clock would make those answers depend on the day the suite runs.
 _JS_STUBS = """
 var document = {hidden: false,
                 querySelectorAll: function(){ return NODES; },
                 addEventListener: function(){}};
 var setInterval = function(){};
+var Date = {now: function(){ return NOW; }};
 """
 
 _JS_ELEMENT = """
@@ -867,7 +878,7 @@ class TestTheClientRendererMatchesAgo:
         expected = [index._ago(now - timedelta(seconds=d), now) for d in _AGE_DELTAS]
         cases = json.dumps([now_ms - d * 1000 for d in _AGE_DELTAS])
         out = _run_node(
-            "var NODES = [];\n" + _JS_STUBS + index._AGE_JS
+            f"var NODES = [];\nvar NOW = {now_ms};\n" + _JS_STUBS + index._AGE_JS
             + f"\nvar cases = {cases};\nvar now = {now_ms};\n"
             + "process.stdout.write(JSON.stringify(cases.map(function(t)"
               "{ return ago(t, now); })));")
@@ -875,10 +886,9 @@ class TestTheClientRendererMatchesAgo:
 
     @needs_node
     def test_the_fragment_parses_and_installs_nothing_when_no_row_has_a_time(self, index):
-        """`ages.length === 0` must install no timer at all. The stub's `setInterval` would
-        throw if the guard were missing, because it is not a function that tolerates being
-        called with the wrong shape — it is asserted directly instead."""
-        out = _run_node("var NODES = [];\n" + _JS_STUBS.replace(
+        """`ages.length === 0` must install no timer at all. The stub counts installations rather
+        than trusting that a missing guard would announce itself."""
+        out = _run_node("var NODES = [];\nvar NOW = 0;\n" + _JS_STUBS.replace(
             "var setInterval = function(){};",
             "var installed = 0; var setInterval = function(){ installed++; };")
             + index._AGE_JS + "\nprocess.stdout.write(String(installed));")
@@ -890,24 +900,61 @@ class TestTheClientRendererRewritesTheCell:
 
     @needs_node
     def test_each_cell_is_rewritten_from_its_own_attribute(self, index):
-        now_ms = int(_AGE_NOW.timestamp() * 1000)
-        nodes = (f"var NODES = [new El('{now_ms - 12 * 3600 * 1000}', false, '12h'),"
-                 f" new El('{now_ms - 86400 * 1000}', true, '~1d'),"
+        """Exact expected text, computed from `_ago()` against a STUBBED clock two days past the
+        fixture. An earlier revision of this test read node's real clock and could only assert
+        "something changed", which would have passed while only one of the two cells was being
+        rewritten (own review finding, 2026-08-14)."""
+        stamped = _AGE_NOW - timedelta(hours=12)
+        marked = _AGE_NOW - timedelta(hours=24)
+        viewing = _AGE_NOW + timedelta(days=2)                     # the reader arrives 2 days on
+        now_ms = int(viewing.timestamp() * 1000)
+        nodes = (f"var NODES = [new El('{int(stamped.timestamp() * 1000)}', false, '12h'),"
+                 f" new El('{int(marked.timestamp() * 1000)}', true, '~1d'),"
                  f" new El(null, false, '—'),"
                  f" new El('not-a-number', false, '9h')];")
         out = _run_node(
-            _JS_ELEMENT + nodes + _JS_STUBS + index._AGE_JS
+            _JS_ELEMENT + nodes + f"var NOW = {now_ms};" + _JS_STUBS + index._AGE_JS
             + "\nprocess.stdout.write(JSON.stringify(NODES.map(function(n)"
               "{ return n.textContent; })));")
-        got = json.loads(out)
-        # The first two are re-rendered against the stub clock. `Date.now()` in node is the real
-        # clock, well past 2026-08-05, so the exact ages are not predictable — what IS pinned is
-        # that a marked row keeps its `~`, and that the two unusable rows are left alone.
-        assert got[0] != "12h" or got[1] != "~1d", "no cell was re-rendered at all"
-        assert got[1].startswith("~"), f"the deploy-inferred marker was lost: {got[1]!r}"
-        assert not got[0].startswith("~"), f"a declared row gained a marker: {got[0]!r}"
-        assert got[2] == "—", "a row with no attribute was rewritten"
-        assert got[3] == "9h", "a malformed attribute was not left alone"
+        assert json.loads(out) == [
+            index._ago(stamped, viewing),                          # re-rendered, no marker
+            "~" + index._ago(marked, viewing),                     # re-rendered, marker kept
+            "—",                                                   # no attribute: untouched
+            "9h",                                                  # unreadable attribute: untouched
+        ]
+
+    @needs_node
+    def test_a_page_with_rows_installs_a_sixty_second_timer(self, index):
+        """AC2's "~60s timer", pinned by the period actually handed to `setInterval` rather than
+        by reading it out of the source. The sibling test above pins the other half: a page with
+        no dated row installs nothing at all."""
+        now_ms = int(_AGE_NOW.timestamp() * 1000)
+        out = _run_node(
+            _JS_ELEMENT + f"var NODES = [new El('{now_ms}', false, '1m')];"
+            + f"var NOW = {now_ms};"
+            + _JS_STUBS.replace("var setInterval = function(){};",
+                                "var period = -1;"
+                                " var setInterval = function(f, ms){ period = ms; };")
+            + index._AGE_JS + "\nprocess.stdout.write(String(period));")
+        assert out == "60000"
+
+    @needs_node
+    def test_an_attribute_that_is_only_PARTLY_numeric_keeps_the_build_time_text(self, index):
+        """`parseInt` takes a numeric PREFIX, so `<epoch>-corrupt` passed the first version of
+        this guard and overwrote the fallback with an age — the opposite of what the code claimed
+        (cross-model review finding, 2026-08-14). `17e9` is the same class: it became epoch 17ms,
+        which renders as an age of decades. A value outside `_instant()`'s bounds goes the same
+        way. Every one of these must leave the cell exactly as it shipped."""
+        now_ms = int(_AGE_NOW.timestamp() * 1000)
+        bad = [f"{now_ms}-corrupt", "17e9", f"  {now_ms}  ", "99999999999999999999",
+               "not-a-number", "1786757518797abc", "0"]
+        nodes = ("var NODES = ["
+                 + ", ".join(f"new El({v!r}, false, 'KEEP')" for v in bad) + "];")
+        out = _run_node(
+            _JS_ELEMENT + nodes + f"var NOW = {now_ms};" + _JS_STUBS + index._AGE_JS
+            + "\nprocess.stdout.write(JSON.stringify(NODES.map(function(n)"
+              "{ return n.textContent; })));")
+        assert json.loads(out) == ["KEEP"] * len(bad)
 
     @needs_node
     def test_a_hidden_tab_is_not_re_rendered_until_it_is_looked_at(self, index):
@@ -915,7 +962,8 @@ class TestTheClientRendererRewritesTheCell:
         `visibilitychange` handler is what makes this safe rather than lossy."""
         now_ms = int(_AGE_NOW.timestamp() * 1000)
         out = _run_node(
-            _JS_ELEMENT + f"var NODES = [new El('{now_ms}', false, 'PRISTINE')];"
+            _JS_ELEMENT + f"var NODES = [new El('{now_ms - 9 * 3600 * 1000}', false, 'PRISTINE')];"
+            + f"var NOW = {now_ms};"
             + _JS_STUBS.replace("hidden: false", "hidden: true") + index._AGE_JS
             + "\nprocess.stdout.write(NODES[0].textContent);")
         assert out == "PRISTINE"
@@ -949,6 +997,23 @@ class TestTheRendererShipsInsideThePage:
         done = subprocess.run([NODE, "--check", str(js)], capture_output=True, text=True,
                               timeout=30)
         assert done.returncode == 0, done.stderr
+
+    def test_no_f_string_brace_artifact_reaches_the_page(self, index):
+        """Runs WITHOUT node, deliberately, and that is the whole point: the `node --check` test
+        above SKIPS on a host with no node, and a broken script takes the filter and the
+        auto-refresh down with it, not only the ages (cross-model review finding, 2026-08-14).
+
+        The template is an f-string, so its own JS must double every brace. A single missing
+        double raises at render time and fails every test in this file. A doubled DOUBLE emits a
+        literal `{{` into the page instead, and only a JS parser would notice — so it is checked
+        here, in Python. `_AGE_JS` is excluded because it is interpolated verbatim and therefore
+        needs no doubling, so a legitimate `}}` inside it is not an artifact."""
+        page = _age_page(index)
+        block = re.search(r"<script>\n(.*?)\n</script>", page, re.S)
+        assert block, "no script block was rendered"
+        authored = block.group(1).replace(index._AGE_JS.strip(), "")
+        assert "{{" not in authored, "an f-string brace artifact reached the page"
+        assert "}}" not in authored, "an f-string brace artifact reached the page"
 
     def test_the_renderer_makes_no_request_and_writes_no_markup(self, index):
         """AC2's constraint, and the reason `textContent` is used rather than `innerHTML`."""
