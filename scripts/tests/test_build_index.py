@@ -22,6 +22,7 @@ exists. Every row is otherwise verbatim, key order included.
 The CLI is never invoked. `subprocess.run` is patched on its own module, which `build_index`
 looks up at call time.
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -961,3 +962,42 @@ class TestTheRendererShipsInsideThePage:
         js = index._AGE_JS
         for modern in ("Number.isFinite", ".dataset", "=>", "const ", "let "):
             assert modern not in js, f"the age renderer must not use {modern!r}"
+
+
+class TestTheEpochAttributeDoesNotMoveTheChangeSignature:
+    """AC5, and it is a REGRESSION PIN rather than a fix: `signature()` hashes rows and never
+    markup, so the new attribute cannot reach it today. The pin matters because
+    `refresh_index.sh` diffs that signature to decide whether a redeploy is warranted, and #125
+    already lost this once — the coarse age token was derived from `now`, so it moved on every
+    single build and made every build look like a change.
+
+    The mistake these tests exist to catch is a future author stamping `data-updated` from `now`
+    instead of from the row's own instant. Both halves are asserted: the value must not move when
+    only the clock moves, and it must move when something real does.
+    """
+
+    def test_the_signature_hashes_rows_only_and_no_part_of_the_markup(self, index):
+        """Pinned by VALUE against a canon line rebuilt here from the four fields it is allowed
+        to contain. Adding the epoch attribute — or anything else rendered — fails this."""
+        rows = _age_rows()
+        canon = "\n".join(sorted(
+            f'{r["name"]}\t{r["title"]}\t'
+            f'{r["updated"].isoformat() if r["updated"] else "-"}\t{r["updated_src"]}'
+            for r in rows))
+        assert index.signature(rows) == hashlib.sha256(canon.encode()).hexdigest()
+
+    def test_the_attribute_does_not_move_when_only_the_clock_moves(self, index):
+        """The teeth. Stamping the attribute from `now` would pass every other test in this file
+        and fail this one."""
+        early = _age_page(index, now=_AGE_NOW)
+        late = _age_page(index, now=_AGE_NOW + timedelta(days=2))
+        assert (re.findall(r'data-updated="(\d+)"', early)
+                == re.findall(r'data-updated="(\d+)"', late))
+        assert early != late, "the age text did not move either, so this proves nothing"
+
+    def test_the_signature_still_moves_when_something_real_changes(self, index):
+        """A change-detector that never fires is as useless as one that always does."""
+        rows = _age_rows()
+        retitled = _age_rows()
+        retitled[0]["title"] = "First read device, revised"
+        assert index.signature(retitled) != index.signature(rows)
