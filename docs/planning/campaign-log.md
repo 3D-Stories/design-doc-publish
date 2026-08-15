@@ -1,19 +1,49 @@
 # design-doc-publish — campaign log
 
-Rolling program log: one section per WF2/WF3 issue, newest first. Created 2026-08-13
-with issue #23 (the shared-doc design-artifact convention; style roadmap).
+Rolling program log: one section per issue, newest first. Created 2026-08-13 with issue
+#23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-23 | first issue on this log
-5 | commits on its branch
-2471/2478 | suite at PR time
+2 | issues on this log
+28 | newest: shipped, PR open
+2492/2499 | suite at last PR
 ```
 
 ```callout
 info | Read this first — what this log is
-One section per implemented issue, refreshed inside that issue's own PR. The stats and
-phases below always describe the NEWEST section; older sections keep their text as
-historical record.
+One section per issue, refreshed inside that issue's own PR (a filed-but-unstarted
+issue gets a backlog section at WF1 time). The stats above always describe the NEWEST
+state; older sections keep their text as historical record.
+```
+
+## #28 — Row ages are frozen at build time
+
+Filed and shipped 2026-08-14. Each index row's relative age (`3m`, `6h`) was baked into
+the HTML at build time, so the page reported age-at-last-BUILD rather than age-now — a row
+read `3m` for days until an unrelated publish rebuilt the index. Fix: `when()` also emits
+the absolute instant as `data-updated` (epoch ms) plus `data-approx` for a deploy-inferred
+time, and a new `_AGE_JS` constant — interpolated into the page's existing inline script —
+re-renders every cell on load, on a 60s timer, and on `visibilitychange`, returning early
+while the tab is hidden. The build-time string stays as the element's text, so a reader with
+no JavaScript sees the page unchanged. No request is made, and `signature()` is untouched.
+
+```phases
+T1 markup carries the instant | data-updated + data-approx, on both emitters | done
+  guard | the no-timestamp row gains neither attribute | done
+T2 client renderer | _AGE_JS: on load, 60s timer, visibilitychange | done
+  parity | node runs the shipped bytes against _ago() at every cutoff | done
+T3 signature pin | the epoch attribute cannot move the change-detector | done
+  teeth | three mutations, three kills, all reverted | done
+T4 this log | #28 moved from backlog to shipped | done
+```
+
+```callout
+warn | Residuals, recorded not hidden
+One review finding declined with its reason: the renderer collects its cells once at load,
+so a row added to the DOM later would not tick — the page never mutates its row set without
+a reload, and the signature poll is what reloads it. One verification step was not measured
+directly: a browser with JavaScript switched off. The noscript fallback rests on the served
+bytes (fetched and inspected) plus a test pinning the build-time string as the cell's text.
 ```
 
 ## #23 — Page URL constructed from the project name 404s past 35 chars

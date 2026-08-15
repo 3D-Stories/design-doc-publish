@@ -19,3 +19,16 @@ pytest==9.0.3
 # that is genuinely installed makes the file describe reality: `osv-scanner` reports
 # no issues for 2.20.0.
 pygments==2.20.0
+
+# NOT installable from here, and recorded anyway because this is where the gate's
+# dependencies are declared: `node` is required to run the client-side tests in
+# scripts/tests/test_build_index.py. The docs index ships an inline renderer, and those
+# tests execute the shipped JavaScript — parity against `_ago()`, the DOM wiring, and a
+# `node --check` parse of the whole script block.
+#
+# Without node they SKIP, and the suite is still green. That gap is real: a syntactically
+# broken script disables the page filter and the auto-refresh as well as the ages. Two
+# guards still run without node — `test_no_f_string_brace_artifact_reaches_the_page`, and
+# every markup test, which fail loudly on a render-time error. Measured with node v22.22.1.
+#
+#   node >= 18 (any release with `--check`)
