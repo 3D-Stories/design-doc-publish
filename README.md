@@ -277,11 +277,19 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2431 passed, 7 skipped**, exit 0.
+Expected: **2494 passed, 7 skipped**, exit 0.
 
 Several of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
 `python3 -m pytest` — on the machine this package came from, the interpreter cannot import pytest
 and only the standalone executable works.
+
+**`node` is worth having installed** (any release with `--check`; measured on v22.22.1). The docs
+index ships a small inline renderer that keeps each row's age current against your clock, and a
+handful of tests execute that shipped JavaScript under node — parity against the Python that
+formats the same ages, the DOM wiring, and a parse of the whole script block. Without node those
+tests SKIP and the suite is still green, so `pytest -rs` is how you see whether they ran. The gap
+is worth knowing about: a syntactically broken script would disable the index filter and its
+auto-refresh as well as the ages.
 
 ## Removing it
 
