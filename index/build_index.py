@@ -491,6 +491,54 @@ def _ago(then: datetime, now: datetime) -> str:
     return "?"
 
 
+# The client-side twin of `_ago()` above, with the wiring that keeps it current (#28).
+#
+# It is a constant rather than JS written inline in the page template, for two reasons. The
+# template is one big f-string, so inline JS needs every brace doubled, while an interpolated
+# value is substituted literally and needs none. And a test can hand these exact bytes to `node`
+# and compare its answers to `_ago()`'s for the same instants — which is the only honest way to
+# prove the two vocabularies agree. Scraping the JS back out of rendered HTML is not.
+#
+# Deliberately ES5, like the rest of the page's script: `var`, `Array.prototype.slice.call`, the
+# global `isFinite` rather than `Number.isFinite`, `getAttribute` rather than `dataset`. A page
+# served to unknown browsers is the wrong place to raise the floor casually.
+_AGE_JS = """
+  // ---- the age answers the READER's clock, not the build's -----------------------------
+  // `when()` bakes a build-time string into every row, so a tab left open for a day used to
+  // read `3m` for a day. The absolute instant rides in `data-updated`, so the page can answer
+  // for itself. Nothing is requested: everything needed is already in the markup.
+  var ages = Array.prototype.slice.call(document.querySelectorAll('.when[data-updated]'));
+  function ago(then, now){
+    // The same cutoffs, divisors, units and floor-of-1 as `_ago()`. A test runs this function
+    // under node against that one, so the two cannot drift apart silently.
+    var secs = Math.max(0, Math.floor((now - then) / 1000));
+    var steps = [[3600, 60, 'm'], [86400, 3600, 'h'], [604800, 86400, 'd'], [1e12, 604800, 'w']];
+    for (var i = 0; i < steps.length; i++){
+      if (secs < steps[i][0]) return Math.max(1, Math.floor(secs / steps[i][1])) + steps[i][2];
+    }
+    return '?';
+  }
+  function retime(){
+    // Nothing to do for a tab nobody is looking at. The handler below catches it on return,
+    // and the poll beside it guards on the same condition.
+    if (document.hidden) return;
+    var now = Date.now();
+    ages.forEach(function(el){
+      var then = parseInt(el.getAttribute('data-updated'), 10);
+      if (!isFinite(then)) return;              // unreadable: the row keeps its build-time text
+      el.textContent = (el.hasAttribute('data-approx') ? '~' : '') + ago(then, now);
+    });
+  }
+  if (ages.length){
+    retime();
+    setInterval(retime, 60000);
+    // Separate from the poll's own visibility handler on purpose. This one only rewrites text,
+    // so the two cannot fight: if the poll decides on a reload, the reload simply wins.
+    document.addEventListener('visibilitychange', function(){ if (!document.hidden) retime(); });
+  }
+"""
+
+
 def signature(rows: list[dict]) -> str:
     """A hash of the row set that is stable while nothing real changes.
 
@@ -808,7 +856,7 @@ footer{{border-top:1px solid var(--hair);color:var(--dim);font:12px/1.6 ui-monos
     none.classList.toggle('show', !any);
   }}
   q.addEventListener('input', apply);
-
+{_AGE_JS}
   // ---- auto-refresh when new content is published -------------------------------------
   // The page is static, so there is nothing to push an update. It polls its own URL and
   // compares the build signature in <meta name="index-signature">, which changes only when

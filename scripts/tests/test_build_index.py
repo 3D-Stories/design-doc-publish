@@ -26,8 +26,9 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -808,3 +809,155 @@ class TestEachRowCarriesItsAbsoluteInstant:
         assert ('title="2026-08-04 06:00 America/Edmonton — inferred from the Vercel deploy '
                 'age (coarse)"') in page
         assert 'title="no timestamp found"' in page
+
+
+# The renderer is JavaScript and this suite is Python, so a test that merely asserted the script's
+# source text would pass while the renderer was broken. `node` runs the real shipped bytes
+# instead: `_AGE_JS` is fed to it verbatim, under a stub `document`, and its answers are compared
+# against `_ago()`'s answers for the same instants. Running the fragment also proves it PARSES,
+# which a source-text assertion cannot.
+#
+# `node` is not in `requirements-dev.txt`, so these skip when it is absent. Everything they cover
+# except the JS itself is covered by the markup class above and by the live browser check recorded
+# in the PR.
+
+NODE = shutil.which("node")
+needs_node = pytest.mark.skipif(NODE is None,
+                                reason="node is absent; it runs the shipped client-side renderer")
+
+# A stub `document` is all the fragment touches. `NODES` is defined by each caller.
+_JS_STUBS = """
+var document = {hidden: false,
+                querySelectorAll: function(){ return NODES; },
+                addEventListener: function(){}};
+var setInterval = function(){};
+"""
+
+_JS_ELEMENT = """
+function El(updated, approx, text){
+  this.a = {};
+  if (updated !== null) this.a['data-updated'] = updated;
+  if (approx) this.a['data-approx'] = '1';
+  this.textContent = text;
+}
+El.prototype.getAttribute = function(k){ return (k in this.a) ? this.a[k] : null; };
+El.prototype.hasAttribute = function(k){ return (k in this.a); };
+"""
+
+
+def _run_node(script):
+    done = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, f"node exited {done.returncode}: {done.stderr}"
+    return done.stdout
+
+
+# Every cutoff in `_ago`, both sides of it, plus a future instant (its `max(0, …)` clamp).
+_AGE_DELTAS = [0, 59, 60, 61, 3599, 3600, 3601, 2400, 86399, 86400, 86401,
+               3 * 86400, 604799, 604800, 604801, 14 * 86400, 60 * 86400, -90]
+
+
+class TestTheClientRendererMatchesAgo:
+    """AC3 — "the client-side format matches `_ago()`'s vocabulary". Proven by running both."""
+
+    @needs_node
+    def test_every_cutoff_answers_exactly_what_ago_answers(self, index):
+        now = _AGE_NOW
+        now_ms = int(now.timestamp() * 1000)
+        expected = [index._ago(now - timedelta(seconds=d), now) for d in _AGE_DELTAS]
+        cases = json.dumps([now_ms - d * 1000 for d in _AGE_DELTAS])
+        out = _run_node(
+            "var NODES = [];\n" + _JS_STUBS + index._AGE_JS
+            + f"\nvar cases = {cases};\nvar now = {now_ms};\n"
+            + "process.stdout.write(JSON.stringify(cases.map(function(t)"
+              "{ return ago(t, now); })));")
+        assert json.loads(out) == expected
+
+    @needs_node
+    def test_the_fragment_parses_and_installs_nothing_when_no_row_has_a_time(self, index):
+        """`ages.length === 0` must install no timer at all. The stub's `setInterval` would
+        throw if the guard were missing, because it is not a function that tolerates being
+        called with the wrong shape — it is asserted directly instead."""
+        out = _run_node("var NODES = [];\n" + _JS_STUBS.replace(
+            "var setInterval = function(){};",
+            "var installed = 0; var setInterval = function(){ installed++; };")
+            + index._AGE_JS + "\nprocess.stdout.write(String(installed));")
+        assert out == "0"
+
+
+class TestTheClientRendererRewritesTheCell:
+    """AC2 — the cell is re-rendered from the attribute, and the `~` survives it."""
+
+    @needs_node
+    def test_each_cell_is_rewritten_from_its_own_attribute(self, index):
+        now_ms = int(_AGE_NOW.timestamp() * 1000)
+        nodes = (f"var NODES = [new El('{now_ms - 12 * 3600 * 1000}', false, '12h'),"
+                 f" new El('{now_ms - 86400 * 1000}', true, '~1d'),"
+                 f" new El(null, false, '—'),"
+                 f" new El('not-a-number', false, '9h')];")
+        out = _run_node(
+            _JS_ELEMENT + nodes + _JS_STUBS + index._AGE_JS
+            + "\nprocess.stdout.write(JSON.stringify(NODES.map(function(n)"
+              "{ return n.textContent; })));")
+        got = json.loads(out)
+        # The first two are re-rendered against the stub clock. `Date.now()` in node is the real
+        # clock, well past 2026-08-05, so the exact ages are not predictable — what IS pinned is
+        # that a marked row keeps its `~`, and that the two unusable rows are left alone.
+        assert got[0] != "12h" or got[1] != "~1d", "no cell was re-rendered at all"
+        assert got[1].startswith("~"), f"the deploy-inferred marker was lost: {got[1]!r}"
+        assert not got[0].startswith("~"), f"a declared row gained a marker: {got[0]!r}"
+        assert got[2] == "—", "a row with no attribute was rewritten"
+        assert got[3] == "9h", "a malformed attribute was not left alone"
+
+    @needs_node
+    def test_a_hidden_tab_is_not_re_rendered_until_it_is_looked_at(self, index):
+        """It matches the poll beside it, which also returns early on `document.hidden`. The
+        `visibilitychange` handler is what makes this safe rather than lossy."""
+        now_ms = int(_AGE_NOW.timestamp() * 1000)
+        out = _run_node(
+            _JS_ELEMENT + f"var NODES = [new El('{now_ms}', false, 'PRISTINE')];"
+            + _JS_STUBS.replace("hidden: false", "hidden: true") + index._AGE_JS
+            + "\nprocess.stdout.write(NODES[0].textContent);")
+        assert out == "PRISTINE"
+
+
+class TestTheRendererShipsInsideThePage:
+    """The constant has to actually reach the page, once, without disturbing the poll."""
+
+    def test_the_renderer_is_interpolated_verbatim_exactly_once(self, index):
+        page = _age_page(index)
+        assert page.count(index._AGE_JS.strip()) == 1
+
+    def test_the_signature_poll_is_still_there(self, index):
+        """The issue named this trap: the new timer must not fight the auto-refresh reload."""
+        page = _age_page(index)
+        assert "setInterval(check, 90000)" in page
+        assert 'meta[name="index-signature"]' in page
+        assert page.count("<script>") == 1, "the renderer must extend the existing block"
+
+    @needs_node
+    def test_the_whole_shipped_script_still_parses(self, index, tmp_path):
+        """The page template is one big f-string, so a single mis-doubled brace anywhere in this
+        block ships a page whose script dies on its first statement — and every feature in it,
+        the filter and the auto-refresh included, dies with it. `node --check` is the cheap proof,
+        and it covers the whole block rather than only the part this change added."""
+        page = _age_page(index)
+        block = re.search(r"<script>\n(.*?)\n</script>", page, re.S)
+        assert block, "no script block was rendered"
+        js = tmp_path / "index-script.js"
+        js.write_text(block.group(1), encoding="utf-8")
+        done = subprocess.run([NODE, "--check", str(js)], capture_output=True, text=True,
+                              timeout=30)
+        assert done.returncode == 0, done.stderr
+
+    def test_the_renderer_makes_no_request_and_writes_no_markup(self, index):
+        """AC2's constraint, and the reason `textContent` is used rather than `innerHTML`."""
+        js = index._AGE_JS
+        for banned in ("http", "fetch(", "XMLHttpRequest", "innerHTML", "import ", "src="):
+            assert banned not in js, f"the age renderer must not contain {banned!r}"
+
+    def test_it_stays_in_the_files_es5_idiom(self, index):
+        """The rest of this script is deliberately ES5 (`var`, `Array.prototype.slice.call`).
+        A page served to unknown browsers is the wrong place to raise the floor casually."""
+        js = index._AGE_JS
+        for modern in ("Number.isFinite", ".dataset", "=>", "const ", "let "):
+            assert modern not in js, f"the age renderer must not use {modern!r}"
