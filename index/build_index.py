@@ -588,14 +588,32 @@ def render(rows: list[dict], stamp: str, now: datetime, sig: str,
 
     def when(r: dict) -> str:
         """The row's last-updated cell. `~` marks a time inferred from the DEPLOY age
-        rather than declared by the page itself, so the two are never confused."""
+        rather than declared by the page itself, so the two are never confused.
+
+        `_ago()` is evaluated ONCE, here, against the `now` this build captured — so the string
+        below answers "how old was this when the index was BUILT". The page is static, so a row
+        went on reading `3m` for days until some other publish rebuilt the index (#28, observed
+        live 2026-08-14). Two additive attributes fix that without giving up the string:
+
+        * `data-updated` — the absolute instant in epoch milliseconds, which `_AGE_JS` renders
+          against the reader's own clock and re-renders while the page sits open.
+        * `data-approx` — the `~`, carried as data. The script rewrites the cell's text, so it
+          has to know whether to re-apply the marker, and reading it back out of its own previous
+          output would be self-referential.
+
+        Both are emitted only on this branch, where a time actually exists. The build-time string
+        stays as the element's text, so a reader with no JavaScript sees the page unchanged.
+        """
         if not r["updated"]:
             return '<span class="when none" title="no timestamp found">—</span>'
         tilde = "~" if r["updated_src"] == "deploy" else ""
         exact = r["updated"].strftime("%Y-%m-%d %H:%M")
         src = ("declared by the page" if r["updated_src"] == "page"
                else "inferred from the Vercel deploy age (coarse)")
-        return (f'<span class="when" title="{exact} America/Edmonton — {src}">'
+        stamp = int(r["updated"].timestamp() * 1000)
+        approx = ' data-approx="1"' if tilde else ""
+        return (f'<span class="when" data-updated="{stamp}"{approx} '
+                f'title="{exact} America/Edmonton — {src}">'
                 f'{tilde}{_ago(r["updated"], now)}</span>')
 
     def row_li(r: dict) -> str:

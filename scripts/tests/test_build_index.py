@@ -713,3 +713,98 @@ class TestAGenuinelyEmptyAccountCanStillMakeItsFirstPublish:
         cli(stdout=_payload([_row("docs-index")]))
         with pytest.raises(SystemExit):
             index.main(["--out", str(tmp_path / "index.html"), "--no-titles"])
+
+
+# ------------------------------------------------- #28: the age answers the VIEWER's clock
+
+# The page is static, so a build-time age string is only true at the instant it was built. A row
+# read `3m` for days until the next publish rebuilt the index (observed live on
+# docs-index.vercel.app, 2026-08-14). The absolute instant now rides in the markup and the age is
+# rendered by the page itself.
+#
+# One fixture serves all three classes below, and it carries all three row KINDS deliberately:
+# a page-declared stamp, a deploy-inferred one (the `~` marker), and a row with no time at all
+# (the em-dash, which must gain no attributes).
+
+_AGE_STAMP = "2026-08-05 12:00 MDT"
+_AGE_NOW = datetime(2026, 8, 5, 18, 0, tzinfo=timezone.utc)
+_AGE_DECLARED = datetime(2026, 8, 5, 6, 0, tzinfo=timezone.utc)    # 12h before _AGE_NOW
+_AGE_DEPLOYED = datetime(2026, 8, 4, 6, 0, tzinfo=timezone.utc)    # 1d before _AGE_NOW
+
+
+def _age_rows():
+    return [
+        {"name": "example-design-130", "url": "https://example-design-130.vercel.app",
+         "title": "First read device", "group": "example", "chip": "design",
+         "updated": _AGE_DECLARED, "updated_src": "page"},
+        {"name": "example-alpha-spike", "url": "https://example-alpha-spike.vercel.app",
+         "title": "Alpha spike", "group": "example-team", "chip": "analysis",
+         "updated": _AGE_DEPLOYED, "updated_src": "deploy"},
+        {"name": "example-no-stamp", "url": "https://example-no-stamp.vercel.app",
+         "title": "No stamp anywhere", "group": "example", "chip": "plan",
+         "updated": None, "updated_src": "none"},
+    ]
+
+
+def _age_page(index, now=None):
+    return index.render(_age_rows(), _AGE_STAMP, now or _AGE_NOW, "sig")
+
+
+def _when_spans(page):
+    """(attributes, text) for every `when` cell on the page, in document order."""
+    return re.findall(r'<span class="when([^"]*)"([^>]*)>([^<]*)</span>', page)
+
+
+def _epoch_ms(dt):
+    return str(int(dt.timestamp() * 1000))
+
+
+class TestEachRowCarriesItsAbsoluteInstant:
+    """AC1 — the machine-readable timestamp, emitted only where there IS one."""
+
+    def test_the_attribute_is_the_rows_own_instant_in_epoch_milliseconds(self, index):
+        page = _age_page(index)
+        assert f'data-updated="{_epoch_ms(_AGE_DECLARED)}"' in page
+        assert f'data-updated="{_epoch_ms(_AGE_DEPLOYED)}"' in page
+
+    def test_both_emitters_carry_it_not_just_one(self, index):
+        """`row_li()` and the "recent" strip are two independent `when()` call sites, written
+        separately. Fixing one is the likely half-done state, so the count is asserted: 2
+        grouped rows with a stamp + the same 2 in the recency strip."""
+        page = _age_page(index)
+        assert page.count("data-updated=") == 4
+
+    def test_the_row_with_no_timestamp_carries_neither_new_attribute(self, index):
+        """There is nothing to render an age from, so an attribute here would be a lie the
+        script would then try to read."""
+        page = _age_page(index)
+        none_spans = [s for s in _when_spans(page) if "none" in s[0]]
+        assert none_spans, "the no-timestamp row did not render — the fixture is wrong"
+        for cls, attrs, text in none_spans:
+            assert "data-updated" not in attrs, attrs
+            assert "data-approx" not in attrs, attrs
+            assert text == "—"
+
+    def test_only_a_deploy_inferred_row_is_marked_approximate(self, index):
+        """The `~` has to survive a client-side re-render, and reading it back out of the
+        script's own previous output would be self-referential. So the marker is an attribute."""
+        page = _age_page(index)
+        assert page.count("data-approx=") == 2
+        for cls, attrs, text in _when_spans(page):
+            if "data-approx" in attrs:
+                assert f'data-updated="{_epoch_ms(_AGE_DEPLOYED)}"' in attrs, attrs
+
+    def test_the_build_time_string_is_still_the_elements_text(self, index):
+        """AC4 — the no-JavaScript answer. A viewer with scripting off sees exactly the page
+        that shipped before this change."""
+        page = _age_page(index)
+        texts = sorted({t for _, _, t in _when_spans(page)})
+        assert texts == ["12h", "~1d", "—"]
+
+    def test_the_hover_title_is_untouched(self, index):
+        """AC3 — preserved, warts included: the exact timestamp and where the time came from."""
+        page = _age_page(index)
+        assert ('title="2026-08-05 06:00 America/Edmonton — declared by the page"') in page
+        assert ('title="2026-08-04 06:00 America/Edmonton — inferred from the Vercel deploy '
+                'age (coarse)"') in page
+        assert 'title="no timestamp found"' in page
