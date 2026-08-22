@@ -134,6 +134,13 @@ PRE_74 = {
     # the two approved substitutions were applied to the BASE output, and the result was required
     # to equal HEAD byte-for-byte. All 13 passed with ZERO unexplained differences, so these pins
     # record exactly the intended edit and cannot be blessing an unrelated regression.
+    # Dark-link fix (owner report 2026-08-22): `_COMPONENT_STYLE` gained exactly one
+    # declaration, `a{color:var(--accent)}` — links were browser-default dark blue on the
+    # dark ground. Re-pinned per this file's discipline: all 13 styles rendered at
+    # origin/main AND at HEAD, the single substitution applied to the BASE output, and the
+    # result required to equal HEAD byte-for-byte. 12 moved with zero unexplained
+    # differences; `plain` receives no component layer, and its recomputed sha came back
+    # EQUAL to the pin below — untouched, which is the containment this oracle proves.
     "plain": "5c922fd3a4f8816efbe79fe4be4ff50a54b0538722d6a587222cf1be8a5310ea",
     # #76 moved `analysis` on purpose — the first of the seven frozen-target rebuilds.
     # Re-pinned with the reason beside it, as #68 did for `roadmap` and #75 for `uat`
@@ -143,7 +150,7 @@ PRE_74 = {
     # doc type whose purpose is separating confirmed from inferred. The fix lands at the
     # shared `render_sections` call site, so it reaches this resolver by the same line;
     # `templates/analysis.py` has documented this defect and asked for exactly that since #76.
-    "analysis": "f8e77018f7eb577bbd3dab50015ce632d934e0320ffbf28cd2a4aa8ae7c5e699",
+    "analysis": "4d5d91b9d73235af9ccb8998b02739c41cc4782cc1556e17ebf26ae9b9789f8b",
     # #68 moved roadmap on purpose — TWICE, once per PR of the child, and each move is the
     # deliberate rebuild the issue asks for. PR 1 added the `composition` block and its CSS;
     # PR 2 added the `phases` band that contains it. Re-pinned rather than re-derived: this
@@ -176,26 +183,26 @@ PRE_74 = {
     # (a 64-char hash, a slash-joined issue run) breaks rather than pushing the badge wide
     # (a full-page 2381px scroll on a 780px viewport, owner-reported). Only the roadmap template
     # carries `blk-ph-badge`, so no other style moves; `crossstyle.sh` is the "only mine moved" guard.
-    "roadmap": "b6ef4683b01b566baba4306ac939221c6638f25160ae936249bf989ebd8a979d",
+    "roadmap": "45aa43a4c7534691dcdc3bd715ad011d72ef6b7eda4b29452fbd3694578ef3eb",
     # #76 rebuild — re-pinned; see the header note above.
-    "report": "229f7c864f27493a726bd38fac321dffafdc870679fb4a8c9b653d89f257e729",
-    "design": "0e92870b453f6374b2ca19980859b91646088f690b7ec159733cb546906a5d3f",
+    "report": "7cde215e701d7921fc5f037a0fde1333025f4a1e8b240ac7c24e0c3e1d582cd7",
+    "design": "825b0358604eb8230a6d9d63922e86a948c3a42271fc1aa2c97178e9e4eb531e",
     # #90 moved it: `dashboard` shares `roadmap_status_chip`, so the same fix reaches it.
     # That sharing is why this could not be folded into #68 — see the issue's own note.
-    "dashboard": "83bd1381a488b0a860b510871c39dcc7b0f06710a3886d4d4959ec6dbe3f208f",
-    "review": "4ce9a1e921873ea325db33a510377af7e3ebabc2904088fd34a809b0fc5ccd0e",
-    "spec": "39376ed257c936bd80bd51ded3f3a773bb2196c86666694176a2d7b2134573fe",
+    "dashboard": "c860f50a35361782ef7e08b37b82cdad1f88def27768aafd6c37724daeb69581",
+    "review": "5a95a41f0a41d17c08449a062f6278fb95cec89df25551315286124ca3ded792",
+    "spec": "a92fdec42603510d262c4fcec57542799161d897aa65f531f2eedd7166ea2e4d",
     # #75 moved `uat` on purpose — the frozen-target rebuild. Re-pinned with the reason
     # beside it, the same treatment #68 gave `roadmap` (D57/D61). `plain` has not moved and
     # its own pin is untouched; the per-PR "only my style moved" guard is `crossstyle.sh`.
-    "uat": "97428d2e1d6a98897a0af018fba442dcbd6ab509c9e37ebaec17414fe9c49739",
-    "workflow": "9e08d7d73d09b78b5eaef7a6e6e937b8cda257d85dc3939cdef3e5790b373326",
+    "uat": "81a7e13ccedc10a2f91d977b0f4adb9df936e32d83ecda24c2a9a6d920b34080",
+    "workflow": "f89175e9061d92ece0afa4d4ff93f1092c06bf5079df5b4264fae3c2823cfac3",
     # #42 adds this style, so its pin is CAPTURED here rather than inherited — there is no
     # "before" for a style that did not exist. What the oracle guards from now on is that
     # nothing else moves it.
-    "design-system": "1d5e93fc325febb5544019e6c21651808a4f478bffa046dad77b7fefd0c05468",
-    "module-map": "d8a289802461678a499e4bf4286fe28d3cf9316702f8a8bb5386a721faccfa62",
-    "slide-deck": "a468b4eae2476a77ab9b804bfebabb4403c4a76b8222e8339eff60a277a292f8",
+    "design-system": "d3efa262cdeaa15597e49724f5b82444ab22674e2730a7eb2028ca325cd92ff8",
+    "module-map": "f60156143d6f4bb881b8361dec3ee59f42f642291511d420845826ac8a251c18",
+    "slide-deck": "c1205f74a1c31d4395ab01af14d05dd4b180cc5914e9404aee561c973d4f96ea",
 }
 
 PACK = {"accent": {"light": "#1e5f7a", "dark": "#7fd4f0"}}

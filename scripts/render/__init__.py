@@ -358,11 +358,16 @@ _ROADMAP_STYLE = """
 # non-plain template (never plain, so plain stays byte-identical). Defines the
 # severity/requirement color tokens in all three theme blocks (:root light, @media
 # dark, [data-theme] overrides), consistent with the existing palette.
+# The anchor rule is here rather than in _STYLE_TPL because plain output is frozen
+# byte-for-byte: without it, links took the browser-default dark blue, unreadable on the
+# dark ground (owner report 2026-08-22). lint.PAIRS already rates --accent on --bg for
+# exactly this ("the eyebrow and links are text"); test_link_color.py pins the rule.
 _COMPONENT_STYLE = """
 :root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
 :root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
 :root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
 @media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
 .score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
 .sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
 .sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
