@@ -431,6 +431,23 @@ def _render_body_plain(markdown: str, inline_fn=None, rich: bool = False,
             i += 1
             continue
 
+        # A hard-wrapped list item's continuation line (standard markdown: indented
+        # to the item's content column). Rich only — plain is frozen byte-for-byte
+        # and keeps its old paragraph-beside-the-list behavior. Joins ONLY onto a
+        # simple self-closed item: after a nested list closes, out[-1] is
+        # "</ul></li>", which also ends with </li> and must never absorb prose.
+        # Measured live 2026-08-22: every wrapped bullet on the unified-roadmap page
+        # split mid-sentence at the left margin. Guarded by test_list_continuation.py.
+        if (rich and list_stack and out
+                and out[-1].startswith("<li>") and out[-1].endswith("</li>")
+                and stripped
+                and (len(raw) - len(raw.lstrip())) >= 2
+                and not stripped.startswith((">", "|", "#"))):
+            out[-1] = (out[-1][: -len("</li>")] + " "
+                       + inline_fn(html.escape(stripped)) + "</li>")
+            i += 1
+            continue
+
         if stripped.startswith(">"):
             flush_para()
             close_list()
