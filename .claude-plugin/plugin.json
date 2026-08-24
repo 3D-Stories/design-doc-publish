@@ -1,7 +1,7 @@
 {
   "name": "design-doc-publish",
-  "version": "1.4.0",
-  "description": "Render a design or architecture document from markdown to a standalone HTML page. Rendering needs nothing configured. Publishing the page to Vercel requires the vercel CLI, a Vercel account and a one-time setup run that records which team to deploy to.",
+  "version": "2.0.0",
+  "description": "Render a design or architecture document from markdown to a standalone HTML page. Rendering needs nothing configured. Publishing requires a reachable doc harness and its publish token, and requires the page to be committed and pushed first: the harness serves the committed bytes, fetched from GitHub.",
   "author": {
     "name": "3D-Stories",
     "url": "https://github.com/3D-Stories"
@@ -14,9 +14,10 @@
     "architecture",
     "markdown",
     "html",
-    "vercel",
     "documentation",
     "rendering",
-    "publishing"
+    "publishing",
+    "doc-harness",
+    "self-hosted"
   ]
 }

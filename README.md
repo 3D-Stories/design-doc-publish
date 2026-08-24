@@ -153,10 +153,25 @@ python3 scripts/render-doc --md hello.md --out hello.html --title "Hello"
 
 </details>
 
-## Publishing: one setup run first
+## Publishing: the harness, and commit-before-publish
 
-Rendering needs nothing. **Publishing needs a Vercel account, and one setup run to record which
-team to deploy to.** Nothing about your machine is assumed.
+> **Changed in 2.0.0, and it will break you if you skip this.** Publishing no longer goes to
+> Vercel. It goes to the self-hosted doc harness, which serves the bytes that are **in the
+> commit**, fetched from GitHub. The harness never receives the rendered file.
+>
+> So the order is now: render with `--dry-run`, commit the `.md` and the `.html` together, push,
+> then publish. Publishing an uncommitted page refuses at stage 4 rather than shipping something
+> nobody can fetch.
+>
+> `--new-project`, `--vercel-scope` and `--limit` are gone. Two environment variables replace
+> them: `DOC_HARNESS_CONTROL_URL` (required, no default) and `DOC_HARNESS_PUBLISH_TOKEN`.
+>
+> **And the honest part: the harness is not serving yet.** No `*.3dstories.ca` hostname resolves,
+> and the stack is not running. Until it is, this version renders and lints exactly as before but
+> cannot publish anywhere. If you need to publish today, stay on 1.4.0.
+
+Rendering needs nothing, and that has not changed. **Publishing needs a reachable harness and its
+publish token.** Nothing about your machine is assumed.
 
 Inside Claude Code, run:
 
@@ -217,8 +232,9 @@ code is the verdict.
 | Python 3.12 | the renderer and its tests | 3.12.3, which produced the test count below. `setup.py` checks this first and says so plainly if yours is older |
 | No third-party Python packages | the renderer is stdlib only, on purpose | — |
 | A POSIX system | `setup.py` serializes its writes with `fcntl`, which Windows does not have. Rendering itself is platform-neutral | setup refuses with a sentence rather than a traceback where locking is unavailable |
-| `vercel` CLI | only for deploying, not for rendering | needed from stage 4 |
-| A Vercel account | only for deploying | `setup.py` checks you can reach your team before recording it |
+| `git` | only for publishing, not for rendering | needed from stage 4: the manifest pins a commit, and the harness fetches its blobs from GitHub |
+| A reachable doc harness | only for publishing | `DOC_HARNESS_CONTROL_URL`, required with no default. See the harness section below |
+| A GitHub remote | only for publishing | the manifest's `repo` is derived from it, never configured beside it |
 
 ## Choosing a `--type`
 
@@ -294,7 +310,7 @@ auto-refresh as well as the ages.
 ## The doc harness (self-hosted serving)
 
 `harness/` is a small self-hosted service that serves rendered doc pages **straight from
-GitHub**, as a replacement for Vercel as the deploy target. Pages live only in their source
+GitHub**, and as of 2.0.0 it IS the deploy target — Vercel is gone from the publish path. Pages live only in their source
 repositories; the harness keeps a registry of what is published and a blob cache, and nothing
 else. Full spec:
 [`docs/planning/2026-08-23-github-doc-harness-spec.md`](docs/planning/2026-08-23-github-doc-harness-spec.md).
