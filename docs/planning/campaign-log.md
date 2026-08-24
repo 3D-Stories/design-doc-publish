@@ -4,9 +4,9 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 #23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-4 | issues on this log
-36 | newest: PR open, the publish swap
-2823/2943 | suite, baseline to this PR
+5 | issues on this log
+37 | newest: PR open, the Vercel backfill
+2943/3043 | suite, baseline to this PR
 ```
 
 ```callout
@@ -31,9 +31,43 @@ with reason, 1 partial), owner-confirmed.
 ```phases
 #34 harness service | registry, control API, serving path, derived index | merged
 #35 go-live | cloudflared service merged; wildcard DNS and Cloudflare Access need an owner decision, so the issue stays open | blocked
-#36 publish swap | publish_doc.py publishes and verifies through the control API; live verification deferred whole | wip
-#37 migration | backfill 179 Vercel projects, 163 with a purpose token, byte-compare per row | pending
+#36 publish swap | publish_doc.py publishes and verifies through the control API; live verification deferred whole | merged
+#37 migration | 181 projects today; the tool ships and the sample proves the harness cannot fetch private repositories | wip
 ```
+
+## #37 — Backfill the Vercel doc projects, and the blocker the sample found
+
+PR open 2026-08-24, fourth child of #38. One new script, `scripts/backfill_vercel.py`, standard
+library only, five phases over an append-only run directory: `inventory`, `map`, `stage`,
+`activate`, `report`. A page is identified by **hashing its live bytes against git history**, never
+by parsing its project name — `{project}-{purpose}-{ref}` is ambiguous, so a name can parse to a
+real but wrong project. The publish target is a separate field: the document's CURRENT committed
+page. Comparing the historical match against Vercel would have been a tautology, and would have
+migrated the stale version of every drifted document.
+
+```phases
+Design gate | 3 passes, 28 findings, all applied, closed budget-exhausted | done
+Peer consult | blind cross-model proposal; found the compare-after-activate hole | done
+Implementation | 8 tasks, 3 high-risk, red before green on every one | done
+Per-task review | 2 passes, 17 findings, 4 Critical, 14 applied 3 carried | done
+Code review | inline + cross-model, 5 findings, all High, all applied | done
+Security scan | 0 blocking, 0 advisory, 0 skipped | done
+The sample run | 181 rows inventoried, 10 processed, 0 live | done
+```
+
+```callout
+crit | The sample found the epic's next blocker, and it is owner-gated
+Zero rows went live, and that is the finding rather than a failure. Eight of the ten sampled pages
+have live bytes that exist in NO commit anywhere in the workspace. The two that mapped cleanly both
+failed `harness_fetch_denied`: their repositories are **private**, and the harness's GitHub
+credential cannot read them. So until that grant widens, a real migration has nothing it can
+activate — the same shape as #35's wildcard DNS and Access work, and the same owner decision.
+```
+
+Suite: **3043 passed, 8 skipped, exit 0** against a baseline of 2943 and 8 — plus 100 tests. The
+Step 9 gate went RED first, and the failure was mine: this repository's own guard refused the
+committed sample report because it enumerated 171 live Vercel project names, and this repo ships as
+a plugin. The committed copy now uses stable handles.
 
 ## #36 — Publish through the harness, and the Vercel path retires
 
