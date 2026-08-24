@@ -411,6 +411,23 @@ class MapTests(unittest.TestCase):
         self.assertEqual("proj-plan-7", rows[0]["inventory"]["name"])
         self.assertEqual("https://proj-plan-7.vercel.app/", rows[0]["inventory"]["url"])
 
+    def test_identical_bytes_at_a_DIFFERENTLY_NAMED_path_elsewhere_are_still_ambiguous(self):
+        """The collision check must not depend on the ref narrowing, or a non-unique match reads
+        as unique. It runs over every blob in every repository, by size then hash."""
+        one, two = self.tmp / "proj", self.tmp / "other"
+        make_repo(one, {"docs/planning/7-x.html": "SAME BYTES", "docs/planning/7-x.md": "# s"})
+        # A path carrying NO trace of the ref, so the narrowed search cannot see it.
+        make_repo(two, {"docs/archive/unrelated-name.html": "SAME BYTES"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"SAME BYTES")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": one, "other": two}), opener=http,
+            run=self.run, fetch_remote=False)
+        self.assertEqual("mapping_ambiguous", rows[0]["reason"])
+        self.assertIn("other", rows[0]["detail"])
+
     def test_identical_bytes_in_two_repositories_are_ambiguous_even_when_the_name_narrows(self):
         one, two = self.tmp / "proj", self.tmp / "other"
         make_repo(one, {"docs/planning/7-x.html": "SAME", "docs/planning/7-x.md": "# s"})
@@ -503,8 +520,12 @@ class MapTests(unittest.TestCase):
                              "updatedAt": 1}]),
             workspace_file=self._workspace({"proj": good, "junk": broken}), opener=http,
             run=self.run, fetch_remote=False)
-        self.assertIsNone(rows[0]["reason"], rows[0])
-        self.assertIn("junk", rows[0]["unsearchable"])
+        # It is NOT charged to the row as a reachability problem — that was the bug. And it is not
+        # waved through either: an unsearchable repository means uniqueness is UNPROVEN, so the
+        # honest outcome is ambiguous, naming the entry a human has to deal with.
+        self.assertEqual("mapping_ambiguous", rows[0]["reason"])
+        self.assertIn("junk", rows[0]["detail"])
+        self.assertNotIn("uncommitted", rows[0]["reason"])
 
     def test_the_mapping_is_persisted_with_its_digest(self):
         repo = self.tmp / "proj"
@@ -700,6 +721,22 @@ class StageTests(unittest.TestCase):
         self.assertEqual("harness_fetch_denied", out[0]["reason"])
         self.assertIn("3D/x", out[0]["detail"])
 
+    def test_a_422_carrying_githubs_object_miss_is_harness_fetch_denied(self):
+        """Measured live: two sampled rows failed this way and their repositories are PRIVATE.
+
+        Calling it `stage_publish_failed` pointed an operator at the manifest, which was correct.
+        """
+        control = FakeControl(publish=[bf.ControlError(
+            422, "docs/planning/x.html: GitHub reports this object does not exist")])
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual("harness_fetch_denied", out[0]["reason"])
+        self.assertIn("token's grant", out[0]["detail"])
+
+    def test_a_422_that_is_genuinely_the_manifest_stays_stage_publish_failed(self):
+        control = FakeControl(publish=[bf.ControlError(422, "url_path is not canonically encoded")])
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual("stage_publish_failed", out[0]["reason"])
+
     def test_a_409_on_a_staging_name_is_stage_publish_failed_never_an_overwrite(self):
         control = FakeControl(publish=[bf.ControlError(409, "stale publisher")])
         out = self._stage(live=b"PAGE BYTES", control=control)
@@ -727,6 +764,31 @@ class StageTests(unittest.TestCase):
         out = self._stage(live=b"PAGE BYTES", control=FakeControl(), rows=[row])
         self.assertEqual("mapping_invalid", out[0]["reason"])
 
+    def test_an_edit_that_changes_BOTH_row_fields_is_still_caught_by_the_snapshot(self):
+        """Critical finding: comparing two fields of the same editable row proves nothing."""
+        row = dict(self.row)
+        row["harness_name"] = "somebody-elses-trusted-name"
+        row["inventory"] = dict(row["inventory"], name="somebody-elses-trusted-name")
+        snapshot = [{"id": "prj_1", "name": "proj-plan-7",
+                     "latestProductionUrl": "https://proj-plan-7.vercel.app/", "updatedAt": 1}]
+        out = bf.stage_rows([row], run=self.run, control=FakeControl(),
+                            opener=FakeHttp({"https://proj-plan-7.vercel.app/":
+                                             (200, {}, b"PAGE BYTES")}),
+                            repos={"proj": str(self.repo)}, run_id="r1", inventory=snapshot)
+        self.assertEqual("mapping_invalid", out[0]["reason"])
+        self.assertIn("prj_1", out[0]["detail"])
+
+    def test_an_edited_source_url_is_caught_by_the_snapshot(self):
+        row = dict(self.row)
+        row["inventory"] = dict(row["inventory"], url="https://attacker.example/")
+        snapshot = [{"id": "prj_1", "name": "proj-plan-7",
+                     "latestProductionUrl": "https://proj-plan-7.vercel.app/", "updatedAt": 1}]
+        out = bf.stage_rows([row], run=self.run, control=FakeControl(),
+                            opener=FakeHttp({}), repos={"proj": str(self.repo)}, run_id="r1",
+                            inventory=snapshot)
+        self.assertEqual("mapping_invalid", out[0]["reason"])
+        self.assertIn("wrong", out[0]["detail"])
+
     def test_an_edited_harness_name_that_leaves_its_inventory_row_is_mapping_invalid(self):
         row = dict(self.row)
         row["harness_name"] = "somebody-elses-trusted-name"
@@ -747,6 +809,16 @@ class StageTests(unittest.TestCase):
         out = self._stage(live=b"PAGE BYTES", control=control, rows=[bad, good])
         self.assertIsNotNone(out[0]["reason"])
         self.assertIsNone(out[1]["reason"], out[1])
+
+    def test_staging_does_not_mutate_the_reviewed_mapping_rows(self):
+        """Found live: outcomes leaked into mapping.json and the retry saw zero eligible rows."""
+        row = dict(self.row)
+        control = FakeControl(publish=[bf.ControlError(422, "nope")])
+        bf.stage_rows([row], run=self.run, control=control,
+                      opener=FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"PAGE BYTES")}),
+                      repos={"proj": str(self.repo)}, run_id="r1")
+        self.assertIsNone(row.get("reason"),
+                          "the caller's reviewed row must come back untouched")
 
     def test_the_bearer_never_reaches_the_journal(self):
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
@@ -801,12 +873,24 @@ class ActivateTests(unittest.TestCase):
         rows = self.plan_row if rows is None else rows
         rows = rows if isinstance(rows, list) else [rows]
         plan = {"rows": rows, "expires_at": int(_t.time()) + ttl, "run_id": "r1", "attempt": 1,
-                "digest": bf.digest(rows)}
+                "mapping_digest": self._mapping_digest()}
+        plan["digest"] = bf.plan_digest(plan)
         self.run.write_json("activation-plan.json", plan)
         return plan
 
+    def _mapping_digest(self, rows=None):
+        rows = [dict(self.row)] if rows is None else rows
+        return bf.digest(rows)
+
     def _activate(self, *, control, live=b"PAGE BYTES", rows=None, mapping_rows=None, plan=None):
-        plan = plan or self._plan(rows)
+        if plan is None:
+            plan = self._plan(rows)
+            if mapping_rows is not None:
+                # The plan seals the mapping it was compared against; a test that changes the
+                # mapping on purpose must re-seal, or it is testing the swap guard instead.
+                plan["mapping_digest"] = bf.digest(mapping_rows)
+                plan["digest"] = bf.plan_digest(plan)
+                self.run.write_json("activation-plan.json", plan)
         http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, live)})
         mapping = {"rows": mapping_rows if mapping_rows is not None else [dict(self.row)]}
         mapping["digest"] = bf.digest(mapping["rows"])
@@ -829,7 +913,8 @@ class ActivateTests(unittest.TestCase):
         captured = {}
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
                               served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9"}})
+                              served_headers={"proj-plan-7": {
+                                  "X-Doc-Deployment": "9", "Etag": f'"{self.live_sha}"'}})
         real = control.publish
 
         def spy(manifest, expected_active):
@@ -845,6 +930,26 @@ class ActivateTests(unittest.TestCase):
         self.assertEqual(self.label, staged.pop("name"))
         self.assertEqual(staged, produced)
 
+    def test_an_EDITED_plan_is_refused_even_with_its_own_stored_digest(self):
+        """Critical finding: a stored digest is not evidence about the content beside it."""
+        plan = self._plan()
+        plan["rows"][0]["manifest"]["assets"][0]["blob_id"] = "0" * 40
+        self.run.write_json("activation-plan.json", plan)
+        with self.assertRaises(bf.Refused) as caught:
+            self._activate(control=FakeControl(), plan=plan)
+        self.assertIn("edited since it was sealed", str(caught.exception))
+
+    def test_a_swapped_mapping_is_refused_even_with_a_matching_plan_digest(self):
+        plan = self._plan()
+        other = [dict(self.row, harness_name="somebody-else")]
+        mapping = {"rows": other, "digest": bf.digest(other)}
+        self.run.write_json("mapping.json", mapping)
+        with self.assertRaises(bf.Refused) as caught:
+            bf.activate_rows(plan, mapping=mapping, run=self.run, control=FakeControl(),
+                             opener=FakeHttp({}), repos={"proj": str(self.repo)},
+                             execute=plan["digest"], zone="example.test")
+        self.assertIn("sealed against mapping", str(caught.exception))
+
     def test_a_wrong_execute_digest_refuses_before_anything_is_published(self):
         plan = self._plan()
         control = FakeControl()
@@ -856,6 +961,12 @@ class ActivateTests(unittest.TestCase):
             bf.activate_rows(plan, mapping=mapping, run=self.run, control=control, opener=http,
                              repos={"proj": str(self.repo)}, execute="deadbeef", zone="example.test")
         self.assertEqual([], control.calls)
+
+    def test_the_plan_digest_covers_the_expiry_not_only_the_rows(self):
+        plan = self._plan()
+        first = bf.plan_digest(plan)
+        plan["expires_at"] = int(plan["expires_at"]) + 3600
+        self.assertNotEqual(first, bf.plan_digest(plan))
 
     def test_an_expired_plan_is_plan_expired_and_publishes_nothing(self):
         plan = self._plan(ttl=-1)
@@ -890,7 +1001,9 @@ class ActivateTests(unittest.TestCase):
                                                       "commit_sha": "x", "published_at": ""}},
                               publish=[{"deployment_id": 10, "cache_warmed": True}],
                               served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "10"}})
+                              served_headers={"proj-plan-7": {
+                                  "X-Doc-Deployment": "10",
+                                  "Etag": f'"{self.live_sha}"'}})
         self.run.journal("proj-plan-7", {"phase": "activate", "state": "published",
                                          "target": "proj-plan-7", "deployment_id": 9})
         out = self._activate(control=control)
@@ -913,13 +1026,34 @@ class ActivateTests(unittest.TestCase):
         out = self._activate(control=control)
         self.assertEqual("cas_conflict", out[0]["reason"])
 
+    def test_a_missing_or_wrong_etag_fails_the_verification(self):
+        """The design advertises bytes, ETag and deployment. Accepting a wrong ETag weakens it."""
+        control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
+                              served={"proj-plan-7": b"PAGE BYTES"},
+                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9"}})
+        out = self._activate(control=control)
+        self.assertEqual("final_verification_failed", out[0]["reason"])
+        self.assertIn("ETag", out[0]["detail"])
+
+    def test_a_reflected_authorization_header_never_reaches_the_journal(self):
+        """Truncating a body is not sanitizing it — a review finding, and it was right."""
+        detail = bf._safe_detail(b"Bearer sekrit-token-value reflected right at the front",
+                                 "sekrit-token-value")
+        self.assertNotIn("sekrit-token-value", detail)
+        self.assertIn("deliberately NOT reproduced", detail)
+
+    def test_a_known_harness_message_is_kept_because_it_is_the_diagnosis(self):
+        detail = bf._safe_detail(b"docs/x.html: GitHub reports this object does not exist", "t")
+        self.assertIn("does not exist", detail)
+
     def test_a_post_publish_verification_failure_HALTS_the_campaign(self):
         """Per-row isolation stops at the campaign boundary: bad bytes are live under a real name."""
         second = dict(self.plan_row, name="proj-plan-8")
         second["manifest"] = dict(self.manifest)
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
                               served={"proj-plan-7": b"NOT THE PAGE"},
-                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9"}})
+                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9",
+                                                              "Etag": '"whatever"'}})
         mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
                                              inventory=dict(self.row["inventory"],
                                                             name="proj-plan-8"))]

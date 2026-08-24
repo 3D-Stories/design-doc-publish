@@ -381,6 +381,37 @@ def candidate_paths(repo, ref: str, *, runner=None) -> list:
     return out
 
 
+def blob_present(repo, *, sha256_hex: str, size: int) -> bool:
+    """Is a blob with these exact bytes anywhere in this repository's object store?
+
+    `--batch-all-objects --batch-check` lists every object with its size, so filtering by size and
+    hashing only the survivors is exact and cheap — and it does NOT depend on the path narrowing.
+    That matters: the collision check used to search only ref-bearing paths, so identical bytes at a
+    differently named path in another repository were invisible and a non-unique match was reported
+    as unique. A Critical-adjacent High, and it was right.
+    """
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "cat-file", "--batch-all-objects", "--batch-check",
+         "%(objectname) %(objecttype) %(objectsize)"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RowError("uncommitted_or_unreachable",
+                       f"git cat-file --batch-all-objects failed in {repo}: "
+                       f"{proc.stderr.strip()[:200]}")
+    for line in proc.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 3 or parts[1] != "blob":
+            continue
+        try:
+            if int(parts[2]) != int(size):
+                continue
+        except ValueError:
+            continue
+        body = _git_bytes(repo, ["cat-file", "blob", parts[0]])
+        if hashlib.sha256(body).hexdigest() == sha256_hex:
+            return True
+    return False
+
+
 def history_candidates(repo, *, ref: str, target: bytes, cap: int = 2000,
                        report_cap: bool = False, runner=None):
     """Every committed blob under a ref-bearing path whose bytes hash to the target.
@@ -558,7 +589,6 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
                     # rows `uncommitted_or_unreachable` with nothing wrong with any of them.
                     unsearchable.append(project)
                     continue
-            row["unsearchable"] = unsearchable
             row["history_capped"] = capped
             # Dedup by (project, path, blob): the same blob reached through two refs is one answer.
             unique = {(c["project"], c["repo_path"], c["blob_id"]): c for c in candidates}
@@ -575,7 +605,33 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
                 row["candidates"] = candidates
                 raise RowError("mapping_ambiguous",
                                f"{len(candidates)} committed blobs hash to the live bytes")
+            # F4: uniqueness is proven against every blob in every repository, not against the
+            # ref-narrowed paths the search used. F5: a repository that could not be searched means
+            # uniqueness is UNPROVEN, and unproven is ambiguous, not unique.
             match = candidates[0]
+            elsewhere = []
+            for project in dict.fromkeys(list(projects)):
+                if project == match["project"]:
+                    continue
+                try:
+                    if blob_present(projects[project], sha256_hex=match["sha256"],
+                                    size=len(live)):
+                        elsewhere.append(project)
+                except RowError:
+                    if project not in unsearchable:
+                        unsearchable.append(project)
+            if elsewhere:
+                row["candidates"] = candidates + [{"project": p, "note": "same bytes present"}
+                                                  for p in elsewhere]
+                raise RowError("mapping_ambiguous",
+                               "the same bytes are also committed in " + ", ".join(elsewhere))
+            if unsearchable:
+                row["candidates"] = candidates
+                raise RowError("mapping_ambiguous",
+                               "uniqueness is UNPROVEN: these workspace entries could not be "
+                               "searched at all — " + ", ".join(sorted(unsearchable))
+                               + " — so the same bytes may sit in one of them")
+            row["unsearchable"] = unsearchable
             row["provenance"] = {k: match[k] for k in
                                  ("project", "commit", "repo_path", "blob_id", "sha256")}
             row["target"] = _target_at_tip(projects[match["project"]], match["repo_path"],
@@ -618,7 +674,11 @@ def _http(url, *, headers=None, method="GET", body=None, timeout=30):
     """
     import urllib.error
     import urllib.request
-    opener = urllib.request.build_opener(_NoRedirect)
+    # ProxyHandler({}) is not decoration: build_opener installs urllib's ENVIRONMENT proxy handler
+    # by default, so an http_proxy in the environment would receive this request — and one of its
+    # headers can be a bearer. The destination guard claims proxies are refused; this is what
+    # makes that claim true.
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     request = urllib.request.Request(url, method=method, data=body)
     for key, value in (headers or {}).items():
         request.add_header(key, value)
@@ -704,6 +764,36 @@ def staging_label(run_id: str, name: str, attempt: int) -> str:
     return label[:63].rstrip("-")
 
 
+def _safe_detail(payload, token: str) -> str:
+    """A response body reduced to something safe to journal.
+
+    Truncating is NOT sanitizing — a review finding, and it was right: a server that reflects the
+    `Authorization` header near the start of its body would put bearer material into the first 200
+    characters, straight into the append-only journal. So the body is matched against a small set of
+    KNOWN harness messages and otherwise reduced to its shape, and the token is scrubbed either way
+    as a belt-and-braces pass.
+    """
+    text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload or "")
+    text = text.strip()
+
+    def scrub(value: str) -> str:
+        # Only a token long enough to BE a secret is scrubbed. A test caught the first version
+        # replacing every letter of a one-character test token, which both inflated the string and
+        # destroyed the phrases this function matches on.
+        return value.replace(token, "<redacted>") if token and len(token) >= 8 else value
+
+    known = ("does not exist", "stale publisher", "url_path", "content_type", "name is required",
+             "could not read the repository", "manifest", "blob", "sha256", "size")
+    lowered = text.lower()
+    if any(phrase in lowered for phrase in known):
+        # Keep the first line only, which is where the harness puts its own message, and only when
+        # it looks like one of its messages rather than an arbitrary reflection.
+        return scrub(text.splitlines()[0][:200])
+    return (f"a {len(text)}-character response body that matches none of the harness's known "
+            "messages; it is deliberately NOT reproduced, because a reflected request header "
+            "would land in the journal")
+
+
 class ControlClient:
     """The harness control API over an explicit Host header.
 
@@ -741,9 +831,7 @@ class ControlClient:
             f"docs-control.{self._zone}", "/v1/deployments", method="POST",
             body=dict(manifest, expected_active=expected_active))
         if status not in (200, 201):
-            # The body is SUMMARIZED, never echoed: a server can reflect Authorization into it.
-            text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload)
-            raise ControlError(status, text.strip()[:200])
+            raise ControlError(status, _safe_detail(payload, self._token))
         return json.loads(payload)
 
     def serve(self, name: str) -> bytes:
@@ -805,18 +893,38 @@ def _repo_slug(repo) -> str:
     return "/".join(parts[-2:]) if len(parts) >= 2 else "local/test"
 
 
-def _revalidate(row: dict, *, repos: dict) -> None:
+def _revalidate(row: dict, *, repos: dict, inventory=None) -> None:
     """The mapping is UNTRUSTED on every re-read, and bound to its inventory row.
 
     Recomputing the blob is not enough on its own: an edit could keep a perfectly valid, reachable
     blob while pointing the row at a different source URL or a different trusted harness name. So
     the binding is checked first.
     """
-    inventory = row.get("inventory") or {}
-    if row.get("harness_name") != inventory.get("name"):
+    claimed = row.get("inventory") or {}
+    if row.get("harness_name") != claimed.get("name"):
         raise RowError("mapping_invalid",
                        f"the row's harness name {row.get('harness_name')!r} is not its inventory "
-                       f"row's name {inventory.get('name')!r}")
+                       f"row's name {claimed.get('name')!r}")
+    # Comparing two fields of the SAME editable row proves nothing: an edit that changes both
+    # survives it. The binding is only a binding when it reaches the immutable snapshot, so when
+    # one is supplied the row is looked up in it by project id. A Critical review finding.
+    if inventory is not None:
+        by_id = {r.get("id"): r for r in inventory}
+        real = by_id.get(claimed.get("id"))
+        if real is None:
+            raise RowError("mapping_invalid",
+                           f"no inventory row has id {claimed.get('id')!r}; a mapping row that "
+                           "names no real project cannot be published")
+        if real.get("name") != claimed.get("name"):
+            raise RowError("mapping_invalid",
+                           f"inventory {claimed.get('id')!r} is {real.get('name')!r}, and this row "
+                           f"claims {claimed.get('name')!r}")
+        if real.get("latestProductionUrl") != claimed.get("url"):
+            raise RowError("mapping_invalid",
+                           f"inventory {claimed.get('id')!r} points at "
+                           f"{real.get('latestProductionUrl')!r}, and this row claims "
+                           f"{claimed.get('url')!r} — the comparison would be against the wrong "
+                           "page")
     target = row.get("target") or {}
     for field in ("project", "commit", "repo_path", "blob_id", "sha256"):
         if not target.get(field):
@@ -843,21 +951,71 @@ def _revalidate(row: dict, *, repos: dict) -> None:
                        "the recorded blob no longer hashes to the recorded sha256")
 
 
+# The harness's own words when GitHub answers 404 for a named object
+# (`harness/github.py:194`). It arrives as a 422, because the harness's contract blames the
+# publisher for a named object that is not there — a defensible choice on its side, and an
+# ambiguous signal on this one. Measured live: two sampled rows failed this way, and their
+# repositories are PRIVATE, so the harness's fine-grained token simply cannot see them.
+_GITHUB_MISS = "does not exist"
+
+
+def _classify_control_error(exc: "ControlError"):
+    """(reason, detail) for a control-API failure, distinguishing WHOSE fault it is.
+
+    A 502 is the harness saying it could not read the repository. A 422 carrying GitHub's
+    object-not-found text is the same underlying cause wearing a different status, because the
+    harness blames the publisher for a named object that is absent. Calling that
+    `stage_publish_failed` hid the real reason on the first live run, which is a report that tells
+    an operator to look in the wrong place.
+    """
+    if exc.status in (502, 504):
+        return "harness_fetch_denied", exc.detail
+    if exc.status == 422 and _GITHUB_MISS in (exc.detail or "").lower():
+        return "harness_fetch_denied", (
+            f"{exc.detail} — the blob IS committed and pushed at the pinned commit, so either the "
+            "harness's GitHub token cannot read that repository (check whether it is private and "
+            "whether the token's grant covers it) or the commit is not on the remote this harness "
+            "fetches from. Those two look identical from here, and the token grant is the one to "
+            "check first.")
+    if exc.status == 409:
+        return "stage_publish_failed", exc.detail
+    return "stage_publish_failed", exc.detail
+
+
+def plan_digest(sealed: dict) -> str:
+    """The digest of a sealed plan, computed from its CONTENT — never read from its own file.
+
+    Comparing `--execute` against the digest stored inside the plan was a Critical finding: the
+    plan is an editable file, so an edited manifest with the old digest string left in place passed
+    the gate and could have published attacker-selected assets under a trusted production name.
+    Every gate recomputes this.
+    """
+    return digest({"rows": sealed.get("rows"), "expires_at": sealed.get("expires_at"),
+                   "run_id": sealed.get("run_id"), "attempt": sealed.get("attempt"),
+                   "mapping_digest": sealed.get("mapping_digest")})
+
+
 def stage_rows(rows, *, run: RunDir, control, opener, repos: dict, run_id: str,
-               plan_ttl_s: int = 1800, attempt: int = 1) -> list:
+               plan_ttl_s: int = 1800, attempt: int = 1, mapping_digest: str = "",
+               inventory=None) -> list:
     """Compare, then stage, then verify. Per row, isolated, journaled before every write.
 
     Order matters and it is not the obvious one: the compare happens BEFORE any publish, so a
     drifted row touches no registry at all. Publishing first and comparing after would leave the
     wrong page live under a name people trust, and the control API has no deactivate.
     """
+    # A DEEP COPY per row, because the caller's rows are the REVIEWED mapping. Mutating them in
+    # place wrote staging outcomes back into mapping.json on the first live run, so the retry the
+    # attempt counter exists for found zero eligible rows — the resumability the design promises,
+    # defeated by an aliasing bug.
+    rows = [json.loads(json.dumps(r)) for r in rows]
     plan = []
     for row in rows:
         if row.get("reason"):
             continue
         name = row["harness_name"]
         try:
-            _revalidate(row, repos=repos)
+            _revalidate(row, repos=repos, inventory=inventory)
             live = fetch_live(row["inventory"]["url"], opener=opener)
             target_body = _git_bytes(repos[row["target"]["project"]],
                                      ["cat-file", "blob", row["target"]["blob_id"]])
@@ -896,17 +1054,18 @@ def stage_rows(rows, *, run: RunDir, control, opener, repos: dict, run_id: str,
             plan.append({"name": name, "manifest": manifest, "staged": row["staged"],
                          "sealed_live_sha256": hashlib.sha256(live).hexdigest()})
         except ControlError as exc:
-            reason = ("harness_fetch_denied" if exc.status in (502, 504)
-                      else "stage_publish_failed")
-            row["reason"], row["detail"] = reason, exc.detail
+            row["reason"], row["detail"] = _classify_control_error(exc)
         except RowError as exc:
             row["reason"], row["detail"] = exc.reason, exc.detail
         finally:
             run.journal(name, {"phase": "stage", "state": "done",
                                "reason": row.get("reason"), "detail": (row.get("detail") or "")[:300]})
     sealed = {"rows": plan, "expires_at": int(time.time()) + int(plan_ttl_s),
-              "run_id": run_id, "attempt": attempt}
-    sealed["digest"] = digest(plan)
+              "run_id": run_id, "attempt": attempt, "mapping_digest": mapping_digest}
+    # The digest covers the expiry and the mapping identity too, not just the rows. Covering only
+    # the rows let an edited expiry or a swapped mapping ride along under a digest that still
+    # matched — a Critical review finding.
+    sealed["digest"] = plan_digest(sealed)
     run.write_json("activation-plan.json", sealed)
     return rows
 
@@ -967,9 +1126,24 @@ def production_manifest(staged: dict, name: str) -> dict:
 
 
 def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, repos: dict,
-                  execute, zone: str) -> list:
+                  execute, zone: str, inventory=None) -> list:
     """Activate every sealed row, in order, stopping the campaign on an unverified publish."""
-    require_execute(execute=execute, expected=plan.get("digest", ""), what="activation plan")
+    # RECOMPUTED, never trusted from the file. And the mapping the plan was sealed against must
+    # still be the mapping on disk, or a swapped mapping rides in under a matching plan digest.
+    recomputed = plan_digest(plan)
+    stored = plan.get("digest", "")
+    if stored and stored != recomputed:
+        raise Refused(
+            f"the activation plan's own digest is {stored[:12]} but its content hashes to "
+            f"{recomputed[:12]}: the file has been edited since it was sealed, and a stored digest "
+            "is not evidence about the content beside it")
+    require_execute(execute=execute, expected=recomputed, what="activation plan")
+    sealed_mapping = plan.get("mapping_digest")
+    if sealed_mapping and sealed_mapping != mapping.get("digest"):
+        raise Refused(
+            f"the plan was sealed against mapping {str(sealed_mapping)[:12]} and the mapping on "
+            f"disk is {str(mapping.get('digest'))[:12]}: re-run `stage` rather than activating "
+            "against a mapping nobody compared")
     by_name = {r.get("harness_name"): r for r in (mapping.get("rows") or [])}
     expired = int(plan.get("expires_at", 0)) < int(time.time())
     halted = False
@@ -995,7 +1169,7 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
                 raise RowError("mapping_invalid",
                                f"{name} is in the activation plan but not in the mapping any more; "
                                "a row a human deleted after staging must not activate")
-            _revalidate(row, repos=repos)
+            _revalidate(row, repos=repos, inventory=inventory)
             live = fetch_live(row["inventory"]["url"], opener=opener)
             if hashlib.sha256(live).hexdigest() != sealed.get("sealed_live_sha256"):
                 raise RowError("vercel_changed",
@@ -1026,12 +1200,17 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
                                      ["cat-file", "blob", row["target"]["blob_id"]])
             deployment = str(published.get("deployment_id"))
             served_deployment = str(_header(headers, "X-Doc-Deployment") or "")
-            if body != target_body or served_deployment != deployment:
+            # The harness sets ETag to the sha256 of the bytes (measured). Accepting a missing or
+            # wrong one while calling the row `live` would weaken exactly the check this step is.
+            etag = (_header(headers, "Etag") or "").strip().strip('"')
+            expected_etag = hashlib.sha256(target_body).hexdigest()
+            if body != target_body or served_deployment != deployment or etag != expected_etag:
                 halted = True
                 raise RowError("final_verification_failed",
                                f"published {name} as deployment {deployment} but it serves "
-                               f"{len(body)} bytes (expected {len(target_body)}) and reports "
-                               f"deployment {served_deployment!r}. The production name has ALREADY "
+                               f"{len(body)} bytes (expected {len(target_body)}), reports "
+                               f"deployment {served_deployment!r} and ETag {etag[:12]!r} against "
+                               f"an expected {expected_etag[:12]!r}. The production name has ALREADY "
                                "changed, so activation stops here rather than continuing with "
                                "unverified bytes live under a trusted name.")
             result["outcome"] = LIVE
@@ -1052,9 +1231,8 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
     return out
 
 
-def _cmd_activate(args, run) -> int:
-    plan = run.read_json("activation-plan.json")
-    mapping = run.read_json("mapping.json")
+def _control_from_args(args):
+    """The control client, built from the environment only. Refuses rather than defaults."""
     token = os.environ.get("DOC_HARNESS_PUBLISH_TOKEN") or ""
     if not token:
         raise Refused("DOC_HARNESS_PUBLISH_TOKEN is not set; the bearer comes from the "
@@ -1062,10 +1240,44 @@ def _cmd_activate(args, run) -> int:
     base = args.control_base or os.environ.get("DOC_HARNESS_CONTROL_URL") or ""
     if not base:
         raise Refused("no control base: pass --control-base http://<ip>:<port>")
-    control = ControlClient(base, args.zone, token=token)
+    return ControlClient(base, args.zone, token=token)
+
+
+def _cmd_stage(args, run) -> int:
+    mapping = run.read_json("mapping.json")
+    require_execute(execute=args.execute, expected=mapping.get("digest", ""), what="mapping")
+    rows = [r for r in mapping.get("rows") or [] if not r.get("reason")]
+    if args.limit is not None:
+        rows = rows[:int(args.limit)]
+    control = _control_from_args(args)
+    staged = stage_rows(rows, run=run, control=control, opener=_http,
+                        repos=load_projects(find_workspace_file()),
+                        run_id=args.run_id or pathlib.Path(args.run_dir).name,
+                        plan_ttl_s=args.plan_ttl, attempt=args.attempt,
+                        mapping_digest=mapping.get("digest", ""),
+                        inventory=(run.read_json("inventory.json").get("rows") or []))
+    ok = sum(1 for r in staged if not r.get("reason"))
+    print(f"stage: {ok} staged and verified, {len(staged) - ok} flagged, of {len(staged)} "
+          "eligible rows")
+    for row in staged:
+        if row.get("reason"):
+            print(f"  {row['harness_name']}: {row['reason']} — {(row.get('detail') or '')[:120]}")
+    plan = run.read_json("activation-plan.json")
+    print(f"activation plan digest: {plan['digest']} (expires at {plan['expires_at']})")
+    # mapping.json is NOT rewritten. It is the reviewed input, and a phase that edits its own
+    # input cannot be re-run — which is exactly what happened on the first live run.
+    run.write_json("staged-rows.json", {"rows": staged})
+    return 0
+
+
+def _cmd_activate(args, run) -> int:
+    plan = run.read_json("activation-plan.json")
+    mapping = run.read_json("mapping.json")
+    control = _control_from_args(args)
     rows = activate_rows(plan, mapping=mapping, run=run, control=control, opener=_http,
                          repos=load_projects(find_workspace_file()), execute=args.execute,
-                         zone=args.zone)
+                         zone=args.zone,
+                         inventory=(run.read_json("inventory.json").get("rows") or []))
     live = sum(1 for r in rows if r["outcome"] == LIVE)
     print(f"activate: {live} live, {len(rows) - live} flagged, of {len(rows)} planned rows")
     return 0
@@ -1189,6 +1401,11 @@ def _render_report(summary: dict) -> str:
 def _cmd_report(args, run) -> int:
     summary = build_report(run)
     print(summary["markdown"])
+    root = pathlib.Path(__file__).resolve().parents[1]
+    out = root / "docs" / "measurements" / f"{args.date}-37-backfill-{pathlib.Path(args.run_dir).name}.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(summary["markdown"] + "\n", encoding="utf-8")
+    print(f"\nwritten: {out}")
     return 0
 
 
@@ -1217,6 +1434,12 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--control-base", default=None, help="http://<ip>:<port> of the control API")
     st.add_argument("--zone", default="3dstories.ca")
     st.add_argument("--limit", type=int, default=None, help="bound one pass")
+    st.add_argument("--run-id", default=None,
+                    help="the run id baked into the staging label; defaults to the run dir's name")
+    st.add_argument("--plan-ttl", type=int, default=1800,
+                    help="seconds the sealed activation plan stays valid")
+    st.add_argument("--attempt", type=int, default=1,
+                    help="bump this to re-stage a row under a FRESH staging label after an expiry")
 
     act = sub.add_parser("activate", help="CAS-publish the production name and verify it")
     act.add_argument("--execute", default=None, help="the activation-plan digest")
@@ -1224,7 +1447,11 @@ def build_parser() -> argparse.ArgumentParser:
     act.add_argument("--zone", default="3dstories.ca")
     act.add_argument("--limit", type=int, default=None)
 
-    sub.add_parser("report", help="assert every row ended live or flagged, and write the report")
+    rep = sub.add_parser("report",
+                         help="assert every row ended live or flagged, and write the report")
+    rep.add_argument("--date", default="2026-08-24",
+                     help="the date prefix for the report filename; passed rather than derived so "
+                          "a re-run cannot silently produce a second file")
     return parser
 
 
@@ -1249,7 +1476,7 @@ def _not_yet(args, run):  # pragma: no cover - replaced per task
 COMMANDS = {
     "inventory": _cmd_inventory,
     "map": _cmd_map,
-    "stage": _not_yet,
+    "stage": _cmd_stage,
     "activate": _cmd_activate,
     "report": _cmd_report,
 }
