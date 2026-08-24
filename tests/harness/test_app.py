@@ -98,14 +98,14 @@ class TestDispatch:
         assert cap["status"].startswith("200")
         assert b"3dstories" in body
 
-    def test_the_index_is_served_at_index_under_the_docs_zone(self, app):
+    def test_the_index_is_served_at_index_on_the_zone(self, app):
         # `resolve_host` accepts exactly ONE label before the configured zone. With the zone at
         # the apex, no `*.docs.3dstories.ca` name could ever be answered — so the Access
         # application narrowed to that wildcard protected nothing this service serves. The zone
         # moved under `docs.` and the index label became `index`, which is the one pair that
         # puts the index inside the protected wildcard.
         publish(app)
-        cap, body = call(app, "index.docs.3dstories.ca", "/")
+        cap, body = call(app, "index.3dstories.ca", "/")
         assert cap["status"].startswith("200")
         assert b"3dstories" in body
 
