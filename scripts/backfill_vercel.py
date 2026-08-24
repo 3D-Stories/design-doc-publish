@@ -359,7 +359,9 @@ def _git_bytes(repo, argv):
     return proc.stdout
 
 
-# One full-history walk per REPOSITORY, not per (repository, ref). Measured need: a sample of ten
+# One full-history walk per REPOSITORY, not per (repository, ref). Process-scoped and never
+# invalidated, which is correct for a one-shot CLI run and would be wrong for a long-lived process:
+# a commit landing mid-run would not be seen. Stated because the next reader will wonder. Measured need: a sample of ten
 # rows across thirty repositories would otherwise run three hundred whole-history walks, and this
 # repository's own history is not small. The cache is per process and keyed by the resolved path.
 _HTML_PATHS_CACHE: dict = {}
@@ -1586,10 +1588,6 @@ def main(argv=None) -> int:
     except Refused as refusal:
         print(f"refused: {refusal}", file=sys.stderr)
         return 2
-
-
-def _not_yet(args, run):  # pragma: no cover - replaced per task
-    raise Refused(f"{args.command} is not implemented yet")
 
 
 COMMANDS = {
