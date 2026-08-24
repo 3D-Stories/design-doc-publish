@@ -1371,6 +1371,16 @@ def build_report(run: RunDir) -> dict:
     snapshot = run.read_json("inventory.json")
     mapping = run.read_json("mapping.json")
     outcomes = run.read_json("outcomes.json")
+    # Staging outcomes are a THIRD source, and leaving them out was a real gap the report's own
+    # assertion caught on the live run: two rows flagged `harness_fetch_denied` at stage had no
+    # outcome in either the mapping (they mapped cleanly) or the activation plan (they never
+    # entered it), so the report refused — correctly, and for a reason that was a defect in the
+    # report rather than in the data.
+    try:
+        staged = {r.get("harness_name"): r for r in (run.read_json("staged-rows.json")
+                                                     .get("rows") or [])}
+    except Refused:
+        staged = {}
 
     snapshot_names = [r.get("name") for r in snapshot.get("rows") or []]
     mapped = {r.get("harness_name"): r for r in mapping.get("rows") or []}
@@ -1379,16 +1389,27 @@ def build_report(run: RunDir) -> dict:
     processed, missing, reasons, live_rows = [], [], {}, []
     for name in mapped:
         row = activated.get(name)
+        staged_row = staged.get(name)
         if row is not None:
             outcome, reason, detail = row.get("outcome"), row.get("reason"), row.get("detail", "")
         elif mapped[name].get("reason"):
             outcome, reason, detail = FLAGGED, mapped[name]["reason"], mapped[name].get("detail", "")
+        elif staged_row is not None and staged_row.get("reason"):
+            outcome = FLAGGED
+            reason, detail = staged_row["reason"], staged_row.get("detail", "")
         else:
             missing.append(name)
             continue
         if outcome == LIVE:
             live_rows.append(name)
         else:
+            # An outcome that is neither `live` nor `flagged` is corrupt, and pairing it with a
+            # known reason must not launder it: the assertion claims every processed row is exactly
+            # one of the two, so anything else refuses.
+            if outcome != FLAGGED:
+                raise Refused(f"{name} carries the outcome {outcome!r}, which is neither "
+                              f"{LIVE!r} nor {FLAGGED!r}; a report that renders a corrupt value as "
+                              "an outcome is not evidence")
             if reason not in REASONS:
                 raise Refused(f"{name} carries the reason {reason!r}, which is not in the closed "
                               "vocabulary; a report that invents a state is not evidence")

@@ -1194,6 +1194,30 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(3, summary["snapshot"])
         self.assertIn("not_attempted", summary["markdown"])
 
+    def test_a_row_flagged_at_STAGE_is_reported_rather_than_refusing(self):
+        """Found by the report's own assertion on the live run: a third source was missing.
+
+        A row can map cleanly, fail at stage, and therefore appear in neither the mapping's reasons
+        nor the activation outcomes.
+        """
+        self._write(snapshot_names=["a", "b"],
+                    mapping_rows=[{"harness_name": "a", "reason": None}],
+                    outcomes=[])
+        self.run.write_json("staged-rows.json", {"rows": [
+            {"harness_name": "a", "reason": "harness_fetch_denied", "detail": "private repo"}]})
+        summary = bf.build_report(self.run)
+        self.assertEqual(1, summary["reasons"]["harness_fetch_denied"])
+        self.assertEqual(1, summary["processed"])
+
+    def test_a_corrupt_outcome_paired_with_a_known_reason_is_still_refused(self):
+        self._write(snapshot_names=["a"],
+                    mapping_rows=[{"harness_name": "a", "reason": None}],
+                    outcomes=[{"name": "a", "outcome": None, "reason": "byte_mismatch",
+                               "detail": ""}])
+        with self.assertRaises(bf.Refused) as caught:
+            bf.build_report(self.run)
+        self.assertIn("neither", str(caught.exception))
+
     def test_every_processed_row_must_have_ended_live_or_flagged(self):
         self._write(snapshot_names=["a", "b"],
                     mapping_rows=[{"harness_name": "a", "reason": None},
