@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>#37 — Backfill the existing Vercel doc projects into the harness registry</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-24 12:40 MDT</div>
+<h1>#37 — Backfill the existing Vercel doc projects into the harness registry</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p>Fourth and last child of epic #38. Spec: <code>docs/planning/2026-08-23-github-doc-harness-spec.md</code>. Written 2026-08-24, after #36 merged as <code>355dbf2</code>. <strong>REVISION 2</strong> — revision 1 carried a contradiction that defeated the whole drift check; see &quot;What the gates changed&quot;.</p>
+<div class="blk blk-callout"><div class="blk-callout is-info"><div class="blk-title">Read this first — every number here was measured today, not carried</div><p>The harness is RUNNING on this host as of this design (loopback only, decision D27), so the
+publish and serve paths below are probed facts rather than intentions. Where a figure disagrees
+with the epic&#x27;s earlier text, the figure here is the fresh measurement and it says so.</p></div></div></div>
+<h2>What this child ships</h2>
+<p>A backfill script, the reviewed mapping it consumes, per-row activation gated on a byte-compare, a written outcome report, and the parallel-run documentation. Vercel teardown stays out of scope, and so does any change to <code>publish_doc.py</code> or to <code>harness/</code>.</p>
+<h2><code>platform_apis:</code> — the feasibility declaration, ten live probes</h2>
+<table>
+<thead><tr><th>API</th><th>How it was probed</th><th>What came back</th></tr></thead>
+<tbody>
+<tr><td><code>vercel project list -F json --limit 100 [--next &lt;ms&gt;]</code></td><td>ran, twice, to exhaustion</td><td><code>{&quot;projects&quot;: [{deprecated, id, latestProductionUrl, name, nodeVersion, updatedAt}], &quot;pagination&quot;: {&quot;next&quot;}, &quot;contextName&quot;, &quot;elapsed&quot;}</code> — 100 per page, <strong>181 rows today</strong>, and <strong>no git or repository metadata at all</strong></td></tr>
+<tr><td>harness <code>POST /v1/deployments</code></td><td>ran, both body shapes</td><td>the manifest goes <strong>FLAT</strong>, with <code>expected_active</code> beside it. Nested under a <code>manifest</code> key is a <strong>422 <code>name is required and is absent</code></strong>. Success is <strong>201</strong> <code>{deployment_id, name, commit_sha, assets, cache_warmed}</code></td></tr>
+<tr><td><strong>CAS: <code>expected_active: null</code> on an ABSENT name</strong></td><td>ran</td><td><strong>201</strong>, <code>cache_warmed: true</code></td></tr>
+<tr><td><strong>CAS: <code>expected_active: null</code> on a PRESENT name</strong></td><td>ran</td><td><strong>409</strong> <code>{&quot;error&quot;: &quot;stale publisher&quot;, &quot;active_deployment_id&quot;: 2}</code> — a null baseline creates ONLY when absent</td></tr>
+<tr><td><strong>CAS: a STALE id</strong></td><td>ran</td><td><strong>409</strong>, and <strong>the served bytes did not change</strong> (43,421 before and after)</td></tr>
+<tr><td><strong>CAS: the MATCHING id</strong></td><td>ran</td><td><strong>201</strong> with a new <code>deployment_id</code>, the read-back reports it active, and the served bytes become the new page (22,882 = 22,882)</td></tr>
+<tr><td>harness <code>GET /v1/deployments/&lt;name&gt;</code></td><td>ran</td><td><strong>200</strong> <code>{name, active_deployment_id, commit_sha, published_at}</code>. An unknown name returns nulls, <strong>not</strong> a 404. <code>published_at</code> came back <code>&quot;&quot;</code>, so nothing may depend on it</td></tr>
+<tr><td>harness serving, <code>GET /</code> with <code>Host: &lt;name&gt;.&lt;zone&gt;</code></td><td>ran</td><td><strong>200</strong>, <code>Content-Type: text/html; charset=utf-8</code>, <code>Etag</code> = the sha256 of the bytes, <code>X-Doc-Deployment: 1</code>, <code>X-Doc-Origin: cache</code></td></tr>
+<tr><td><code>publish_doc.build_manifest</code> + <code>validate_manifest</code></td><td>ran, imported by path</td><td>reusable unchanged. <code>content_type</code> must stay absent or the publish is a 422</td></tr>
+<tr><td>a live Vercel doc page</td><td>ran</td><td><strong>200</strong>, and the bytes <strong>differ</strong> from the committed page — see the next section</td></tr>
+</tbody>
+</table>
+<p>The four CAS rows exist because a review finding said, correctly, that one successful 201 proves request shape and nothing about the semantics this design leans on. They are measured now.</p>
+<h2>Three measured facts, and each one changes the design</h2>
+<h3>1. Drift is the normal case, not the exception</h3>
+<p>The first row probed — <code>design-doc-publish-plan-campaign</code> — compares like this:</p>
+<table>
+<thead><tr><th>Source</th><th>Bytes</th><th>sha256 (first 16)</th></tr></thead>
+<tbody>
+<tr><td>committed <code>docs/planning/campaign-log.html</code> at <code>355dbf2</code></td><td>43,421</td><td><code>7c4e10c44f8856d4</code></td></tr>
+<tr><td>the harness serving it, published from that commit</td><td>43,421</td><td><code>7c4e10c44f8856d4</code></td></tr>
+<tr><td>the live Vercel page</td><td>34,900</td><td><code>9fd7d5b78df62970</code></td></tr>
+</tbody>
+</table>
+<p>The GitHub-backed side is <strong>byte-identical to the commit</strong>, which is the half that matters for correctness. The Vercel side is stale, because that page was updated in the #36 PR and Vercel was never redeployed — and by then Vercel was no longer the deploy target.</p>
+<p>So acceptance criterion 2&#x27;s compare is a <strong>drift detector that will fire often</strong>. Any doc edited since its last Vercel deploy fails it. The design therefore treats a mismatch as an ordinary, expected outcome with its own bucket, never as an error, and the report distinguishes:</p>
+<ul>
+<li><strong>live</strong> — provenance reviewed, the TARGET bytes committed and reachable, the compare passed byte-for-byte, the production publish succeeded under CAS, and the served page verified;</li>
+<li><strong>flagged</strong> — everything else, always with exactly one reason: <code>mapping_not_found</code>, <code>mapping_ambiguous</code>, <code>mapping_invalid</code>, <code>uncommitted_or_unreachable</code>, <code>source_unavailable</code>, <code>vercel_changed</code>, <code>byte_mismatch</code>, <code>target_name_collision</code>, <code>stage_publish_failed</code>, <code>target_occupied</code>, <code>cas_conflict</code>, <code>final_verification_failed</code>, <code>skipped_by_reviewer</code>.</li>
+</ul>
+<p>Plus one <strong>campaign-level</strong> outcome, <code>inventory_failed</code>, because a truncated or invalid listing is not a row condition and must never be reported as a complete campaign.</p>
+<p>Two row outcomes, not three. The criterion&#x27;s own words are &quot;activated or flagged&quot;, and a <code>drifted</code> bucket would have been a third state satisfying neither. Drift is <code>byte_mismatch</code>: a reason, not an outcome. <code>source_unavailable</code> exists because a 429, a timeout or a missing <code>latestProductionUrl</code> is a transport failure, and mapping one onto a content verdict would be a lie in the report.</p>
+<div class="blk blk-callout"><div class="blk-callout is-warn"><div class="blk-title">The consequence for AC 3, stated plainly rather than discovered at the end</div><p>&quot;All projects end either activated or flagged&quot; cannot mean &quot;mostly activated&quot;. On today&#x27;s evidence
+a large share of the 181 rows will be flagged <code>byte_mismatch</code>. That is the criterion working, and
+the report is the deliverable — not a high activation count.</p></div></div>
+<h3>2. <code>publish_doc.py</code> cannot talk to a local harness, so this script owns its control client</h3>
+<p><code>assert_bearer_destination</code> permits the publish bearer over <code>http</code> only to <code>^(?:localhost|127\.\d+\.\d+\.\d+|::1)$</code> or the <code>172.16/12</code> bridge range with an exact grant, and over <code>https</code> only to <code>docs-control.3dstories.ca</code>. But <code>harness/routing.py:resolve_host</code> answers only when the Host header is exactly <code>&lt;one-label&gt;.&lt;configured zone&gt;</code> — a shape no loopback literal and no bare IP can take. The two halves cannot both be satisfied, which is why #36&#x27;s live proof stayed deferred even with the harness up.</p>
+<p>This child does <strong>not</strong> fix that — <code>publish_doc.py</code> is out of scope. It carries its own thin control client that sends <code>Host: docs-control.&lt;zone&gt;</code> to an operator-supplied address, exactly as the verification probes did. <code>build_manifest</code> and <code>validate_manifest</code> are still imported and reused; only the HTTP call is local.</p>
+<h3>3. The project count is live, so the report timestamps its own measurement</h3>
+<p>Today&#x27;s walk returns <strong>181 projects, 160 carrying a publication-purpose token</strong>. The epic recorded <strong>179 / 163</strong> from #34&#x27;s walk earlier the same day. Two projects appeared in between, which is what a workspace where sessions publish docs looks like. Nothing here hard-codes a total: the report states the count it measured and the instant it measured it.</p>
+<h2>What the gates changed, before anything was built</h2>
+<p>Three gates ran on revision 1: a cross-model <strong>peer consult</strong> (blind — it saw only the problem), the in-repo <strong>quality-bar rubric</strong> (deep pass, 7 findings), and a cross-model <strong>adversarial review</strong> of this document (11 findings, every one confirmed against the text rather than accepted on authority). Records: <code>claude_docs/.wf2-state/37/step3_peer.json</code>, <code>step4_adversarial.json</code>.</p>
+<div class="blk blk-callout"><div class="blk-callout is-crit"><div class="blk-title">The contradiction that would have shipped, and it defeated the entire point</div><p>Revision 1 identified each document by finding the historical blob whose bytes MATCH the live Vercel
+page, and then compared that same blob against Vercel. Identical by construction. So <code>byte_mismatch</code>
+could essentially never fire, the drift detector was decorative, and — worse — a stale Vercel page
+would have been re-published as the harness&#x27;s live copy, migrating the OLD version of every drifted
+document. Revision 2 separates the two questions: the hash match is PROVENANCE (which document is
+this?), and the publish TARGET is the current committed page at the remote tip. The compare is then
+target-versus-Vercel, which is a real question with a real answer.</p></div></div>
+<p>The peer found the other structural hole: revision 1 published a row under its REAL name and compared afterwards, so a mismatch would have left the wrong page live under a trusted name with no way back — the control API has no deactivate, and <code>GET /v1/deployments/&lt;name&gt;</code> returns metadata only, so a prior manifest cannot be reconstructed. Its three refinements were taken as well: identify by hashing against git history rather than guessing from a name; seal the comparison into a short-lived plan and re-check Vercel immediately before activating; and refuse a production name that is already active and not this run&#x27;s.</p>
+<p>The remaining confirmed findings, and what each changed: no outcome for transport failures (<code>source_unavailable</code>, <code>inventory_failed</code>); an editable mapping trusted on re-read (now re-validated from scratch, <code>mapping_invalid</code>); a hyphenated name parsing to a valid but WRONG project (now every viable split is searched, with a workspace-wide collision check); a POST that is not atomic with its journal entry (now a write-ahead <code>pending</code> record); two rows resolving to one production name (now a pre-flight uniqueness check plus ROW-scoped deployment ownership); a post-publish verification failure that let the campaign continue with bad bytes live (now a campaign halt); an unguarded custom control client (now a destination guard of its own); two overlapping predicates (now an explicit decision order); staging rows appearing on the public index (now compare-before-publish, so only rows about to activate are staged); a missing statement of where the bearer comes from; an omitted <code>title</code>/<code>project</code>/<code>purpose</code> on the manifest; an unbounded history search; a false &quot;one seam&quot; claim in the test plan; and a report headed for a directory that does not exist.</p>
+<p>Declined, with reasons: the peer&#x27;s eight subcommands and in-script <code>self-test</code> — five subcommands, and the tests belong in the existing pytest suite, which is the established way here.</p>
+<h2>The design</h2>
+<p>One new file, <code>scripts/backfill_vercel.py</code>, standard library only, five subcommands over one append-only run directory. Every command is read-only unless given both an explicit <code>--execute</code> flag and the digest of the plan it is executing.</p>
+<table>
+<thead><tr><th>Command</th><th>What it does</th><th>Writes</th></tr></thead>
+<tbody>
+<tr><td><code>inventory</code></td><td>walk the Vercel listing to exhaustion, twice, until two snapshots agree</td><td>immutable snapshot + <code>measured_at</code>, or a recorded cutoff</td></tr>
+<tr><td><code>map</code></td><td>for each row: fetch the live bytes, find the commit whose blob matches them</td><td><code>mapping.json</code>, the human review surface</td></tr>
+<tr><td><code>stage</code></td><td>publish under a staging label, fetch it, compare to a fresh Vercel fetch</td><td>per-row evidence, and a sealed activation plan</td></tr>
+<tr><td><code>activate</code></td><td>re-check Vercel, then CAS-publish the production name and verify what it serves</td><td>per-row <code>live</code> or <code>flagged</code></td></tr>
+<tr><td><code>report</code></td><td>assert every row in the snapshot ended <code>live</code> or <code>flagged</code>, then write it up</td><td>the committed markdown report</td></tr>
+</tbody>
+</table>
+<h3><code>inventory</code> — bounded, and honest about not being atomic</h3>
+<p><code>vercel project list -F json --limit 100</code>, following <code>pagination.next</code> until absent, then again. Two consecutive agreeing walks become the row set. <strong>Bounded</strong> by <code>--max-walks</code> (default 3) and an elapsed-time cap: on exhaustion the last fully completed walk is frozen as a <strong>non-atomic cutoff snapshot</strong>, identified by its start and completion instants rather than by a single moment — a paginated walk cannot establish an atomic set at an instant, and claiming otherwise would be false. Rows first seen after that walk are reported separately, without asserting which side of any instant they were created on. A non-zero <code>vercel</code> exit, a malformed listing, or a page missing its <code>projects</code> array is <strong><code>inventory_failed</code></strong>: the campaign stops rather than reporting a partial walk as complete.</p>
+<h3><code>map</code> — provenance from the bytes, target from the tip</h3>
+<p>The naming convention <code>{project}-{purpose}-{ref}</code> narrows the search. It never decides the answer.</p>
+<ol>
+<li>Fetch the live Vercel page with <strong><code>Accept-Encoding: identity</code></strong> — a gzipped body would make every byte-compare meaningless — and take its sha256. A missing <code>latestProductionUrl</code>, an auth failure, a timeout, or a 429 past its retry bound is <strong><code>source_unavailable</code></strong>, with the final transport error kept verbatim as evidence and never mapped onto a content verdict.</li>
+<li>Enumerate <strong>every</strong> syntactically viable <code>{project}-{purpose}-{ref}</code> split whose project exists in <code>.rawgentic_workspace.json</code>, and search the union of those repositories. When more than one split is viable, or none is, search <strong>all</strong> projects: the hash is the evidence, not the name.</li>
+<li>In each candidate repository, search committed <code>.html</code> blobs <strong>through history</strong>, not just at <code>HEAD</code>. Bounded, because ~30 repositories × all of history is not a search anyone should start: narrow to paths whose basename or parent directory carries the ref, then per candidate path run <code>git log --all --format=%H -- &lt;path&gt;</code> and resolve <code>git rev-parse &lt;commit&gt;:&lt;path&gt;</code>, comparing each blob&#x27;s sha256 to the live hash. <code>--history-cap</code> bounds commits examined per path, and hitting it is RECORDED on the row, so a capped search is never reported as exhaustive. **Never assume <code>HEAD</code> produced the deployment** — most of these pages were published from a commit that is now old, which is the whole reason this searches history.</li>
+<li>Before accepting a unique match, run a <strong>workspace-wide collision check</strong>: the same bytes in another repository make the row <code>mapping_ambiguous</code> listing every candidate, even when the narrowing had produced one. No match at all is <code>mapping_not_found</code>, with the naming evidence kept so a human can finish it by hand.</li>
+<li><strong>The publish TARGET is a separate field from the provenance match.</strong> Provenance answers &quot;which document is this&quot;; the target is that document&#x27;s <code>.md</code>/<code>.html</code> pair <strong>at the remote tip</strong>, which is what a migration should serve. Both are recorded. Where the target hash equals the live Vercel hash the page never drifted; where it differs, <code>stage</code> flags <code>byte_mismatch</code> — now a question with a real answer rather than a tautology.</li>
+<li>Assert the target blobs are committed and reachable from the tip commit, reusing <code>publish_doc.assert_blob_committed</code>, <code>assert_head_reachable</code> and <code>select_remote</code>. Not pushed → <code>uncommitted_or_unreachable</code>. <strong>Nothing is ever auto-committed or auto-pushed</strong> to make a row pass.</li>
+<li><strong>Production-name uniqueness</strong> is enforced across the whole mapping before anything is staged. Two rows resolving to one name are both <code>target_name_collision</code> and neither is staged, because whichever went second would replace the first under a trusted name.</li>
+</ol>
+<p><code>mapping.json</code> is the review surface: a human may correct a guess, delete a row (recorded as an explicit <code>skipped_by_reviewer</code> tombstone rather than a silent absence), or add one by hand. Its sha256 is the <strong>mapping digest</strong>.</p>
+<h3>The mapping is UNTRUSTED input on every re-read</h3>
+<p><code>stage</code> and <code>activate</code> re-validate every row from scratch: schema, then <strong>recompute</strong> the blob id and sha256 from the recorded <code>commit:path</code>, then re-run reachability for that exact commit. Any mismatch is <code>mapping_invalid</code> and nothing is published. The digest proves the file has not changed since it was reviewed; it says nothing about whether its contents are TRUE, and a hand-edited row is exactly where an untrue one comes from.</p>
+<h3><code>stage</code> — compare first, then prove the harness serves it</h3>
+<p>Per row, independently, inside an exception boundary. The decision order is explicit, because two predicates otherwise overlap:</p>
+<ol>
+<li>Re-fetch the live Vercel page. <strong>Changed since <code>map</code></strong> (hash differs from the recorded one) → <code>vercel_changed</code>, and stop. This test comes first and settles it.</li>
+<li>Unchanged → compare it to the <strong>target</strong> bytes. Different → <code>byte_mismatch</code>, and stop, having touched no registry at all. This is the drift detector, and nothing has been published.</li>
+<li>Build the manifest with <code>publish_doc.build_manifest</code> and <code>validate_manifest</code> (unchanged, <code>content_type</code> stays absent or the publish is a 422), then add the three optional metadata keys the harness accepts and the derived index renders — <code>title</code>, <code>project</code>, <code>purpose</code> (<code>harness/manifest.py:215</code>, <code>harness/registry.py:196</code>) — as a dict update after the call, so <code>publish_doc.py</code> stays untouched. Without them a backfilled row lands on the index with no grouping at all.</li>
+<li><strong>Write-ahead, then publish.</strong> Durably record <code>pending</code> — target name, intended content hash, <code>expected_active</code>, row identity — BEFORE sending, and record the returned deployment id immediately after. A crash between the two is then recoverable: on resume, reconcile the pending intent against <code>GET</code> metadata and the served bytes rather than guessing.</li>
+<li>Publish under a <strong>staging label</strong> (<code>bf&lt;run&gt;-&lt;name&gt;</code>, truncated to a valid 63-char DNS label) with <code>expected_active: null</code> — measured to create only when the name is absent and to 409 otherwise, so an existing staging name is <code>stage_publish_failed</code>, never an overwrite.</li>
+<li>Wait for <code>cache_warmed: true</code> (<code>false</code> is a failure, not a pass), then <code>GET /</code> on <code>Host: &lt;staging&gt;.&lt;zone&gt;</code> and compare to the target bytes. Not identical → <code>final_verification_failed</code>; the known candidate is a percent-encoded asset name (#34&#x27;s boundary learning), and it is worth stopping the campaign over rather than continuing.</li>
+<li>A row passing all of that enters the <strong>activation plan</strong>, sealed with its own digest and an expiry.</li>
+</ol>
+<div class="blk blk-callout"><div class="blk-callout is-warn"><div class="blk-title">Staging rows are REAL registry rows and they appear on the public index</div><p>Checked, not assumed: <code>Registry.index_snapshot</code> selects every active row with no filter
+(<code>harness/registry.py:196</code>) and <code>render_index</code> renders all of them. Comparing before publishing is
+what keeps that number small — only rows about to activate are ever staged. Every staging label and
+deployment id is listed in the report, and the runbook says to retire them, because the control API
+has no delete.</p></div></div>
+<h3><code>activate</code> — the only command that touches a production name</h3>
+<ol>
+<li>Re-check <strong>both</strong> digests, the activation plan&#x27;s and the mapping&#x27;s, and re-validate the row as above. A row a human deleted after <code>stage</code> must not activate, and a plan digest cannot see that.</li>
+<li>Re-fetch Vercel and require the sealed hash. Different → <code>vercel_changed</code>, no publish.</li>
+<li><code>GET /v1/deployments/&lt;name&gt;</code>. Active and <strong>not this ROW&#x27;s own recorded deployment</strong> → <code>target_occupied</code>. Row-scoped, not run-scoped: a run-wide exception would let a second row replace the first row&#x27;s page under a shared name.</li>
+<li>Write-ahead <code>pending</code>, then publish the <strong>same manifest bytes</strong> staging proved, with <code>expected_active</code> set to what step 3 read. A 409 → <code>cas_conflict</code> (measured: the 409 body carries the current <code>active_deployment_id</code>, and the served bytes do not change).</li>
+<li><code>GET /</code> on the production host and verify bytes, ETag and <code>X-Doc-Deployment</code>. **A failure here halts the whole campaign**, because the production name has already changed and per-row isolation would otherwise leave unverified bytes live under a trusted name while the run carried on. It journals the deployment id, prints an operator-visible error, and refuses further activation until a verified forward repair has run.</li>
+</ol>
+<h3>Credentials and the destination guard</h3>
+<p>The publish bearer and the Vercel session come from the <strong>environment only</strong>. Neither is written to the run directory, the journal, the report or an error message, and no HTTP error body is echoed verbatim into output — that exact defect was found and fixed during #36&#x27;s review, where a server could reflect the <code>Authorization</code> header into its own JSON. The report records that a token was present, never any part of its value.</p>
+<p>Because this client cannot use <code>assert_bearer_destination</code>, it carries an equivalent of its own, checked <strong>before</strong> <code>Authorization</code> is attached: the base URL must be <code>http</code> with an <strong>IP literal</strong> whose connected peer is loopback, or an address explicitly granted by an environment variable naming that exact <code>host:port</code>; DNS names, redirects, proxies and non-HTTP schemes are refused. The validated peer and the Host header are logged, so what the token was sent to is a matter of record rather than of trust. Dropping the guard because the URL &quot;is local&quot; is precisely how a typo or a hostile address gets a bearer token.</p>
+<h3>Undo, stated honestly</h3>
+<p>There is no deactivate. Undo is a <strong>forward repair</strong>: re-publish a previously journaled good manifest with the current deployment id as <code>expected_active</code> — measured to work, and to 409 rather than clobber when the id is stale. For a name this run activated from nothing, there is no &quot;absent&quot; to return to — which is why comparing before publishing, the staging step, the digest gates, the row-scoped ownership, the null-baseline CAS and the collision check all exist. Staging deployments also persist as registry artifacts; the report lists them so an operator can decide.</p>
+<h3>The report</h3>
+<p><code>docs/measurements/2026-08-24-37-backfill-&lt;run&gt;.md</code>, committed. <code>docs/measurements/</code> already holds this project&#x27;s run telemetry, so the report reuses an existing home rather than inventing a <code>docs/reports/</code> convention for one file. It carries the snapshot&#x27;s start and completion instants (or the cutoff plus the separately-listed later additions), one line per row with outcome and reason, totals per reason that add up to the row count, and every staging label left behind. It <strong>asserts</strong> that every row in the snapshot ended <code>live</code> or <code>flagged</code> and fails if one did not — that assertion is what makes acceptance criterion 3 checkable rather than claimed.</p>
+<h3>The parallel-run window</h3>
+<p>Documented in <code>docs/runbooks/</code>, honestly: for a <code>live</code> row the dual-host window <strong>opens at activation and does not close</strong>, because deleting the Vercel project is out of scope. The runbook records which rows are live where, the last instant byte identity was verified, how to forward-repair a row, and the order to retire Vercel projects in once somebody decides to. The window cannot be <em>public</em> until a hostname resolves, which is #35&#x27;s remaining owner-gated work.</p>
+<h3>Tests, offline by construction</h3>
+<p><code>scripts/tests/test_backfill_vercel.py</code> in the existing suite. Temporary git repositories give real blob ids and real history. There are <strong>two</strong> injected seams, not one, because the inventory is a subprocess (<code>vercel project list</code>) while the page fetch and the harness calls are HTTP — a single seam would have been a lie in the design and a fake in the tests.</p>
+<p>Covered: history-blob discovery in an OLD commit; a project name containing a purpose word; a ref that is itself a purpose token; every-viable-split enumeration; the workspace-wide collision check; gzip refused by <code>Accept-Encoding: identity</code>; each <code>source_unavailable</code> transport case and its retry bound; <code>inventory_failed</code> on a malformed listing and on a non-zero CLI exit; the walk bound and the non-atomic cutoff; a hand-edited <code>mapping_invalid</code> row; a <code>skipped_by_reviewer</code> tombstone; <code>target_name_collision</code>; <strong>no publish of any kind for a row that fails the compare</strong>, asserted by spying on the transport, which is the invariant this whole design turns on; the write-ahead record present before the POST and reconciled on resume; <code>cache_warmed: false</code> treated as a failure; a served-bytes mismatch HALTING the campaign rather than flagging one row; row-scoped <code>target_occupied</code>; <code>cas_conflict</code>; digest and expiry enforcement; the destination guard refusing a DNS name and a redirect before the bearer is attached; per-row isolation for pre-publish failures; and the report&#x27;s completeness assertion FAILING when a row is missing. No test needs Vercel, GitHub or a running harness.</p>
+<h2>Risks, and what each one costs</h2>
+<table>
+<thead><tr><th>Risk</th><th>Why it is bounded</th></tr></thead>
+<tbody>
+<tr><td>A page&#x27;s live bytes were never committed anywhere, or two repositories hold identical generated pages</td><td>Exact-hash matching plus a mandatory human review makes false attribution hard, and both cases have their own flag reason. Some rows legitimately stay flagged, and that is the honest outcome.</td></tr>
+<tr><td>Continuous publishing moves the inventory or the Vercel bytes mid-campaign</td><td>Two agreeing snapshots or an explicit cutoff, a sealed plan with an expiry, and a re-fetch immediately before activation. Final closure wants a brief publishing pause, which the runbook says.</td></tr>
+<tr><td>A mistaken activation cannot be undone to &quot;absent&quot;</td><td>Staging first, digest gates, null-baseline CAS, and the occupied-name refusal. Undo is a forward repair, and the design says so rather than implying a rollback exists.</td></tr>
+<tr><td>181 rows × several HTTP calls is slow, or hits a rate limit</td><td>Rows are independent and journaled, so a run resumes; <code>--limit</code> bounds one pass; GitHub fetches happen inside the harness under its own call budget.</td></tr>
+<tr><td>Staging labels accumulate in the registry</td><td>Every one is listed in the report with its label and deployment id, so cleanup is a decision somebody can make rather than a surprise.</td></tr>
+<tr><td>A crash between a POST and its journal entry</td><td>The write-ahead <code>pending</code> record, and a resume that reconciles against <code>GET</code> metadata and the served bytes rather than guessing.</td></tr>
+<tr><td>The bearer reaching somewhere it should not</td><td>The destination guard, checked before <code>Authorization</code> is attached, with the validated peer logged.</td></tr>
+</tbody>
+</table>
+<h2>What this child does NOT do</h2>
+<p>It does not touch <code>publish_doc.py</code> or <code>harness/</code>. It does not delete a Vercel project. It does not make the harness public — no DNS, no Cloudflare, nothing outward-facing. It does not run the full 181-row campaign: the owner asked for a real byte-compare on a <strong>sample</strong>, so the sample runs against the local harness and the full campaign is deferred with its reason recorded. And it does not claim the migration is finished: with the harness reachable only on loopback, an activated row is live for this host, and the public parallel-run window still waits on #35.</p>
+
+</main>
+<footer>Last updated: 2026-08-24 12:40 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>
