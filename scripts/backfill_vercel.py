@@ -686,10 +686,14 @@ class ControlClient:
         return json.loads(payload)
 
     def serve(self, name: str) -> bytes:
-        status, _, payload = self._call(f"{name}.{self._zone}", "/", authorized=False)
+        return self.serve_full(name)[0]
+
+    def serve_full(self, name: str):
+        """(body, headers). `activate` checks the headers too, not only the bytes."""
+        status, headers, payload = self._call(f"{name}.{self._zone}", "/", authorized=False)
         if status != 200:
             raise ControlError(status, "the harness did not serve the page")
-        return payload
+        return payload, headers
 
 
 def manifest_for_row(row: dict, *, name: str, repos: dict) -> dict:
@@ -856,6 +860,156 @@ def _validate_manifest(manifest: dict) -> None:
     module.validate_manifest(manifest)
 
 
+# --------------------------------------------------------------------------------------------
+# T5 — activation. The only production write, and the only thing here that cannot be undone.
+# --------------------------------------------------------------------------------------------
+
+
+def _row_owned_deployment(run: RunDir, name: str):
+    """(deployment_id, has_unproven_pending) for THIS row's production publishes.
+
+    Row-scoped, never run-scoped: a run-wide "is it ours" would let a second row replace the first
+    row's page under a shared name. And a `pending` with no recorded id is NOT ownership — the POST
+    may have committed with its response lost, and another contender publishing the same bytes is
+    indistinguishable from us. That case stops the row rather than guessing.
+    """
+    owned, unproven = None, False
+    for entry in run.journal_entries():
+        record = entry.get("record") or {}
+        if entry.get("row") != name or record.get("phase") != "activate":
+            continue
+        if record.get("target") != name:
+            continue
+        if record.get("state") == "published" and record.get("deployment_id") is not None:
+            owned = record["deployment_id"]
+            unproven = False
+        elif record.get("state") == "pending":
+            unproven = True
+    return owned, unproven
+
+
+def production_manifest(staged: dict, name: str) -> dict:
+    """The staged manifest with its `name` replaced — and nothing else touched.
+
+    Re-sending the staged bytes was an impossible instruction: a manifest CONTAINS its name, so it
+    would address the staging label a second time. What is invariant is the asset set, and this
+    asserts that invariant rather than trusting it.
+    """
+    produced = dict(staged)
+    produced["name"] = name
+    left, right = dict(staged), dict(produced)
+    left.pop("name"), right.pop("name")
+    if left != right:                                    # pragma: no cover - guard, not a path
+        raise AssertionError("the production manifest differs from the staged one in more than "
+                             "its name")
+    return produced
+
+
+def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, repos: dict,
+                  execute, zone: str) -> list:
+    """Activate every sealed row, in order, stopping the campaign on an unverified publish."""
+    require_execute(execute=execute, expected=plan.get("digest", ""), what="activation plan")
+    by_name = {r.get("harness_name"): r for r in (mapping.get("rows") or [])}
+    expired = int(plan.get("expires_at", 0)) < int(time.time())
+    halted = False
+    out = []
+    for sealed in plan.get("rows") or []:
+        name = sealed["name"]
+        result = {"name": name, "outcome": FLAGGED, "reason": None, "detail": "",
+                  "reason_class": ""}
+        if halted:
+            result["reason"] = "final_verification_failed"
+            result["reason_class"] = "campaign_halted"
+            result["detail"] = ("not attempted: an earlier row published bytes the harness did not "
+                                "then serve, so activation stopped")
+            out.append(result)
+            continue
+        try:
+            if expired:
+                raise RowError("plan_expired",
+                               "the activation plan's expiry has passed; re-run `stage` so the "
+                               "comparison is re-taken against the page as it is now")
+            row = by_name.get(name)
+            if row is None:
+                raise RowError("mapping_invalid",
+                               f"{name} is in the activation plan but not in the mapping any more; "
+                               "a row a human deleted after staging must not activate")
+            _revalidate(row, repos=repos)
+            live = fetch_live(row["inventory"]["url"], opener=opener)
+            if hashlib.sha256(live).hexdigest() != sealed.get("sealed_live_sha256"):
+                raise RowError("vercel_changed",
+                               "the live page moved after the comparison was sealed")
+            owned, unproven = _row_owned_deployment(run, name)
+            state = control.read_active(name)
+            active = state.get("active_deployment_id")
+            if active is not None and active != owned:
+                if unproven:
+                    raise RowError("final_verification_failed",
+                                   f"{name} is active as deployment {active} and this row has a "
+                                   "pending publish whose response was lost, so nothing here "
+                                   "cannot prove which publisher owns it — an operator decides")
+                raise RowError("target_occupied",
+                               f"{name} is already active as deployment {active}, which is not "
+                               "this row's; the API cannot deactivate and metadata cannot rebuild "
+                               "somebody else's manifest, so this row stops")
+            manifest = production_manifest(sealed["manifest"], name)
+            run.journal(name, {"phase": "activate", "state": "pending", "target": name,
+                               "expected_active": active,
+                               "content_sha256": manifest["assets"][0]["sha256"]})
+            published = control.publish(manifest, active)
+            run.journal(name, {"phase": "activate", "state": "published", "target": name,
+                               "deployment_id": published.get("deployment_id"),
+                               "cache_warmed": bool(published.get("cache_warmed"))})
+            body, headers = control.serve_full(name)
+            target_body = _git_bytes(repos[row["target"]["project"]],
+                                     ["cat-file", "blob", row["target"]["blob_id"]])
+            deployment = str(published.get("deployment_id"))
+            served_deployment = str(_header(headers, "X-Doc-Deployment") or "")
+            if body != target_body or served_deployment != deployment:
+                halted = True
+                raise RowError("final_verification_failed",
+                               f"published {name} as deployment {deployment} but it serves "
+                               f"{len(body)} bytes (expected {len(target_body)}) and reports "
+                               f"deployment {served_deployment!r}. The production name has ALREADY "
+                               "changed, so activation stops here rather than continuing with "
+                               "unverified bytes live under a trusted name.")
+            result["outcome"] = LIVE
+            result["deployment_id"] = published.get("deployment_id")
+            result["verified_at"] = int(time.time())
+        except ControlError as exc:
+            result["reason"] = ("cas_conflict" if exc.status == 409 else
+                                "harness_fetch_denied" if exc.status in (502, 504) else
+                                "final_verification_failed")
+            result["detail"] = exc.detail
+        except RowError as exc:
+            result["reason"] = exc.reason
+            result["detail"] = exc.detail
+        run.journal(name, {"phase": "activate", "state": "done", "outcome": result["outcome"],
+                           "reason": result["reason"], "detail": result["detail"][:300]})
+        out.append(result)
+    run.write_json("outcomes.json", {"rows": out, "halted": halted})
+    return out
+
+
+def _cmd_activate(args, run) -> int:
+    plan = run.read_json("activation-plan.json")
+    mapping = run.read_json("mapping.json")
+    token = os.environ.get("DOC_HARNESS_PUBLISH_TOKEN") or ""
+    if not token:
+        raise Refused("DOC_HARNESS_PUBLISH_TOKEN is not set; the bearer comes from the "
+                      "environment only and is never read from a file this script wrote")
+    base = args.control_base or os.environ.get("DOC_HARNESS_CONTROL_URL") or ""
+    if not base:
+        raise Refused("no control base: pass --control-base http://<ip>:<port>")
+    workspace = str(pathlib.Path(__file__).resolve().parents[2] / ".rawgentic_workspace.json")
+    control = ControlClient(base, args.zone, token=token)
+    rows = activate_rows(plan, mapping=mapping, run=run, control=control, opener=_http,
+                         repos=load_projects(workspace), execute=args.execute, zone=args.zone)
+    live = sum(1 for r in rows if r["outcome"] == LIVE)
+    print(f"activate: {live} live, {len(rows) - live} flagged, of {len(rows)} planned rows")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="backfill_vercel.py",
@@ -911,7 +1065,7 @@ COMMANDS = {
     "inventory": _cmd_inventory,
     "map": _cmd_map,
     "stage": _not_yet,
-    "activate": _not_yet,
+    "activate": _cmd_activate,
     "report": _not_yet,
 }
 

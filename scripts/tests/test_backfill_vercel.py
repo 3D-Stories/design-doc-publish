@@ -503,10 +503,11 @@ class StagingLabelTests(unittest.TestCase):
 class FakeControl:
     """The harness seam. Records every call IN ORDER, so ordering can be asserted."""
 
-    def __init__(self, *, active=None, publish=None, served=None):
+    def __init__(self, *, active=None, publish=None, served=None, served_headers=None):
         self.active = active or {}
         self.publish_responses = list(publish or [])
         self.served = served or {}
+        self.served_headers = served_headers or {}
         self.calls = []
 
     def read_active(self, name):
@@ -524,8 +525,13 @@ class FakeControl:
         return item
 
     def serve(self, name):
+        return self.serve_full(name)[0]
+
+    def serve_full(self, name):
         self.calls.append(("serve", name))
-        return self.served.get(name, b"")
+        body = self.served.get(name, b"")
+        headers = dict(self.served_headers.get(name, {}))
+        return body, headers
 
 
 class StageTests(unittest.TestCase):
@@ -686,6 +692,179 @@ class StageTests(unittest.TestCase):
         text = (self.run.path / "journal.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("Bearer", text)
         self.assertNotIn("Authorization", text)
+
+
+class ActivateTests(unittest.TestCase):
+    """T5 — the only command that touches a production name, and the only irreversible one."""
+
+    def setUp(self):
+        import hashlib as _h
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.run = bf.RunDir(self.tmp / "run")
+        self.repo = self.tmp / "proj"
+        make_repo(self.repo, {"docs/planning/7-x.html": "PAGE BYTES",
+                              "docs/planning/7-x.md": "# page"})
+        self.tip = git(self.repo, "rev-parse", "HEAD")
+        self.blob = git(self.repo, "rev-parse", f"{self.tip}:docs/planning/7-x.html")
+        self.live_sha = _h.sha256(b"PAGE BYTES").hexdigest()
+        self.label = bf.staging_label("r1", "proj-plan-7", 1)
+        self.manifest = {
+            "name": self.label, "repo": "local/test", "commit_sha": self.tip,
+            "entry_path": "/index.html",
+            "assets": [{"url_path": "/index.html", "repo_path": "docs/planning/7-x.html",
+                        "blob_id": self.blob, "size": 10, "sha256": self.live_sha}],
+            "title": "proj-plan-7", "project": "proj", "purpose": "plan"}
+        self.plan_row = {"name": "proj-plan-7", "manifest": self.manifest,
+                         "staged": {"label": self.label, "deployment_id": 5},
+                         "sealed_live_sha256": self.live_sha}
+        self.row = {
+            "inventory": {"id": "prj_1", "name": "proj-plan-7",
+                          "url": "https://proj-plan-7.vercel.app/"},
+            "harness_name": "proj-plan-7", "reason": None, "detail": "",
+            "provenance": {"project": "proj", "commit": self.tip,
+                           "repo_path": "docs/planning/7-x.html", "blob_id": self.blob,
+                           "sha256": self.live_sha},
+            "target": {"project": "proj", "commit": self.tip,
+                       "repo_path": "docs/planning/7-x.html", "blob_id": self.blob,
+                       "sha256": self.live_sha, "size": 10,
+                       "md_path": "docs/planning/7-x.md",
+                       "md_blob_id": git(self.repo, "rev-parse", f"{self.tip}:docs/planning/7-x.md")}}
+
+    def _plan(self, rows=None, *, ttl=1800):
+        import time as _t
+        rows = self.plan_row if rows is None else rows
+        rows = rows if isinstance(rows, list) else [rows]
+        plan = {"rows": rows, "expires_at": int(_t.time()) + ttl, "run_id": "r1", "attempt": 1,
+                "digest": bf.digest(rows)}
+        self.run.write_json("activation-plan.json", plan)
+        return plan
+
+    def _activate(self, *, control, live=b"PAGE BYTES", rows=None, mapping_rows=None, plan=None):
+        plan = plan or self._plan(rows)
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, live)})
+        mapping = {"rows": mapping_rows if mapping_rows is not None else [dict(self.row)]}
+        mapping["digest"] = bf.digest(mapping["rows"])
+        self.run.write_json("mapping.json", mapping)
+        return bf.activate_rows(plan, mapping=mapping, run=self.run, control=control,
+                                opener=http, repos={"proj": str(self.repo)},
+                                execute=plan["digest"], zone="example.test")
+
+    def test_a_clean_activation_publishes_and_verifies(self):
+        control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
+                              served={"proj-plan-7": b"PAGE BYTES"},
+                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9",
+                                                              "Etag": f'"{self.live_sha}"'}})
+        out = self._activate(control=control)
+        self.assertEqual("live", out[0]["outcome"])
+        published = [c for c in control.calls if c[0] == "publish"][0]
+        self.assertEqual("proj-plan-7", published[1])   # the PRODUCTION name, not the staging label
+
+    def test_the_production_manifest_differs_from_the_staged_one_in_NAME_ALONE(self):
+        captured = {}
+        control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
+                              served={"proj-plan-7": b"PAGE BYTES"},
+                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9"}})
+        real = control.publish
+
+        def spy(manifest, expected_active):
+            captured["manifest"] = json.loads(json.dumps(manifest))
+            return real(manifest, expected_active)
+
+        control.publish = spy
+        self._activate(control=control)
+        produced = dict(captured["manifest"])
+        produced.pop("expected_active", None)
+        staged = dict(self.manifest)
+        self.assertEqual("proj-plan-7", produced.pop("name"))
+        self.assertEqual(self.label, staged.pop("name"))
+        self.assertEqual(staged, produced)
+
+    def test_a_wrong_execute_digest_refuses_before_anything_is_published(self):
+        plan = self._plan()
+        control = FakeControl()
+        http = FakeHttp({})
+        mapping = {"rows": [dict(self.row)]}
+        mapping["digest"] = bf.digest(mapping["rows"])
+        self.run.write_json("mapping.json", mapping)
+        with self.assertRaises(bf.Refused):
+            bf.activate_rows(plan, mapping=mapping, run=self.run, control=control, opener=http,
+                             repos={"proj": str(self.repo)}, execute="deadbeef", zone="example.test")
+        self.assertEqual([], control.calls)
+
+    def test_an_expired_plan_is_plan_expired_and_publishes_nothing(self):
+        plan = self._plan(ttl=-1)
+        control = FakeControl()
+        out = self._activate(control=control, plan=plan)
+        self.assertEqual("plan_expired", out[0]["reason"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_a_row_deleted_from_the_mapping_after_stage_does_not_activate(self):
+        control = FakeControl()
+        out = self._activate(control=control, mapping_rows=[])
+        self.assertEqual("mapping_invalid", out[0]["reason"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_vercel_moving_since_the_seal_publishes_nothing(self):
+        control = FakeControl()
+        out = self._activate(control=control, live=b"MOVED ON")
+        self.assertEqual("vercel_changed", out[0]["reason"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_a_name_owned_by_somebody_else_is_target_occupied(self):
+        control = FakeControl(active={"proj-plan-7": {"name": "proj-plan-7",
+                                                      "active_deployment_id": 777,
+                                                      "commit_sha": "x", "published_at": ""}})
+        out = self._activate(control=control)
+        self.assertEqual("target_occupied", out[0]["reason"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_a_deployment_this_ROW_recorded_is_adoptable(self):
+        control = FakeControl(active={"proj-plan-7": {"name": "proj-plan-7",
+                                                      "active_deployment_id": 9,
+                                                      "commit_sha": "x", "published_at": ""}},
+                              publish=[{"deployment_id": 10, "cache_warmed": True}],
+                              served={"proj-plan-7": b"PAGE BYTES"},
+                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "10"}})
+        self.run.journal("proj-plan-7", {"phase": "activate", "state": "published",
+                                         "target": "proj-plan-7", "deployment_id": 9})
+        out = self._activate(control=control)
+        self.assertEqual("live", out[0]["outcome"], out[0])
+
+    def test_an_unproven_pending_deployment_is_NEVER_adopted(self):
+        """A lost POST response leaves ownership unprovable, so the row stops for an operator."""
+        control = FakeControl(active={"proj-plan-7": {"name": "proj-plan-7",
+                                                      "active_deployment_id": 42,
+                                                      "commit_sha": "x", "published_at": ""}})
+        self.run.journal("proj-plan-7", {"phase": "activate", "state": "pending",
+                                         "target": "proj-plan-7", "expected_active": None})
+        out = self._activate(control=control)
+        self.assertEqual("final_verification_failed", out[0]["reason"])
+        self.assertIn("cannot prove", out[0]["detail"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_a_409_is_cas_conflict(self):
+        control = FakeControl(publish=[bf.ControlError(409, "stale publisher")])
+        out = self._activate(control=control)
+        self.assertEqual("cas_conflict", out[0]["reason"])
+
+    def test_a_post_publish_verification_failure_HALTS_the_campaign(self):
+        """Per-row isolation stops at the campaign boundary: bad bytes are live under a real name."""
+        second = dict(self.plan_row, name="proj-plan-8")
+        second["manifest"] = dict(self.manifest)
+        control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
+                              served={"proj-plan-7": b"NOT THE PAGE"},
+                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9"}})
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
+                                             inventory=dict(self.row["inventory"],
+                                                            name="proj-plan-8"))]
+        out = self._activate(control=control, rows=[self.plan_row, second],
+                             mapping_rows=mapping_rows)
+        self.assertEqual("final_verification_failed", out[0]["reason"])
+        self.assertEqual("campaign_halted", out[1]["reason_class"])
+        self.assertEqual(1, len([c for c in control.calls if c[0] == "publish"]))
 
 
 if __name__ == "__main__":  # pragma: no cover
