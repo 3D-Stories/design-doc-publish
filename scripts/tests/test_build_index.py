@@ -1066,3 +1066,50 @@ class TestTheEpochAttributeDoesNotMoveTheChangeSignature:
         retitled = _age_rows()
         retitled[0]["title"] = "First read device, revised"
         assert index.signature(retitled) != index.signature(rows)
+
+
+# --- `eyebrow`, added for the doc-harness (#34) -------------------------------------------
+#
+# The harness serves this same page from its own registry, where "vercel" is simply wrong.
+# The parameter is keyword-only and defaults to today's exact string, so every existing
+# caller and every existing test above is unaffected — which is the whole reason the
+# harness takes a parameter here rather than post-processing the rendered HTML.
+
+def _render_with(**kwargs):
+    bi = _load()
+    from datetime import datetime, timezone
+    now = datetime(2026, 8, 24, 4, 0, 0, tzinfo=timezone.utc)
+    rows = [{"name": "proj-design-1", "url": "https://example.test",
+             "title": "A doc", "group": "proj", "chip": "design",
+             "updated": now, "updated_src": "page"}]
+    return bi.render(rows, "2026-08-24", now, bi.signature(rows), **kwargs)
+
+
+def test_render_without_an_eyebrow_is_unchanged():
+    assert "vercel · living documentation" in _render_with()
+
+
+def test_render_with_a_scope_still_prefixes_vercel_by_default():
+    assert "acme · vercel · living documentation" in _render_with(scope="acme")
+
+
+def test_an_explicit_eyebrow_replaces_the_default_entirely():
+    out = _render_with(eyebrow="3dstories · living documentation")
+    assert "3dstories · living documentation" in out
+    assert "vercel · living documentation" not in out
+
+
+def test_an_explicit_eyebrow_is_escaped():
+    out = _render_with(eyebrow="<script>alert(1)</script>")
+    assert "<script>alert(1)</script>" not in out
+    assert "&lt;script&gt;" in out
+
+
+def _load():
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location(
+        "build_index_eyebrow", "index/build_index.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["build_index_eyebrow"] = mod
+    spec.loader.exec_module(mod)
+    return mod

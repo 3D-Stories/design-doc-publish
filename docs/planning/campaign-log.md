@@ -4,9 +4,9 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 #23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-2 | issues on this log
-28 | newest: shipped, PR open
-2492/2499 | suite at last PR
+3 | issues on this log
+38 | newest: epic in flight, #34 PR open
+2815/2823 | suite at last PR
 ```
 
 ```callout
@@ -15,6 +15,57 @@ One section per issue, refreshed inside that issue's own PR (a filed-but-unstart
 issue gets a backlog section at WF1 time). The stats above always describe the NEWEST
 state; older sections keep their text as historical record.
 ```
+
+## #38 — Epic: replace the Vercel deploy target with the GitHub-doc harness
+
+Filed 2026-08-23, backlog. Design docs stop being hosted on Vercel. Pages live only in
+GitHub, and a Docker harness on the homelab serves the committed bytes at
+`https://<name>.3dstories.ca` behind Cloudflare Access. The registry pins each publish to
+an exact commit with a per-file manifest (Git blob id + SHA-256), so no request ever
+follows a moving branch. The index becomes a server-rendered page at
+`docs-index.3dstories.ca`, still derived, never hand-edited. Spec:
+`docs/planning/2026-08-23-github-doc-harness-spec.md` — peer-consulted (qwen3.8-max,
+gpt-5.6-sol), adversarially reviewed (deepseek-v4-pro: 10 findings, 8 fixed, 1 declined
+with reason, 1 partial), owner-confirmed.
+
+```phases
+#34 harness service | registry, control API, serving path, derived index | PR open
+#35 go-live | cloudflared tunnel, wildcard DNS, Cloudflare Access | pending
+#36 publish swap | publish_doc.py deploy/verify to the control API | pending
+#37 migration | backfill 179 Vercel projects, 163 with a purpose token, byte-compare per row | pending
+```
+
+## #34 — Harness service: registry, control API, serving path, derived index
+
+PR open 2026-08-24, first child of #38. A new `harness/` package: thirteen stdlib-only modules
+plus one entry point that is the only file importing a server, so the test gate never installs
+waitress. Host maps to a registry row, the row pins an exact commit, and every blob is
+SHA-256-verified against the manifest before it is cached or served. Publishing is one
+compare-and-swap on a sealed row — the seal is enforced by database triggers, not remembered by
+the application — and a stale publisher gets a 409 rather than a silent overwrite. The index
+renders server-side from the registry, reusing the existing renderer rather than a second copy of
+the presentation code.
+
+The corrected migration figure lands here too: the epic section above said roughly 37 Vercel
+projects, and walking `vercel project ls` to exhaustion returned 179, 163 of them carrying a
+design-doc-publish purpose token. Between 4.4 and 4.8 times the stated number. #37 is scoped
+against the real one.
+
+```phases
+Design gate | 3 passes, 25 findings disposed, closed budget-exhausted | done
+Implementation | 14 tasks, 9 high-risk, red before green on every task with a red | done
+Per-task review | 9 high-risk commits, one accumulated wave, all applied | done
+Code review | 3 passes, 15 findings, 14 applied, 1 parked as scope | done
+Security scan | 0 blocking, 0 skipped, 1 advisory declined with reason | done
+Merge | awaiting review | pending
+```
+
+Two things a reader should not have to dig for. The service has **no CI to cite**: this
+repository carries no `.github` directory, so the local full-suite run is the regression
+evidence, measured at 2815 passed and 8 skipped against a Step-2 baseline of 2513 and 7. And one
+slow-client concern is **deliberately deferred to #35**: waitress offers no absolute request
+deadline, the container publishes no host port, and the remedy is edge termination, which is #35's
+whole job.
 
 ## #28 — Row ages are frozen at build time
 

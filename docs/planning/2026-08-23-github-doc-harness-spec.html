@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>GitHub-doc harness</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-spec{background:var(--bg)}
+.tpl-spec .wrap{max-width:760px;padding:0 20px 88px}
+.tpl-spec header{padding:60px 0 22px;border-bottom:1px solid var(--line);margin-bottom:28px}
+.tpl-spec h1{font-size:clamp(21px,3vw,27px)}
+.tpl-spec h2{font-size:17px;margin:2.2em 0 .5em}
+
+/* #76 — the reference's `.step-num`: the requirement id reads as an INDEX into a normative
+   list, not as prose. `review`'s gutter (D73) is right-aligned severity text, so the two
+   numbered-looking styles do not converge.
+
+   THE TRACK WIDTH IS NOT TOUCHED, and that is deliberate. A first attempt set
+   `grid-template-columns:34px 1fr` here and broke a measured decision this template already
+   carries: the id and the RFC-2119 level pill SHARE column one, and #40 T7 fixed it at a
+   >=90px track because `auto` sized it by the level WORD (44px MUST, 60px SHOULD, 36px MAY) so
+   every card's title began at a different x. `test_requirement_cards_share_one_gutter_width…`
+   caught the regression immediately — the guard did its job. Only the numeral is styled here;
+   the gutter that holds it is left exactly as it was. */
+.tpl-spec .sp-req .blk-n,.tpl-spec .sp-ac .blk-n{display:inline-flex;align-items:center;
+justify-content:center;min-width:26px;padding:2px 7px;border:1px solid var(--line);
+border-radius:8px;background:var(--bg);font:700 11px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--accent)}
+.tpl-spec h1{line-height:1.15;max-width:22ch}
+.tpl-spec header .eyebrow{display:inline-block;font-size:11.5px;letter-spacing:.13em;
+border:1px solid var(--line);border-radius:999px;padding:4px 12px;background:var(--surface)}
+
+.tpl-spec .sp-section{margin-top:24px}
+/* On-this-page index — the reference's `.toc` aside. Emitted by the shared section renderer
+   from `index_class`; nothing here parses headings. */
+.tpl-spec .sp-index{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+padding:10px 18px;margin:18px 0}
+.tpl-spec .sp-index ol{margin:.2em 0;padding-left:1.2em}
+.tpl-spec .sp-index li{margin:.25em 0}
+.tpl-spec .sp-index a{color:var(--ink-2);text-decoration:none;
+border-bottom:1px solid var(--line)}
+.tpl-spec .sp-index a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+/* Requirement cards — the reference's `.card`: a panel per requirement with the stable ID as a
+   mono index, rather than the bare left rule this was before. The RFC-2119 badge and the
+   optional MUST/SHOULD level come from the shared layer; only the frame is new. */
+.tpl-spec .sp-req{margin:18px 0}
+/* The grid goes on the `<ol>`, not on `.sp-req`. `.sp-req` has exactly ONE child — the list — so
+   gridding it spaced nothing; the cards are the `<li>`s inside. Review caught the no-op. */
+.tpl-spec .sp-req ol{display:grid;gap:10px;margin:0;padding:0}
+.tpl-spec .sp-req .blk-step{background:var(--surface);border:1px solid var(--line);
+border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:0;
+grid-template-columns:92px 1fr}
+/* The gutter is a FIXED width, not `auto`. The ID and the RFC-2119 level pill share column one,
+   and the pill's width follows its word — so on `auto` the column measured 44px for MUST, 60px
+   for SHOULD and 36px for MAY, and every card's title started at a different x. Browser-measured
+   across a five-level probe, not guessed.
+   92px, not 64px: the accepted set is must / must-not / should / should-not / may
+   (`_SEMANTIC_SETS["requirement level"]`), and the two hyphenated ones measure 72.1px and 88.6px
+   — both of which the first attempt's 64px track wrapped. Review measured them.
+   An UNRECOGNISED level is deliberately not dropped — `_semantic` warns and still renders the
+   author's text — so the pill is additionally constrained rather than trusted to fit: a long one
+   wraps inside the gutter instead of overlapping the title, which is what it did before. */
+.tpl-spec .sp-req .blk-level{justify-self:start;max-width:100%;overflow-wrap:anywhere}
+.tpl-spec .sp-req .blk-n{color:var(--accent);font-weight:700;
+font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.04em}
+.tpl-spec .sp-req .blk-title{font-size:15px}
+.tpl-spec .sp-ac .blk-step{border-bottom-style:dashed}
+.tpl-spec .sp-ac .blk-n{color:var(--ink-3)}
+.tpl-spec .sp-gate .blk-chip{border-radius:5px;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+.tpl-spec table th{color:var(--accent)}
+.tpl-spec li{margin:.2em 0}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-spec">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-23 23:14 MDT</div>
+<h1>GitHub-doc harness</h1>
+<p class="sub">Self-hosted replacement for the Vercel deploy target</p>
+</header>
+<main>
+<p>Status: FINAL DRAFT. Peer-consulted (qwen3.8-max-preview + gpt-5.6-sol) and adversarially reviewed (deepseek-v4-pro, 10 findings triaged below). Awaiting owner confirmation.</p>
+<nav class="sp-index"><ol><li><a href="#s1">Problem</a></li><li><a href="#s2">Decided by the owner (2026-08-23 interview)</a></li><li><a href="#s3">Architecture</a></li><li><a href="#s4">publish_doc.py changes</a></li><li><a href="#s5">Migration (S7)</a></li><li><a href="#s6">Failure modes designed for</a></li><li><a href="#s7">Out of scope</a></li><li><a href="#s8">Synthesis log (peer consult, 2026-08-23)</a></li><li><a href="#s9">Adversarial review triage (deepseek-v4-pro, 2026-08-23, 10 findings)</a></li></ol></nav>
+<section class="sp-section" id="s1"><h3>Problem</h3><p><code>publish_doc.py</code> renders, lints, deploys and verifies one design doc per run. Today the deploy target is Vercel: every doc becomes a Vercel project named <code>{project}-{purpose}-{ref}</code> at <code>https://&lt;name&gt;.vercel.app</code>. The owner wants doc pages to live ONLY in the GitHub repos (the rendered HTML is already committed via PR). A small self-hosted harness serves each page at <code>https://&lt;name&gt;.3dstories.ca</code> by fetching it from GitHub. The only server-hosted document is the derived index.</p></section>
+<section class="sp-section" id="s2"><h3>Decided by the owner (2026-08-23 interview)</h3><ul>
+<li>D1. Host: Docker on 10.0.17.205 (Docker 29.7.2 confirmed; no cloudflared there yet).</li>
+<li>D2. URLs: <code>https://&lt;name&gt;.3dstories.ca</code>. Name derivation unchanged from <code>derive_name()</code>: <code>{project}-{purpose}-{ref}</code>, lowercase, hyphens. Underscores in any input become hyphens (CA/B ballot SC12 bans underscores in certificate hostnames).</li>
+<li>D3. Index at <code>https://docs-index.3dstories.ca</code>, DERIVED, never hand-edited (preserves the 2026-08-01 owner decision). The index host renders SERVER-SIDE from the registry snapshot; <code>index/build_index.py</code>&#x27;s presentation code becomes the shared renderer the harness imports. No generated index file is ever committed or deployed. (rev: F6)</li>
+<li>D4. Pages live only in GitHub. The harness keeps a cache and the registry, nothing else.</li>
+<li>D5. Everything behind Cloudflare Access (login). Some source repos are private (3D-Stories/rawgentic is PRIVATE; design-doc-publish is PUBLIC).</li>
+<li>D6. DNS on Cloudflare (confirmed). No wildcard record yet (confirmed by dig). Plan: cloudflared container, wildcard CNAME <code>*.3dstories.ca</code> -&gt; <code>&lt;TUNNEL_ID&gt;.cfargotunnel.com</code>, ingress <code>*.3dstories.ca</code> -&gt; harness, catch-all 404. No inbound ports.</li>
+<li>D7. Skill stages unchanged: render, source gate, name, lint, deploy, verify. The exit code is the verdict; no stage skippable.</li>
+</ul></section>
+<section class="sp-section" id="s3"><h3>Architecture</h3><p>One compose stack on .205: <code>harness</code> (Python, stdlib-style HTTP service) + <code>cloudflared</code>. Two volumes: a durable one for the registry (SQLite), a disposable one for the blob cache.</p>
+<h3>Registry and publish contract (S1, S2)</h3>
+<ul>
+<li>A publish creates an IMMUTABLE deployment: `{name, repo, commit_sha, entry_path, assets: [{url_path, repo_path, blob_id, size, sha256}], title, project, purpose, published_at}`. Branch names are provenance only, never serving pointers.</li>
+<li>Hash roles (rev: F4): <code>blob_id</code> is the Git SHA-1 object id — the Blob API fetch key and the cache key. <code>sha256</code> is the SHA-256 of the file bytes, computed by the publisher — the integrity check. The server <span class="req req-must">MUST</span> verify the fetched blob&#x27;s SHA-256 against the declared <code>sha256</code> before caching or serving it.</li>
+<li>SQLite (WAL) stores the rows. One atomic active-deployment pointer per name; prior rows stay as history. The POST body carries <code>expected_active</code> — the deployment id the publisher believes is current, or null for a first publish (rev: F3). The server compares-and-swaps against it: a stale publisher gets a 409, never a silent overwrite.</li>
+<li>Control API: <code>POST https://docs-control.3dstories.ca/v1/deployments</code>. The control host IS covered by Cloudflare Access like every other harness host, and the request must ALSO carry the bearer secret DOC_HARNESS_PUBLISH_TOKEN (rev: F1). Two tokens is deliberate defense in depth, not redundancy: Access gates at the Cloudflare edge and can be misconfigured (S5 defers its exact layout); the bearer gates inside the app and survives an Access mistake. Control routes exist only on that host; CORS disabled.</li>
+<li>Publish-time verification (rev: F5): the server resolves the commit&#x27;s tree and blob hashes itself, using the SAME token it serves with (DOC_HARNESS_GITHUB_TOKEN, below). That token must read every doc repo, including the private ones.</li>
+<li>Why not qwen&#x27;s registry-as-a-git-file: this workspace runs concurrent publishes, and a shared registry file re-creates the lost-row race the 2026-08-01 index decision removed. Contents-API 409 retry-merge logic in every publisher is more code in a worse place than one CAS in the server.</li>
+</ul>
+<h3>Serving path</h3>
+<ul>
+<li>Host header -&gt; name -&gt; active deployment -&gt; URL-path lookup in the manifest -&gt; content-addressed cache (key: blob_id) -&gt; on miss, Git Blob API fetch (raw media type), SHA-256-verified, then cached. Blobs are immutable, so entries need no TTL.</li>
+<li>Cache bound (rev: F7): LRU, 2 GiB default, env-tunable (DOC_HARNESS_CACHE_MAX_BYTES), least-recently-used eviction when full, on the disposable volume.</li>
+<li>The harness serves the committed bytes UNMODIFIED — no HTML rewriting of any kind. The rendered pages are standalone with relative sibling-asset paths, so the bytes a browser gets are the bytes in git; that is what makes byte-equality verification sound (rev: F2 declined — see triage).</li>
+<li>Assets serve from the manifest (S3, from gpt). qwen&#x27;s HTML link-rewriting is REJECTED: fragile (its own risk list says so), and <code>stage_assets()</code> already enumerates the sibling assets — the publisher declares them; nothing needs rewriting.</li>
+<li>Failure split (rev: F8): a Blob API 404 for an active deployment&#x27;s blob means the SHA is gone (for example GC of an abandoned, never-merged PR) — cold miss: 503 with a diagnostic naming the dead SHA, never cached; warm cache: serve the cached bytes with <code>X-Doc-Origin: cache</code> plus an alert log line, since they are still the active deployment&#x27;s exact bytes. A network/5xx failure is an OUTAGE: serve cached bytes the same way; cold miss during an outage is a 503 with a plain diagnostic.</li>
+<li>Unknown host: 404 with a plain-text diagnostic (rev: F9 — 421 dropped; boring wins). Reject dot segments and undeclared paths.</li>
+<li>Auth to GitHub: a fine-grained read-only PAT scoped to the doc repos (env name: DOC_HARNESS_GITHUB_TOKEN). ponytail: PAT first; a GitHub App with short-lived installation tokens is the upgrade path if rotation or limits bite.</li>
+<li>Index host renders server-side from the registry snapshot (D3), ETag from a registry generation counter.</li>
+</ul>
+<h3>verify_live (S4)</h3>
+<ul>
+<li>The publish response returns a deployment id. verify_live fetches <code>https://&lt;name&gt;.3dstories.ca/?__deployment=&lt;id&gt;</code> with Access service-token headers, redirects DISABLED. Pass requires: 200, <code>X-Doc-Deployment: &lt;id&gt;</code> echoed, text/html, and byte equality with the just-rendered page. An Access login redirect is a failure. Repeat for each declared asset. A stale deployment id gets a 409 from the harness.</li>
+</ul>
+<h3>Publish-before-merge (S2 continued)</h3>
+<ul>
+<li>The rendered HTML is committed and pushed on the PR branch; publish pins that commit SHA. Once the PR merges, the SHA is an ancestor of main and stays reachable forever. An abandoned, never-merged PR eventually lets GitHub GC the SHA: serving then follows the F8 failure split above. Accepted for v1; a post-merge reconciler that re-points provenance at the merge commit is hardening backlog, not v1.</li>
+</ul>
+<h3>Cloudflare Access layout (S5 — layout deferred to implementation, gpt&#x27;s warning kept)</h3>
+<ul>
+<li>CAUTION (gpt): ONE wildcard Access application on <code>*.3dstories.ca</code> would put every OTHER proxied subdomain of the zone behind a login too. Before wiring Access, inventory the zone&#x27;s existing records. If nothing else is proxied on subdomains, one wildcard Access app is the simple, right answer. Otherwise the harness manages exact-host Access entries at publish time (one Cloudflare API call per new name). Either way the covered set INCLUDES docs-control and docs-index (F1).</li>
+<li>Two policies either way: the owner&#x27;s identity for humans, plus one Service Auth policy (service token) for publish verification and CI.</li>
+</ul></section>
+<section class="sp-section" id="s4"><h3>publish_doc.py changes</h3><ul>
+<li>Stages 1–4 (render, source gate, derive name, lint) unchanged. Extend the lint gate: every same-origin resource referenced by the HTML must appear in the staged manifest.</li>
+<li>Stage 5 deploy: replace <code>vercel link/deploy/alias</code> with the one control-API POST (payload includes <code>expected_active</code>; the previous publish&#x27;s id is read back from the control API first, null on first publish).</li>
+<li>Stage 6 verify: as above. Same StageError discipline, exit code is the verdict.</li>
+<li><code>--new-project</code> and <code>--vercel-scope</code> retire; <code>derive_name()</code>&#x27;s 35-char alias cap can relax to the DNS 63-char label limit (kept as a lint warning, not dropped silently).</li>
+<li><code>index/build_index.py</code>: presentation code becomes the harness&#x27;s shared renderer (D3).</li>
+</ul></section>
+<section class="sp-section" id="s5"><h3>Migration (S7)</h3><ul>
+<li>Backfill script builds a reviewed mapping: Vercel project name -&gt; repo, path, commit. <code>vercel project ls</code> is inventory only (gpt) — the HTML&#x27;s home repo/path comes from the committed files. Each row activates only after a byte-compare of the GitHub-backed page against the live Vercel page. A compare FAILURE flags that row for manual review and blocks only that row (rev: F10) — it is the drift detector for docs whose deployed bytes never matched their committed bytes. Run both hosts in parallel for a short window; Vercel teardown timing is the owner&#x27;s call. 179 projects as of 2026-08-24, 163 of them carrying a design-doc-publish purpose token.</li>
+</ul></section>
+<section class="sp-section" id="s6"><h3>Failure modes designed for</h3><p>Do now: registry row -&gt; deleted repo/file (F8 split above); PAT expiry (500-class with alert log line, never a silent empty page); rate limit (cache + authorized conditional requests: 304s are free per GitHub&#x27;s best-practices doc); oversized file (Blob API to 100 MB, publish-time size cap enforced). Later: LFS pointers, submodules (reject at publish with a named reason); SQLite backup and restore runbook; cache-volume loss (rebuilds from GitHub by design).</p></section>
+<section class="sp-section" id="s7"><h3>Out of scope</h3><ul>
+<li>Editing any workflow skill other than design-doc-publish&#x27;s own publish path.</li>
+<li>Public (login-free) access; revisit later per-page.</li>
+<li>HTML content rewriting of any kind.</li>
+</ul></section>
+<section class="sp-section" id="s8"><h3>Synthesis log (peer consult, 2026-08-23)</h3><ul>
+<li>From gpt-5.6-sol: immutable SHA-pinned deployments + asset manifest; SQLite registry + CAS + control host; deployment-id verify with redirects-off; wildcard-Access warning; staged migration with byte-compare; manifest-completeness lint.</li>
+<li>From qwen3.8-max: ETag-conditional fetching and free-304 rate-limit math; serve-stale bounded to the active deployment; Blob API over Contents API for raw bytes.</li>
+<li>Rejected: qwen&#x27;s registry-as-code in a GitHub repo (concurrency; see S1); qwen&#x27;s HTML asset rewriting; qwen&#x27;s shared service token across purposes (tokens stay separate).</li>
+<li>Deferred from gpt (proportionality — hardening backlog, not v1): GitHub App auth, cache prewarming, idempotency keys, per-publish Access orchestration as a hard gate, append-only rollback API, image digest pinning.</li>
+</ul></section>
+<section class="sp-section" id="s9"><h3>Adversarial review triage (deepseek-v4-pro, 2026-08-23, 10 findings)</h3><p>Report: docs/reviews/2026-08-23-github-doc-harness-spec-md-2026-08-23.md</p>
+<ul>
+<li>F1 Critical FIXED — control-host auth clarified: behind Access AND bearer, defense in depth stated. F3 High FIXED — <code>expected_active</code> CAS field added to the POST body.</li>
+<li>F4 High FIXED — blob_id (Git SHA-1) vs sha256 roles split; server-side SHA-256 verification mandated. F5 High FIXED — publish-time verification uses DOC_HARNESS_GITHUB_TOKEN, private repos included. F6 High FIXED — server-side index render mandated, implementer&#x27;s choice removed.</li>
+<li>F7 Medium FIXED — 2 GiB env-tunable LRU bound. F8 Medium FIXED — dead-SHA vs outage split specified. F9 Medium FIXED — 421 replaced with 404.</li>
+<li>F2 Critical DECLINED — its premise is that served HTML differs from rendered HTML by asset-URL rewriting. The design rewrites nothing: the harness serves the committed bytes unmodified and pages are standalone with relative paths, so byte equality is exactly right. A clarifying sentence was added to the serving path.</li>
+<li>F10 Medium PARTIAL — same premise error as F2 for the compare itself, but the finding usefully surfaces historical drift; a compare failure now flags the one row for manual review instead of reading as a migration blocker.</li>
+</ul></section>
+
+</main>
+<footer>Last updated: 2026-08-23 23:14 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+</body>
+</html>

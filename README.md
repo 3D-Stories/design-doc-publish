@@ -291,6 +291,55 @@ tests SKIP and the suite is still green, so `pytest -rs` is how you see whether 
 is worth knowing about: a syntactically broken script would disable the index filter and its
 auto-refresh as well as the ages.
 
+## The doc harness (self-hosted serving)
+
+`harness/` is a small self-hosted service that serves rendered doc pages **straight from
+GitHub**, as a replacement for Vercel as the deploy target. Pages live only in their source
+repositories; the harness keeps a registry of what is published and a blob cache, and nothing
+else. Full spec:
+[`docs/planning/2026-08-23-github-doc-harness-spec.md`](docs/planning/2026-08-23-github-doc-harness-spec.md).
+Design and its review history:
+[`docs/planning/2026-08-24-34-doc-harness-service.md`](docs/planning/2026-08-24-34-doc-harness-service.md).
+
+**Nothing in the existing render or publish path changed.** `publish_doc.py` still deploys to
+Vercel today; swapping it over is a separate issue.
+
+### What it does
+
+- Maps a `Host` header to a published deployment, then a URL path to a declared asset, then that
+  asset's Git blob id to bytes. Every blob is verified against both its declared SHA-256 **and**
+  Git's own blob id before it is cached or served.
+- Serves the committed bytes **unmodified**. There is no HTML rewriting of any kind, which is what
+  makes byte-equality verification meaningful.
+- Records each publish as an immutable, database-sealed row, with an atomic compare-and-swap on
+  the active pointer so a stale publisher gets a 409 instead of silently overwriting.
+- Renders the docs index server-side from the registry, reusing this repo's own presentation code
+  rather than a second copy of it.
+
+### Running it
+
+```bash
+export DOC_HARNESS_GITHUB_TOKEN=...     # fine-grained, read-only, covering every doc repo
+export DOC_HARNESS_PUBLISH_TOKEN=...    # the control-host bearer
+docker compose up --build
+```
+
+The service **refuses to start** without either secret, naming the one that is missing. It also
+takes an exclusive lock on its cache volume and refuses to start if another process holds it: the
+cache accounting is process-local, so two writers would silently disagree about what is cached.
+
+Every setting is listed in the design's configuration table. The compose stack publishes **no host
+port** — the harness is reachable only from the compose network until the Cloudflare tunnel lands.
+
+### Its one dependency, and why the tests do not need it
+
+The container installs exactly one pinned runtime dependency, `waitress==3.0.2`, and
+`harness/__main__.py` is the only module that imports it. `harness/app.py` is a plain PEP 3333
+callable with no non-stdlib import, so `pytest scripts/tests/ tests/ -q` never installs or imports
+a server. `tests/harness/test_production_server.py` is the deliberate exception: it starts the real
+entry point and drives raw sockets, and **skips visibly** when waitress is absent rather than
+quietly reporting coverage that did not run.
+
 ## Removing it
 
 ```bash
