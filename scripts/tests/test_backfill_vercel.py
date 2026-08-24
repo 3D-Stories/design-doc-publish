@@ -1247,6 +1247,18 @@ class ReportTests(unittest.TestCase):
         with self.assertRaises(bf.Refused):
             bf.build_report(self.run)
 
+    def test_the_committed_copy_names_no_live_project(self):
+        """This repository ships as a plugin and carries a guard against exactly this leak."""
+        self._write(snapshot_names=["real-project-name", "another-real-one"],
+                    mapping_rows=[{"harness_name": "real-project-name", "reason": None}],
+                    outcomes=[{"name": "real-project-name", "outcome": "live", "reason": None,
+                               "detail": ""}])
+        summary = bf.build_report(self.run)
+        self.assertIn("real-project-name", summary["markdown"])
+        self.assertNotIn("real-project-name", summary["markdown_redacted"])
+        self.assertNotIn("another-real-one", summary["markdown_redacted"])
+        self.assertIn(bf._pseudonym("real-project-name"), summary["markdown_redacted"])
+
     def test_leftover_staging_labels_are_listed(self):
         self._write(snapshot_names=["a"],
                     mapping_rows=[{"harness_name": "a", "reason": None}],

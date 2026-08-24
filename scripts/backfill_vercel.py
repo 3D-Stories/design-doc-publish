@@ -1440,12 +1440,36 @@ def build_report(run: RunDir) -> dict:
         "rows": processed, "not_attempted_names": not_attempted,
     }
     summary["markdown"] = _render_report(summary)
-    run.write_json("report.json", {k: v for k, v in summary.items() if k != "markdown"})
+    summary["markdown_redacted"] = _render_report(summary, redact=True)
+    run.write_json("report.json", {k: v for k, v in summary.items()
+                                   if k not in ("markdown", "markdown_redacted")})
+    (run.path / "report.md").write_text(summary["markdown"] + "\n", encoding="utf-8")
     return summary
 
 
-def _render_report(summary: dict) -> str:
+def _pseudonym(name: str) -> str:
+    """A stable, name-free handle for a live Vercel project.
+
+    This repository SHIPS AS A PLUGIN, and it carries a test asserting that no committed file names
+    a live project in the account — "an install copies it to everyone". A report enumerating 171
+    real project names is exactly that leak, and the guard caught it on the Step-9 gate rather than
+    after release. The full named report stays in the run directory, which is git-ignored; the
+    committed copy uses these handles, and the run directory is how an operator maps one back.
+    """
+    return "p-" + hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:12]
+
+
+def _render_report(summary: dict, *, redact: bool = False) -> str:
+    def shown(name):
+        return _pseudonym(name) if redact else name
+
     lines = ["# Vercel-to-harness backfill — outcome report", ""]
+    if redact:
+        lines += ["> **Project names are redacted to stable handles in this committed copy.** This "
+                  "repository ships as a plugin, and a committed file naming live projects in the "
+                  "account would be copied to every install. The full named report is in the run "
+                  "directory, which is git-ignored, and a handle is "
+                  "`p-` plus the first twelve hex of the sha256 of the name.", ""]
     if summary["cutoff"]:
         lines += [f"**The inventory did NOT converge.** It is a cutoff snapshot bounded by two "
                   f"instants — started {summary['started_at']}, completed "
@@ -1470,7 +1494,7 @@ def _render_report(summary: dict) -> str:
         lines += [""]
     lines += ["## Every processed row", "", "| Project | Outcome | Reason |", "| --- | --- | --- |"]
     for row in summary["rows"]:
-        lines.append(f"| `{row['name']}` | {row['outcome']} | "
+        lines.append(f"| `{shown(row['name'])}` | {row['outcome']} | "
                      f"{('`' + row['reason'] + '`') if row['reason'] else '—'} |")
     lines += [""]
     if summary["not_attempted_names"]:
@@ -1479,14 +1503,14 @@ def _render_report(summary: dict) -> str:
                   "outcome — not a flag — because no reason in the vocabulary would describe them "
                   "truthfully. The selection rule was `--limit` over the snapshot in its recorded "
                   "order.", "",
-                  ", ".join(f"`{n}`" for n in summary["not_attempted_names"]), ""]
+                  ", ".join(f"`{shown(n)}`" for n in summary["not_attempted_names"]), ""]
     if summary["staging"]:
         lines += ["## Staging rows left in the registry", "",
                   "Real registry rows, visible on the derived index, and the control API has no "
                   "delete. Retiring them is a deliberate task.", "",
                   "| Label | Deployment | For |", "| --- | --- | --- |"]
-        lines += [f"| `{s['label']}` | {s['deployment_id']} | `{s['row']}` |"
-                  for s in summary["staging"]]
+        lines += [f"| `{item['label']}` | {item['deployment_id']} | `{shown(item['row'])}` |"
+                  for item in summary["staging"]]
         lines += [""]
     return "\n".join(lines)
 
@@ -1497,8 +1521,10 @@ def _cmd_report(args, run) -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
     out = root / "docs" / "measurements" / f"{args.date}-37-backfill-{pathlib.Path(args.run_dir).name}.md"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(summary["markdown"] + "\n", encoding="utf-8")
-    print(f"\nwritten: {out}")
+    # The COMMITTED copy is redacted; the named one lives in the run directory beside the journal.
+    out.write_text(summary["markdown_redacted"] + "\n", encoding="utf-8")
+    print(f"\nwritten (redacted, committed): {out}")
+    print(f"written (named, run directory): {run.path / 'report.md'}")
     return 0
 
 
