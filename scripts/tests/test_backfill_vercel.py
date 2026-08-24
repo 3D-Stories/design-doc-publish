@@ -1079,6 +1079,69 @@ class ActivateTests(unittest.TestCase):
         detail = bf._safe_detail(b"docs/x.html: GitHub reports this object does not exist", "t")
         self.assertIn("does not exist", detail)
 
+    def test_a_serve_failure_AFTER_the_publish_also_halts_the_campaign(self):
+        """Critical finding: the ControlError path recorded the failure and carried on.
+
+        A non-200 from the serve check arrives after the production POST has already committed, so
+        it is exactly as irreversible as a byte mismatch and must stop the run too.
+        """
+        second = dict(self.plan_row, name="proj-plan-8")
+        second["manifest"] = dict(self.manifest)
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
+                                             inventory=dict(self.row["inventory"],
+                                                            name="proj-plan-8"))]
+        control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}])
+
+        def refuse(name):
+            control.calls.append(("serve", name))
+            raise bf.ControlError(503, "the harness did not serve the page")
+
+        control.serve_full = refuse
+        out = self._activate(control=control, rows=[self.plan_row, second],
+                             mapping_rows=mapping_rows)
+        self.assertEqual("final_verification_failed", out[0]["reason"])
+        self.assertIn("already committed", out[0]["detail"])
+        self.assertEqual("campaign_halted", out[1]["reason_class"])
+        self.assertEqual(1, len([c for c in control.calls if c[0] == "publish"]))
+
+    def test_a_cas_conflict_does_NOT_halt_because_nothing_was_written(self):
+        second = dict(self.plan_row, name="proj-plan-8")
+        second["manifest"] = dict(self.manifest)
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
+                                             inventory=dict(self.row["inventory"],
+                                                            name="proj-plan-8"))]
+        control = FakeControl(publish=[bf.ControlError(409, "stale publisher"),
+                                       bf.ControlError(409, "stale publisher")])
+        out = self._activate(control=control, rows=[self.plan_row, second],
+                             mapping_rows=mapping_rows)
+        self.assertEqual("cas_conflict", out[0]["reason"])
+        self.assertEqual("cas_conflict", out[1]["reason"])
+        self.assertNotEqual("campaign_halted", out[1]["reason_class"])
+
+    def test_activate_honours_limit_on_the_irreversible_command(self):
+        second = dict(self.plan_row, name="proj-plan-8")
+        second["manifest"] = dict(self.manifest)
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
+                                             inventory=dict(self.row["inventory"],
+                                                            name="proj-plan-8"))]
+        plan = self._plan([self.plan_row, second])
+        plan["mapping_digest"] = bf.digest(mapping_rows)
+        plan["digest"] = bf.plan_digest(plan)
+        self.run.write_json("activation-plan.json", plan)
+        mapping = {"rows": mapping_rows, "digest": bf.digest(mapping_rows)}
+        self.run.write_json("mapping.json", mapping)
+        control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
+                              served={"proj-plan-7": b"PAGE BYTES"},
+                              served_headers={"proj-plan-7": {
+                                  "X-Doc-Deployment": "9", "Etag": f'"{self.live_sha}"'}})
+        out = bf.activate_rows(plan, mapping=mapping, run=self.run, control=control,
+                               opener=FakeHttp({"https://proj-plan-7.vercel.app/":
+                                                (200, {}, b"PAGE BYTES")}),
+                               repos={"proj": str(self.repo)}, execute=plan["digest"],
+                               zone="example.test", limit=1)
+        self.assertEqual(1, len(out))
+        self.assertEqual(1, len([c for c in control.calls if c[0] == "publish"]))
+
     def test_a_post_publish_verification_failure_HALTS_the_campaign(self):
         """Per-row isolation stops at the campaign boundary: bad bytes are live under a real name."""
         second = dict(self.plan_row, name="proj-plan-8")

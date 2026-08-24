@@ -37,23 +37,23 @@ window, and it stays open, because teardown is a separate owner decision.
 
 ```bash
 # 1. Inventory. Read-only. Walks the listing twice and refuses to call a partial walk complete.
-python3 scripts/backfill_vercel.py inventory --run-dir <run>
+python3 scripts/backfill_vercel.py --run-dir <run> inventory
 
 # 2. Map. Read-only. Identifies each document by hashing its LIVE bytes against git history,
 #    then records the publish target at the remote tip. Writes mapping.json.
-python3 scripts/backfill_vercel.py map --run-dir <run>
+python3 scripts/backfill_vercel.py --run-dir <run> map
 
 # 3. REVIEW mapping.json by hand. This is the point of the whole design.
 #    Correct a wrong guess, delete a row (it becomes a skipped_by_reviewer tombstone), add one.
 
 # 4. Stage. Compares first and publishes NOTHING for a row whose bytes differ from Vercel.
-python3 scripts/backfill_vercel.py stage --run-dir <run> --execute <mapping-digest>
+python3 scripts/backfill_vercel.py --run-dir <run> stage --execute <mapping-digest>
 
 # 5. Activate. The only command that touches a production name.
-python3 scripts/backfill_vercel.py activate --run-dir <run> --execute <activation-digest>
+python3 scripts/backfill_vercel.py --run-dir <run> activate --execute <activation-digest>
 
 # 6. Report. Asserts every row ended live or flagged, and fails if one did not.
-python3 scripts/backfill_vercel.py report --run-dir <run>
+python3 scripts/backfill_vercel.py --run-dir <run> report
 ```
 
 Steps 1, 2 and 6 are read-only and safe to repeat. Steps 4 and 5 refuse to run without the digest

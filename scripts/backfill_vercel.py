@@ -76,6 +76,10 @@ NOT_ATTEMPTED = "not_attempted"
 # project, and reporting a partial walk as a complete campaign would be a lie.
 INVENTORY_FAILED = "inventory_failed"
 
+# One walk of a hundred-per-page listing over ~181 projects is two pages. A hundred is four
+# hundred times that, so hitting it means the cursor is broken, not that the account is large.
+MAX_PAGES_PER_WALK = 100
+
 
 class Refused(Exception):
     """A gate refused. Never a bug — the refusal IS the feature."""
@@ -191,8 +195,15 @@ def _one_walk(runner) -> list:
     "there are no projects" would activate nothing and report success, which is the worst possible
     way for this to break.
     """
-    rows, nxt = [], None
+    rows, nxt, pages, seen_cursors = [], None, 0, set()
     while True:
+        pages += 1
+        if pages > MAX_PAGES_PER_WALK:
+            raise CampaignFailed(INVENTORY_FAILED,
+                                 f"the listing returned more than {MAX_PAGES_PER_WALK} pages; the "
+                                 "walk bound applies to COMPLETE walks, so a cursor that never "
+                                 "ends would otherwise spin here for ever and neither --max-walks "
+                                 "nor an elapsed-time cutoff could fire")
         argv = ["vercel", "project", "list", "-F", "json", "--limit", "100"]
         if nxt:
             argv += ["--next", str(nxt)]
@@ -217,6 +228,11 @@ def _one_walk(runner) -> list:
         nxt = (payload.get("pagination") or {}).get("next")
         if not nxt:
             break
+        if nxt in seen_cursors:
+            raise CampaignFailed(INVENTORY_FAILED,
+                                 f"the listing repeated the cursor {str(nxt)[:24]!r}, so it is "
+                                 "cycling rather than paginating")
+        seen_cursors.add(nxt)
     # Sorted, because the listing's own order may vary between walks and convergence has to mean
     # "the same set", not "the same order the server happened to answer in".
     return sorted(rows, key=lambda r: (str(r.get("name")), str(r.get("id"))))
@@ -1155,7 +1171,7 @@ def production_manifest(staged: dict, name: str) -> dict:
 
 
 def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, repos: dict,
-                  execute, zone: str, inventory=None) -> list:
+                  execute, zone: str, inventory=None, limit=None) -> list:
     """Activate every sealed row, in order, stopping the campaign on an unverified publish."""
     # RECOMPUTED, never trusted from the file. And the mapping the plan was sealed against must
     # still be the mapping on disk, or a swapped mapping rides in under a matching plan digest.
@@ -1177,7 +1193,13 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
     expired = int(plan.get("expires_at", 0)) < int(time.time())
     halted = False
     out = []
-    for sealed in plan.get("rows") or []:
+    planned = plan.get("rows") or []
+    if limit is not None:
+        # It was advertised and ignored. On the one irreversible command in this script, an operator
+        # bounding the blast radius and being given the whole plan anyway is the worst kind of
+        # defect: the flag reads as a safety belt and is not attached to anything.
+        planned = planned[:int(limit)]
+    for sealed in planned:
         name = sealed["name"]
         result = {"name": name, "outcome": FLAGGED, "reason": None, "detail": "",
                   "reason_class": ""}
@@ -1188,6 +1210,7 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
                                 "then serve, so activation stopped")
             out.append(result)
             continue
+        published_ok = False
         try:
             if expired:
                 raise RowError("plan_expired",
@@ -1224,6 +1247,7 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
             run.journal(name, {"phase": "activate", "state": "published", "target": name,
                                "deployment_id": published.get("deployment_id"),
                                "cache_warmed": bool(published.get("cache_warmed"))})
+            published_ok = True
             body, headers = control.serve_full(name)
             target_body = _git_bytes(repos[row["target"]["project"]],
                                      ["cat-file", "blob", row["target"]["blob_id"]])
@@ -1250,6 +1274,14 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
                                 "harness_fetch_denied" if exc.status in (502, 504) else
                                 "final_verification_failed")
             result["detail"] = exc.detail
+            # A ControlError can arrive AFTER the production POST committed — a non-200 from
+            # `serve_full` is the obvious case. The write is already irreversible at that point, so
+            # this path must halt exactly like the byte-mismatch path. It did not, and the loop
+            # would have carried on activating further production names. Critical, and correct.
+            if published_ok and result["reason"] != "cas_conflict":
+                halted = True
+                result["detail"] += (" — the production POST had already committed when this "
+                                     "failed, so activation stops here")
         except RowError as exc:
             result["reason"] = exc.reason
             result["detail"] = exc.detail
@@ -1274,7 +1306,18 @@ def _control_from_args(args):
 
 def _cmd_stage(args, run) -> int:
     mapping = run.read_json("mapping.json")
-    require_execute(execute=args.execute, expected=mapping.get("digest", ""), what="mapping")
+    # RECOMPUTED from the rows on disk, never read from the file's own digest field. Same defect
+    # class as the activation plan's, in the other phase: a reviewer edits this file BY DESIGN, so
+    # trusting a digest string sitting beside the rows it is meant to authenticate lets an edited
+    # mapping through on an old approval.
+    recomputed = digest(mapping.get("rows") or [])
+    stored = mapping.get("digest", "")
+    if stored and stored != recomputed:
+        raise Refused(
+            f"mapping.json's own digest is {stored[:12]} but its rows hash to {recomputed[:12]}: "
+            "the file changed since that digest was written. Re-read it, and pass the digest "
+            "`map` or this refusal printed — never the one inside the file.")
+    require_execute(execute=args.execute, expected=recomputed, what="mapping")
     rows = [r for r in mapping.get("rows") or [] if not r.get("reason")]
     if args.limit is not None:
         rows = rows[:int(args.limit)]
@@ -1305,7 +1348,7 @@ def _cmd_activate(args, run) -> int:
     control = _control_from_args(args)
     rows = activate_rows(plan, mapping=mapping, run=run, control=control, opener=_http,
                          repos=load_projects(find_workspace_file()), execute=args.execute,
-                         zone=args.zone,
+                         zone=args.zone, limit=args.limit,
                          inventory=(run.read_json("inventory.json").get("rows") or []))
     live = sum(1 for r in rows if r["outcome"] == LIVE)
     print(f"activate: {live} live, {len(rows) - live} flagged, of {len(rows)} planned rows")
