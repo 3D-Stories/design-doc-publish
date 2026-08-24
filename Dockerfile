@@ -8,6 +8,11 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.
 WORKDIR /app
 COPY harness/ /app/harness/
 COPY index/ /app/index/
+# `index/build_index.py` loads these two out of its SIBLING directory at call time, not by
+# import, so leaving them out broke every index render with a 500 and nothing caught it.
+# Named individually on purpose: the rest of `scripts/` is the publisher toolchain and its
+# test suite, and neither belongs in a serving container. Both modules are stdlib-only.
+COPY scripts/vdl_packs.py scripts/user_config.py /app/scripts/
 
 # The service refuses to start without its two secrets, so there are no defaults here.
 ENV PYTHONUNBUFFERED=1 \
