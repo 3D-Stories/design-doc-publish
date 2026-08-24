@@ -458,5 +458,235 @@ class MapTests(unittest.TestCase):
         self.assertEqual(1, len(stored["rows"]))
 
 
+class DestinationGuardTests(unittest.TestCase):
+    """T4 — where the bearer may go, checked BEFORE it is attached."""
+
+    def test_an_http_loopback_ip_literal_is_allowed(self):
+        bf.assert_control_destination("http://127.0.0.1:18081", env={})
+
+    def test_a_dns_name_is_refused_even_when_it_resolves_to_loopback(self):
+        with self.assertRaises(bf.Refused) as caught:
+            bf.assert_control_destination("http://docs-control.localhost:18081", env={})
+        self.assertIn("IP literal", str(caught.exception))
+
+    def test_a_non_loopback_ip_needs_an_explicit_grant_naming_host_and_port(self):
+        with self.assertRaises(bf.Refused):
+            bf.assert_control_destination("http://172.18.0.2:8080", env={})
+        with self.assertRaises(bf.Refused):
+            bf.assert_control_destination(
+                "http://172.18.0.2:8080", env={"BACKFILL_ALLOW_PLAINTEXT": "true"})
+        bf.assert_control_destination(
+            "http://172.18.0.2:8080", env={"BACKFILL_ALLOW_PLAINTEXT": "172.18.0.2:8080"})
+
+    def test_a_non_http_scheme_is_refused(self):
+        with self.assertRaises(bf.Refused):
+            bf.assert_control_destination("ftp://127.0.0.1:18081", env={})
+
+
+class StagingLabelTests(unittest.TestCase):
+    """T4 — the staging label must be injective, or two rows collide on a shared prefix."""
+
+    def test_two_long_names_sharing_a_prefix_get_different_labels(self):
+        a = "a" * 55 + "-alpha"
+        b = "a" * 55 + "-beta"
+        self.assertNotEqual(bf.staging_label("r1", a, 1), bf.staging_label("r1", b, 1))
+
+    def test_the_label_is_a_valid_dns_label(self):
+        label = bf.staging_label("r1", "x" * 200, 1)
+        self.assertLessEqual(len(label), 63)
+        self.assertRegex(label, r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+    def test_the_attempt_counter_changes_the_label(self):
+        self.assertNotEqual(bf.staging_label("r1", "x", 1), bf.staging_label("r1", "x", 2))
+
+
+class FakeControl:
+    """The harness seam. Records every call IN ORDER, so ordering can be asserted."""
+
+    def __init__(self, *, active=None, publish=None, served=None):
+        self.active = active or {}
+        self.publish_responses = list(publish or [])
+        self.served = served or {}
+        self.calls = []
+
+    def read_active(self, name):
+        self.calls.append(("read_active", name))
+        return self.active.get(name, {"name": name, "active_deployment_id": None,
+                                      "commit_sha": None, "published_at": None})
+
+    def publish(self, manifest, expected_active):
+        self.calls.append(("publish", manifest["name"], expected_active))
+        if not self.publish_responses:
+            raise AssertionError("the fake control API was asked to publish more times than allowed")
+        item = self.publish_responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def serve(self, name):
+        self.calls.append(("serve", name))
+        return self.served.get(name, b"")
+
+
+class StageTests(unittest.TestCase):
+    """T4 — compare first. The invariant is that a failing compare publishes NOTHING."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.run = bf.RunDir(self.tmp / "run")
+        self.repo = self.tmp / "proj"
+        make_repo(self.repo, {"docs/planning/7-x.html": "PAGE BYTES",
+                              "docs/planning/7-x.md": "# page"})
+        self.tip = git(self.repo, "rev-parse", "HEAD")
+        self.blob = git(self.repo, "rev-parse", f"{self.tip}:docs/planning/7-x.html")
+        import hashlib as _h
+        self.row = {
+            "inventory": {"id": "prj_1", "name": "proj-plan-7",
+                          "url": "https://proj-plan-7.vercel.app/"},
+            "harness_name": "proj-plan-7", "reason": None, "detail": "",
+            "provenance": {"project": "proj", "commit": self.tip,
+                           "repo_path": "docs/planning/7-x.html", "blob_id": self.blob,
+                           "sha256": _h.sha256(b"PAGE BYTES").hexdigest()},
+            "target": {"project": "proj", "commit": self.tip,
+                       "repo_path": "docs/planning/7-x.html", "blob_id": self.blob,
+                       "sha256": _h.sha256(b"PAGE BYTES").hexdigest(), "size": 10,
+                       "md_path": "docs/planning/7-x.md",
+                       "md_blob_id": git(self.repo, "rev-parse", f"{self.tip}:docs/planning/7-x.md"),
+                       "preview": "PAGE BYTES"},
+        }
+
+    def _stage(self, *, live, control, rows=None, repo_map=None):
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, live)}
+                        if not isinstance(live, tuple) else
+                        {"https://proj-plan-7.vercel.app/": live})
+        return bf.stage_rows(rows if rows is not None else [dict(self.row)],
+                             run=self.run, control=control, opener=http,
+                             repos=repo_map or {"proj": str(self.repo)}, run_id="r1")
+
+    def test_a_failing_compare_publishes_NOTHING(self):
+        """The invariant this whole design turns on: drift touches no registry at all.
+
+        The realistic drift shape — Vercel still serves what `map` recorded, and the committed
+        target has moved on since.
+        """
+        (self.repo / "docs/planning/7-x.html").write_text("NEW BYTES")
+        git(self.repo, "add", "--", "docs/planning/7-x.html")
+        git(self.repo, "commit", "-q", "-m", "the doc was edited after its last Vercel deploy")
+        new_tip = git(self.repo, "rev-parse", "HEAD")
+        import hashlib as _h
+        row = dict(self.row)
+        row["target"] = dict(row["target"], commit=new_tip,
+                            blob_id=git(self.repo, "rev-parse", f"{new_tip}:docs/planning/7-x.html"),
+                            sha256=_h.sha256(b"NEW BYTES").hexdigest(),
+                            md_blob_id=git(self.repo, "rev-parse", f"{new_tip}:docs/planning/7-x.md"))
+        control = FakeControl()
+        out = self._stage(live=b"PAGE BYTES", control=control, rows=[row])
+        self.assertEqual("byte_mismatch", out[0]["reason"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_a_page_that_moved_since_map_is_vercel_changed_and_settles_first(self):
+        """The two predicates cannot both fire: changed-since-map is tested first."""
+        control = FakeControl()
+        out = self._stage(live=b"SOMETHING ELSE ENTIRELY", control=control)
+        self.assertEqual("vercel_changed", out[0]["reason"])
+        self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
+
+    def test_a_passing_compare_stages_and_verifies(self):
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
+                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertIsNone(out[0]["reason"], out[0])
+        self.assertEqual(5, out[0]["staged"]["deployment_id"])
+        kinds = [c[0] for c in control.calls]
+        self.assertEqual(["publish", "serve"], kinds)
+
+    def test_the_manifest_carries_the_metadata_and_not_content_type(self):
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
+                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+        self._stage(live=b"PAGE BYTES", control=control)
+        manifest = [c for c in control.calls if c[0] == "publish"][0]
+        stored = self.run.read_json("activation-plan.json")["rows"][0]["manifest"]
+        self.assertEqual("proj", stored["project"])
+        self.assertEqual("plan", stored["purpose"])
+        self.assertNotIn("content_type", json.dumps(stored["assets"]))
+        self.assertEqual(manifest[2], None)  # first publish sends expected_active null
+
+    def test_cache_warmed_false_is_a_failure_not_a_pass(self):
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": False}])
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual("stage_publish_failed", out[0]["reason"])
+
+    def test_a_served_mismatch_is_final_verification_failed(self):
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
+                              served={bf.staging_label("r1", "proj-plan-7", 1): b"WRONG"})
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual("final_verification_failed", out[0]["reason"])
+
+    def test_a_502_from_the_harness_is_harness_fetch_denied(self):
+        control = FakeControl(publish=[bf.ControlError(502, "github fetch failed for 3D/x")])
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual("harness_fetch_denied", out[0]["reason"])
+        self.assertIn("3D/x", out[0]["detail"])
+
+    def test_a_409_on_a_staging_name_is_stage_publish_failed_never_an_overwrite(self):
+        control = FakeControl(publish=[bf.ControlError(409, "stale publisher")])
+        out = self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual("stage_publish_failed", out[0]["reason"])
+
+    def test_the_write_ahead_record_exists_BEFORE_the_publish(self):
+        seen = {}
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
+                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+        real_publish = control.publish
+
+        def spy(manifest, expected_active):
+            pendings = [e for e in self.run.journal_entries()
+                        if e["record"].get("state") == "pending"]
+            seen["pending_before_publish"] = len(pendings)
+            return real_publish(manifest, expected_active)
+
+        control.publish = spy
+        self._stage(live=b"PAGE BYTES", control=control)
+        self.assertEqual(1, seen["pending_before_publish"])
+
+    def test_a_row_whose_recorded_hash_no_longer_matches_is_mapping_invalid(self):
+        row = dict(self.row)
+        row["target"] = dict(row["target"], sha256="0" * 64)
+        out = self._stage(live=b"PAGE BYTES", control=FakeControl(), rows=[row])
+        self.assertEqual("mapping_invalid", out[0]["reason"])
+
+    def test_an_edited_harness_name_that_leaves_its_inventory_row_is_mapping_invalid(self):
+        row = dict(self.row)
+        row["harness_name"] = "somebody-elses-trusted-name"
+        out = self._stage(live=b"PAGE BYTES", control=FakeControl(), rows=[row])
+        self.assertEqual("mapping_invalid", out[0]["reason"])
+
+    def test_an_already_flagged_row_is_left_alone(self):
+        row = dict(self.row, reason="mapping_ambiguous")
+        out = self._stage(live=b"PAGE BYTES", control=FakeControl(), rows=[row])
+        self.assertEqual("mapping_ambiguous", out[0]["reason"])
+
+    def test_one_row_raising_leaves_the_others_intact(self):
+        good = dict(self.row)
+        bad = dict(self.row)
+        bad["target"] = dict(bad["target"], repo_path="docs/planning/absent.html")
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
+                             served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+        out = self._stage(live=b"PAGE BYTES", control=control, rows=[bad, good])
+        self.assertIsNotNone(out[0]["reason"])
+        self.assertIsNone(out[1]["reason"], out[1])
+
+    def test_the_bearer_never_reaches_the_journal(self):
+        control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
+                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+        self._stage(live=b"PAGE BYTES", control=control)
+        text = (self.run.path / "journal.jsonl").read_text(encoding="utf-8")
+        self.assertNotIn("Bearer", text)
+        self.assertNotIn("Authorization", text)
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(unittest.main())

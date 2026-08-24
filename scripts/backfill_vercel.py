@@ -578,6 +578,284 @@ class _NoRedirect(__import__("urllib.request", fromlist=["HTTPRedirectHandler"])
                        "request to a host this run never authorized")
 
 
+# --------------------------------------------------------------------------------------------
+# T4 — staging. Compare first; a failing compare must publish NOTHING.
+# --------------------------------------------------------------------------------------------
+
+_LOOPBACK_V4 = "127."
+
+
+class ControlError(Exception):
+    """A non-2xx from the control API. Carries the status, because the status IS the meaning."""
+
+    def __init__(self, status: int, detail: str = ""):
+        super().__init__(f"HTTP {status}: {detail}")
+        self.status = status
+        self.detail = detail
+
+
+def assert_control_destination(base: str, env=None) -> None:
+    """Where the publish bearer may go. Checked BEFORE `Authorization` is attached.
+
+    This client cannot use `publish_doc.assert_bearer_destination` — that allowlist and the
+    harness's own Host routing cannot both be satisfied, which is the whole reason this script has
+    its own client — so it carries an equivalent rather than dropping the guard. An IP LITERAL is
+    required: a DNS name is resolved by somebody else, and "it points at loopback today" is not a
+    property of the URL.
+    """
+    import ipaddress
+    import urllib.parse
+    env = os.environ if env is None else env
+    parsed = urllib.parse.urlsplit(base)
+    if parsed.scheme != "http":
+        raise Refused(f"refusing {base!r}: the control base must be http with an IP literal "
+                      "(https to a name is a different guard, and this client does not have it)")
+    host = (parsed.hostname or "").strip()
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        raise Refused(
+            f"refusing {base!r}: the host must be an IP literal, not the name {host!r}. A name is "
+            "resolved by something this run does not control, so 'it points at loopback' is not a "
+            "property of the URL — and the bearer would go wherever it resolved.") from None
+    if address.is_loopback:
+        return
+    granted = str(env.get("BACKFILL_ALLOW_PLAINTEXT") or "").strip().lower()
+    if granted and granted == (parsed.netloc or "").lower():
+        return
+    raise Refused(
+        f"refusing to send the publish bearer to {parsed.netloc}: it is not loopback. To allow "
+        f"exactly this endpoint, set BACKFILL_ALLOW_PLAINTEXT={parsed.netloc} — a bare truthy "
+        "value grants nothing, because a range is not the one host you meant.")
+
+
+def staging_label(run_id: str, name: str, attempt: int) -> str:
+    """`bf<run>-<12 hex of sha256(name)>-<attempt>`: fixed length, and injective.
+
+    Right-truncating the real name is NOT injective — two long names sharing a prefix produce one
+    label, and the second row would fail as "already exists" although the uniqueness check passed.
+    The attempt counter is what lets a renewal after an expiry take a fresh label instead of
+    colliding with its own previous one.
+    """
+    short = hashlib.sha256(str(name).encode("utf-8")).hexdigest()[:12]
+    run_part = "".join(ch for ch in str(run_id).lower() if ch.isalnum())[:12] or "r"
+    label = f"bf{run_part}-{short}-{int(attempt)}"
+    return label[:63].rstrip("-")
+
+
+class ControlClient:
+    """The harness control API over an explicit Host header.
+
+    The bearer is read from the environment and never stored on the instance's repr, never
+    journaled and never interpolated into an error. An error BODY is not echoed verbatim either:
+    a server can reflect a request header into its own JSON, which #36's review caught for real.
+    """
+
+    def __init__(self, base: str, zone: str, *, token: str, opener=None, env=None):
+        assert_control_destination(base, env=env)
+        self._base = base.rstrip("/")
+        self._zone = zone.strip(".")
+        self._token = token
+        self._opener = opener or _http
+
+    def _call(self, host, path, *, method="GET", body=None, authorized=True):
+        headers = {"Host": host}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if authorized:
+            headers["Authorization"] = "Bearer " + self._token
+        status, resp_headers, payload = self._opener(
+            self._base + path, headers=headers, method=method,
+            body=json.dumps(body).encode("utf-8") if body is not None else None, timeout=60)
+        return status, resp_headers, payload
+
+    def read_active(self, name: str) -> dict:
+        status, _, payload = self._call(f"docs-control.{self._zone}", f"/v1/deployments/{name}")
+        if status != 200:
+            raise ControlError(status, "read-back refused")
+        return json.loads(payload)
+
+    def publish(self, manifest: dict, expected_active) -> dict:
+        status, _, payload = self._call(
+            f"docs-control.{self._zone}", "/v1/deployments", method="POST",
+            body=dict(manifest, expected_active=expected_active))
+        if status not in (200, 201):
+            # The body is SUMMARIZED, never echoed: a server can reflect Authorization into it.
+            text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else str(payload)
+            raise ControlError(status, text.strip()[:200])
+        return json.loads(payload)
+
+    def serve(self, name: str) -> bytes:
+        status, _, payload = self._call(f"{name}.{self._zone}", "/", authorized=False)
+        if status != 200:
+            raise ControlError(status, "the harness did not serve the page")
+        return payload
+
+
+def manifest_for_row(row: dict, *, name: str, repos: dict) -> dict:
+    """The manifest for a row's TARGET commit.
+
+    **Deviation from the design, and its reason.** The design said to reuse
+    `publish_doc.build_manifest`. It cannot be reused here: that function manifests the WORKING TREE
+    (it reads the file and refuses when it differs from `HEAD`), and a backfill pins a COMMIT that
+    may not be checked out — the repository can sit on another branch entirely. So the entries come
+    from the target commit's own blobs, which `map` already resolved and this function re-verifies,
+    and `publish_doc.validate_manifest` (which is pure) still validates the result.
+    """
+    target = row["target"]
+    repo = repos[target["project"]]
+    body = _git_bytes(repo, ["cat-file", "blob", target["blob_id"]])
+    if hashlib.sha256(body).hexdigest() != target["sha256"]:
+        raise RowError("mapping_invalid",
+                       f"the blob recorded for {target['repo_path']} no longer hashes to the "
+                       "recorded sha256")
+    purpose = None
+    for _, found, _ in viable_splits(row["inventory"]["name"], {target["project"]}):
+        purpose = found
+        break
+    return {
+        "name": name,
+        "repo": _repo_slug(repo),
+        "commit_sha": target["commit"],
+        "entry_path": "/index.html",
+        "assets": [{"url_path": "/index.html", "repo_path": target["repo_path"],
+                    "blob_id": target["blob_id"], "size": len(body),
+                    "sha256": target["sha256"]}],
+        "title": row["inventory"]["name"],
+        "project": target["project"],
+        "purpose": purpose,
+    }
+
+
+def _repo_slug(repo) -> str:
+    """`owner/name` from the repository's own origin, or a placeholder for a test repo."""
+    try:
+        url = _git_out(repo, ["remote", "get-url", "origin"]).strip()
+    except RowError:
+        return "local/test"
+    slug = url.rstrip("/")
+    if slug.endswith(".git"):
+        slug = slug[:-4]
+    parts = slug.replace(":", "/").split("/")
+    return "/".join(parts[-2:]) if len(parts) >= 2 else "local/test"
+
+
+def _revalidate(row: dict, *, repos: dict) -> None:
+    """The mapping is UNTRUSTED on every re-read, and bound to its inventory row.
+
+    Recomputing the blob is not enough on its own: an edit could keep a perfectly valid, reachable
+    blob while pointing the row at a different source URL or a different trusted harness name. So
+    the binding is checked first.
+    """
+    inventory = row.get("inventory") or {}
+    if row.get("harness_name") != inventory.get("name"):
+        raise RowError("mapping_invalid",
+                       f"the row's harness name {row.get('harness_name')!r} is not its inventory "
+                       f"row's name {inventory.get('name')!r}")
+    target = row.get("target") or {}
+    for field in ("project", "commit", "repo_path", "blob_id", "sha256"):
+        if not target.get(field):
+            raise RowError("mapping_invalid", f"the row's target has no {field}")
+    if target["project"] not in repos:
+        raise RowError("mapping_invalid", f"unknown project {target['project']!r}")
+    repo = repos[target["project"]]
+    # The path must still hold that blob at that commit. Checking the blob alone would accept a
+    # row whose PATH had been edited: the bytes would be right and the row's own account of where
+    # they live would be wrong, which is exactly the kind of quiet inconsistency a hand-edited
+    # mapping introduces. Found by a test that expected one row to fail and got two publishes.
+    try:
+        at_commit = _git_out(repo, ["rev-parse", f"{target['commit']}:{target['repo_path']}"]).strip()
+    except RowError:
+        raise RowError("mapping_invalid",
+                       f"{target['repo_path']} does not exist at {target['commit'][:7]}") from None
+    if at_commit != target["blob_id"]:
+        raise RowError("mapping_invalid",
+                       f"{target['repo_path']} at {target['commit'][:7]} holds {at_commit[:12]}, "
+                       f"not the recorded {target['blob_id'][:12]}")
+    body = _git_bytes(repo, ["cat-file", "blob", target["blob_id"]])
+    if hashlib.sha256(body).hexdigest() != target["sha256"]:
+        raise RowError("mapping_invalid",
+                       "the recorded blob no longer hashes to the recorded sha256")
+
+
+def stage_rows(rows, *, run: RunDir, control, opener, repos: dict, run_id: str,
+               plan_ttl_s: int = 1800, attempt: int = 1) -> list:
+    """Compare, then stage, then verify. Per row, isolated, journaled before every write.
+
+    Order matters and it is not the obvious one: the compare happens BEFORE any publish, so a
+    drifted row touches no registry at all. Publishing first and comparing after would leave the
+    wrong page live under a name people trust, and the control API has no deactivate.
+    """
+    plan = []
+    for row in rows:
+        if row.get("reason"):
+            continue
+        name = row["harness_name"]
+        try:
+            _revalidate(row, repos=repos)
+            live = fetch_live(row["inventory"]["url"], opener=opener)
+            target_body = _git_bytes(repos[row["target"]["project"]],
+                                     ["cat-file", "blob", row["target"]["blob_id"]])
+            # Decision order, explicit: "changed since map" settles it FIRST, so the two
+            # predicates cannot both fire for one row.
+            if hashlib.sha256(live).hexdigest() != row["provenance"].get("sha256"):
+                raise RowError("vercel_changed",
+                               "the live page's bytes are not the ones `map` recorded")
+            if live != target_body:
+                raise RowError("byte_mismatch",
+                               f"the live page is {len(live)} bytes and the committed target is "
+                               f"{len(target_body)}; the document changed after its last Vercel "
+                               "deploy, so nothing was published")
+            label = staging_label(run_id, name, attempt)
+            manifest = manifest_for_row(row, name=label, repos=repos)
+            _validate_manifest(manifest)
+            # WRITE-AHEAD. A crash between here and the response leaves an intent on disk, which
+            # is the only thing that makes the resume decidable at all.
+            run.journal(name, {"phase": "stage", "state": "pending", "target": label,
+                               "content_sha256": row["target"]["sha256"],
+                               "expected_active": None})
+            result = control.publish(manifest, None)
+            run.journal(name, {"phase": "stage", "state": "published", "target": label,
+                               "deployment_id": result.get("deployment_id"),
+                               "cache_warmed": bool(result.get("cache_warmed"))})
+            if not result.get("cache_warmed"):
+                raise RowError("stage_publish_failed",
+                               "the harness did not warm its cache, so it never proved it could "
+                               "fetch the blobs; that is not a pass")
+            served = control.serve(label)
+            if served != target_body:
+                raise RowError("final_verification_failed",
+                               f"the harness served {len(served)} bytes for the staging label and "
+                               f"the committed target is {len(target_body)}")
+            row["staged"] = {"label": label, "deployment_id": result.get("deployment_id")}
+            plan.append({"name": name, "manifest": manifest, "staged": row["staged"],
+                         "sealed_live_sha256": hashlib.sha256(live).hexdigest()})
+        except ControlError as exc:
+            reason = ("harness_fetch_denied" if exc.status in (502, 504)
+                      else "stage_publish_failed")
+            row["reason"], row["detail"] = reason, exc.detail
+        except RowError as exc:
+            row["reason"], row["detail"] = exc.reason, exc.detail
+        finally:
+            run.journal(name, {"phase": "stage", "state": "done",
+                               "reason": row.get("reason"), "detail": (row.get("detail") or "")[:300]})
+    sealed = {"rows": plan, "expires_at": int(time.time()) + int(plan_ttl_s),
+              "run_id": run_id, "attempt": attempt}
+    sealed["digest"] = digest(plan)
+    run.write_json("activation-plan.json", sealed)
+    return rows
+
+
+def _validate_manifest(manifest: dict) -> None:
+    """Validate with `publish_doc.validate_manifest`, which is pure and already tested."""
+    import importlib.util
+    path = pathlib.Path(__file__).resolve().parent / "publish_doc.py"
+    spec = importlib.util.spec_from_file_location("publish_doc_validate", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.validate_manifest(manifest)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="backfill_vercel.py",
