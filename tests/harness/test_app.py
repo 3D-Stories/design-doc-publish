@@ -123,6 +123,42 @@ class TestDispatch:
         assert cap["status"].startswith("404")
 
 
+class TestConventionResolution:
+    """A document serves the moment its file exists in a repository — owner decision D38.
+
+    Nothing publishes it and nothing registers it, so these hostnames have NO registry row.
+    """
+
+    @pytest.fixture()
+    def app_with_repo(self, tmp_path):
+        from harness.registry import Registry
+        reg = Registry(str(tmp_path / "r2.db")); reg.initialize()
+        cache = BlobCache(str(tmp_path / "c2"), max_bytes=100000); cache.initialize()
+        src = FakeGitHub(
+            trees={("3D-Stories/rawgentic", COMMIT): [
+                {"path": "docs/planning/2026-08-19-unified-roadmap.html", "type": "blob",
+                 "mode": "100644", "sha": BLOB, "size": len(PAGE)}]},
+            blobs={("3D-Stories/rawgentic", BLOB): PAGE},
+            commits={("3D-Stories/rawgentic", "HEAD"): COMMIT},
+            repos=["rawgentic"])
+        yield make_app(cfg=CFG, registry=reg, cache=cache, source=src)
+        reg.close(); cache.close()
+
+    def test_a_never_published_document_serves_from_github(self, app_with_repo):
+        cap, body = call(app_with_repo,
+                         f"2026-08-19-rawgentic-unified-roadmap.{ZONE}", "/")
+        assert cap["status"].startswith("200"), cap["status"]
+        assert body == PAGE
+
+    def test_a_hostname_naming_no_real_repository_is_404(self, app_with_repo):
+        cap, _ = call(app_with_repo, f"2026-08-19-notarepo-whatever.{ZONE}", "/")
+        assert cap["status"].startswith("404")
+
+    def test_a_hostname_naming_a_missing_document_is_404(self, app_with_repo):
+        cap, _ = call(app_with_repo, f"2026-08-19-rawgentic-nothing-here.{ZONE}", "/")
+        assert cap["status"].startswith("404")
+
+
 class TestWsgiContract:
     def test_start_response_is_called_exactly_once_per_request(self, app):
         cap, _ = call(app, f"proj-design-1.{ZONE}", "/")

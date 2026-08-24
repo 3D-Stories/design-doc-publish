@@ -338,3 +338,58 @@ class TestStep11UpstreamValidation:
         client = self._client(self._Resp(raiser=OSError(104, "Connection reset by peer")))
         with pytest.raises(Unavailable):
             client.blob(REPO, "a" * 40, budget)
+
+
+class TestConventionLookups:
+    """The two calls convention resolution needs: pin a ref to a commit, and read a whole tree.
+
+    Both exist because a hostname names a document, not a path: the repository has to be searched
+    rather than walked, and the search must see ONE consistent snapshot.
+    """
+
+    def make(self, status=200, body=b"{}", headers=None):
+        seen = {}
+
+        def opener(request, timeout=None):
+            seen["url"] = request.full_url
+            seen["accept"] = dict(request.headers).get("Accept")
+            return _Resp(status, body, headers or {})
+        return HttpGitHub(token="ghp_supersecret", api="https://api.github.test",
+                          opener=opener), seen
+
+    def test_a_ref_is_pinned_to_a_commit_sha(self):
+        gh, seen = self.make(body=b"e" * 40)
+        got = gh.commit(REPO, "HEAD", Budget(60.0, 10, lambda: 0.0))
+        assert got == "e" * 40
+        assert seen["url"] == f"https://api.github.test/repos/{REPO}/commits/HEAD"
+        # The sha media type returns the bare sha, so no JSON body has to be parsed or trusted.
+        assert seen["accept"] == "application/vnd.github.sha"
+
+    def test_a_body_that_is_not_a_sha_is_refused(self):
+        # A hostile or broken response must not become a ref that later calls interpolate.
+        gh, _ = self.make(body=b"<html>an error page</html>")
+        with pytest.raises(Unavailable):
+            gh.commit(REPO, "HEAD", Budget(60.0, 10, lambda: 0.0))
+
+    def test_a_recursive_tree_asks_for_the_whole_tree(self):
+        gh, seen = self.make(body=b'{"tree": [], "truncated": false}')
+        gh.tree(REPO, "c" * 40, Budget(60.0, 10, lambda: 0.0), recursive=True)
+        assert seen["url"].endswith("?recursive=1"), seen["url"]
+
+    def test_a_non_recursive_tree_is_unchanged(self):
+        gh, seen = self.make(body=b'{"tree": [], "truncated": false}')
+        gh.tree(REPO, "c" * 40, Budget(60.0, 10, lambda: 0.0))
+        assert "recursive" not in seen["url"]
+
+
+def test_both_sources_implement_every_method_the_protocol_declares():
+    """Measured 2026-08-24: a method was added to the Protocol and to the fake and NOT to the
+    real client. Every unit test passed, because every unit test uses the fake, and the live
+    container answered 500 with `'HttpGitHub' object has no attribute 'repos'`. A seam that can
+    be half-implemented needs a test that compares the two halves against their contract."""
+    from harness.github import GitHubSource
+    declared = [n for n in vars(GitHubSource) if not n.startswith("_")]
+    assert declared, "the protocol declares nothing — this guard has drifted"
+    for name in declared:
+        assert callable(getattr(HttpGitHub, name, None)), f"HttpGitHub is missing {name}()"
+        assert callable(getattr(FakeGitHub, name, None)), f"FakeGitHub is missing {name}()"

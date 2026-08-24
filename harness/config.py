@@ -43,6 +43,7 @@ class HarnessConfig:
     connection_limit: int
     bind: str
     github_api: str
+    github_owner: str
 
 
 def _required(env: Mapping[str, str], name: str) -> str:
@@ -109,6 +110,7 @@ def load_config(env: Mapping[str, str]) -> HarnessConfig:
 
     return HarnessConfig(
         github_token=_required(env, "DOC_HARNESS_GITHUB_TOKEN"),
+        github_owner=env.get("DOC_HARNESS_GITHUB_OWNER", "3D-Stories").strip(),
         publish_token=_required(env, "DOC_HARNESS_PUBLISH_TOKEN"),
         zone=zone,
         registry_path=env.get("DOC_HARNESS_REGISTRY_PATH", "/var/lib/doc-harness/registry.db"),

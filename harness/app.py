@@ -20,7 +20,8 @@ from .indexpage import render_index
 from .registry import Registry
 from .routing import CONTROL_LABEL, INDEX_LABEL, RouteError, resolve_host
 from .serving import Response, serve
-from .github import Budget
+from .github import Budget, GitHubError, NotFound, Unauthorized
+from .convention import ConventionResolver, DocumentAmbiguous, TreeTruncated
 
 
 def _plain(status: int, message: str, extra: dict | None = None) -> Response:
@@ -39,6 +40,10 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
              log=None):
     """Build the WSGI callable over already-constructed collaborators."""
     publish_slots = threading.BoundedSemaphore(cfg.max_concurrent_publishes)
+    # Owner decision D38: a document is reachable the moment its file exists in a repository.
+    # The registry is still consulted FIRST, so a published deployment keeps winning and nothing
+    # that works today changes.
+    resolver = ConventionResolver(cfg.github_owner, source)
 
     def _log(message: str) -> None:
         if log is not None:
@@ -85,6 +90,27 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
             return _not_found()
 
         active = registry.active(label)
+        if active is None:
+            try:
+                active = resolver.resolve(
+                    label, Budget(cfg.http_timeout * 2, cfg.max_github_calls),
+                    http_timeout=cfg.http_timeout, max_blob_bytes=cfg.max_blob_bytes)
+            except DocumentAmbiguous as exc:
+                # Two files answer to this hostname. Serving either would be a coin toss the
+                # reader cannot see, and the message names both so a human can fix it.
+                return _plain(409, str(exc))
+            except TreeTruncated:
+                # Absence could not be proven, so 404 would be a lie. 503 says try again.
+                return _plain(503, "this repository is too large to search right now")
+            except Unauthorized:
+                # The harness credential cannot read that repository. Saying so is the whole
+                # remedy: it is a grant problem and nothing the reader can fix by retrying.
+                return _plain(502, "the harness cannot read that repository from GitHub")
+            except NotFound:
+                # The repository listing named it, and GitHub now says it is gone.
+                return _not_found()
+            except GitHubError:
+                return _plain(502, "GitHub could not be reached to resolve this document")
         if active is None:
             return _not_found()
         return serve(active, path, method=method, headers=_headers(environ),

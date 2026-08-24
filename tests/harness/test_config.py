@@ -15,6 +15,8 @@ MINIMAL = {"DOC_HARNESS_GITHUB_TOKEN": "gh-tok", "DOC_HARNESS_PUBLISH_TOKEN": "p
 def test_defaults_match_the_design_table():
     c = load_config(MINIMAL)
     assert c.zone == "docs.3dstories.ca"
+    # Convention resolution names a repository under exactly one owner.
+    assert c.github_owner == "3D-Stories"
     assert c.cache_max_bytes == 2147483648
     assert c.max_body_bytes == 1048576
     assert c.max_blob_bytes == 104857600
