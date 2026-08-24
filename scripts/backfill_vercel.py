@@ -32,6 +32,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -551,6 +552,38 @@ def _target_at_tip(repo, repo_path: str, *, fetch_remote: bool, runner=None) -> 
             "preview": body.decode("utf-8", "replace")[:64]}
 
 
+# The owner set this rule on 2026-08-24, and asked twice because their written rule and their
+# worked example disagreed on the order of the middle two parts. The EXAMPLE is what they settled
+# on: `rawgentic/docs/planning/2026-08-19-unified-roadmap.html` is served at
+# `2026-08-19-rawgentic-unified-roadmap.docs.3dstories.ca`.
+_DATED_FILENAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(.+)$")
+_MAX_DNS_LABEL = 63
+
+
+def harness_label(provenance: dict) -> str:
+    """The hostname label a document is served at: `{date}-{repo}-{html name}`.
+
+    The date is the FILENAME's own prefix, the repo is the GitHub repository the bytes are
+    committed in, and the html name is what is left of the filename after that prefix and the
+    extension, hyphens intact. Derived from the PROVENANCE and not from the Vercel project name,
+    so the hostname describes where the document actually comes from.
+    """
+    repo = str(provenance.get("project") or "")
+    stem = str(provenance.get("repo_path") or "").rsplit("/", 1)[-1]
+    stem = re.sub(r"\.html?$", "", stem, flags=re.IGNORECASE)
+    match = _DATED_FILENAME.match(stem)
+    # A filename with no date prefix OMITS the part rather than inventing one. A date no file
+    # supports would be a claim the hostname cannot back up. Two of the 90 mapped documents.
+    parts = [match.group(1), repo, match.group(2)] if match else [repo, stem]
+    label = "-".join(part for part in parts if part).lower()
+    # One DNS label is 63 characters. The TAIL is what gets cut, never the date and never the
+    # repository, because those are what make the name identifiable — and the cut must not leave
+    # a trailing hyphen, which is not a legal label.
+    if len(label) > _MAX_DNS_LABEL:
+        label = label[:_MAX_DNS_LABEL].rstrip("-")
+    return label
+
+
 def enforce_name_uniqueness(rows: list) -> list:
     """Two rows resolving to ONE harness name are BOTH flagged, before anything is staged.
 
@@ -681,6 +714,9 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
             row["not_repositories"] = not_repos
             row["provenance"] = {k: match[k] for k in
                                  ("project", "commit", "repo_path", "blob_id", "sha256")}
+            # The trusted name follows the PROVENANCE, not the Vercel project name it arrived
+            # under. `enforce_name_uniqueness` below still refuses both rows on a collision.
+            row["harness_name"] = harness_label(row["provenance"])
             row["target"] = _target_at_tip(projects[match["project"]], match["repo_path"],
                                            fetch_remote=fetch_remote)
             row["target"]["project"] = match["project"]
@@ -954,10 +990,6 @@ def _revalidate(row: dict, *, repos: dict, inventory=None) -> None:
     the binding is checked first.
     """
     claimed = row.get("inventory") or {}
-    if row.get("harness_name") != claimed.get("name"):
-        raise RowError("mapping_invalid",
-                       f"the row's harness name {row.get('harness_name')!r} is not its inventory "
-                       f"row's name {claimed.get('name')!r}")
     # Comparing two fields of the SAME editable row proves nothing: an edit that changes both
     # survives it. The binding is only a binding when it reaches the immutable snapshot, so when
     # one is supplied the row is looked up in it by project id. A Critical review finding.
@@ -1002,6 +1034,15 @@ def _revalidate(row: dict, *, repos: dict, inventory=None) -> None:
     if hashlib.sha256(body).hexdigest() != target["sha256"]:
         raise RowError("mapping_invalid",
                        "the recorded blob no longer hashes to the recorded sha256")
+
+    # Only now, with the row bound to the immutable snapshot, is the DERIVED name checked. This
+    # comparison is between two fields of the same editable row, so it is an addition to that
+    # binding and never a replacement for it: on its own, an edit changing both would pass.
+    expected_label = harness_label(row.get("provenance") or {})
+    if row.get("harness_name") != expected_label:
+        raise RowError("mapping_invalid",
+                       f"the row's harness name {row.get('harness_name')!r} is not the label its "
+                       f"provenance derives, {expected_label!r}")
 
 
 # The harness's own words when GitHub answers 404 for a named object
