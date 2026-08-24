@@ -596,15 +596,24 @@ NEW_TAB = ' target="_blank" rel="noopener"'
 
 
 def render(rows: list[dict], stamp: str, now: datetime, sig: str,
-           workspace_file: Path | None = None, scope: str | None = None) -> str:
+           workspace_file: Path | None = None, scope: str | None = None,
+           *, eyebrow: str | None = None) -> str:
     # #9: the team name is user-supplied now, so the two places it reaches the page are an
     # injection surface that did not exist while it was a constant. Both are escaped, and
     # `user_config.validate_scope` has already refused anything that is not a slug — belt
     # and braces, because this page is deployed PUBLICLY.
     tenant = html.escape(scope) if scope else ""
     title_prefix = f"{tenant} · " if tenant else ""
-    eyebrow = f"{tenant} · vercel · living documentation" if tenant else (
-        "vercel · living documentation")
+    # #34: the doc-harness serves this same page from its own registry, where the word
+    # "vercel" is simply wrong. Keyword-only and defaulting to the exact previous strings, so
+    # every existing caller is byte-for-byte unaffected — which is why the harness takes a
+    # parameter here rather than post-processing the rendered HTML. Escaped like `scope`,
+    # because it reaches the page the same way.
+    if eyebrow is not None:
+        eyebrow = html.escape(eyebrow)
+    else:
+        eyebrow = f"{tenant} · vercel · living documentation" if tenant else (
+            "vercel · living documentation")
     groups: dict[str, list[dict]] = {}
     for r in sorted(rows, key=_sort_key):
         groups.setdefault(r["group"], []).append(r)
