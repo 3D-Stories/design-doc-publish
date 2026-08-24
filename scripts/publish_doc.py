@@ -406,6 +406,145 @@ def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
                + listing.stdout.rstrip())
 
 
+# --- #36 stage 5: publish through the control API ---------------------------------------
+#
+# Two calls, both bearing `Authorization: Bearer $DOC_HARNESS_PUBLISH_TOKEN`, both under
+# `/v1` (`harness/control.py:34` — an unprefixed path is a 404 at `harness/control.py:83`,
+# which is what revision 2 of the design would have shipped).
+
+# Finding N8. `urllib.request.urlopen` takes ONE per-socket-operation deadline, not
+# separate connect and read deadlines, and this repository has no `requests` dependency —
+# the gate is deliberately dependency-free. So the contract is what urllib can enforce,
+# stated honestly rather than tabulated as something it cannot.
+CONTROL_READ_TIMEOUT = 20      # a registry read
+PUBLISH_TIMEOUT = 120          # the harness fetches every blob from GitHub inside this call
+
+# The characters `harness/routing.py:canonical_url_path` refuses unencoded. Catching them
+# here turns a 422 about an encoding into one sentence naming the file.
+_NEEDS_ENCODING = set(" +(),&'=@!$*")
+
+
+def _control_request(base: str, path: str, token: str, *, method: str, body: bytes | None):
+    req = urllib.request.Request(f"{base}{path}", data=body, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    return req
+
+
+def _control_call(req, timeout: int, *, opener=None):
+    """Returns (status, parsed-json-or-None). Raises the transport error unchanged."""
+    call = opener if opener is not None else urllib.request.urlopen
+    with call(req, timeout=timeout) as resp:
+        raw = resp.read()
+    try:
+        return getattr(resp, "status", 200), json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return getattr(resp, "status", 200), None
+
+
+def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
+    """The active deployment id, or None when nothing is published yet.
+
+    `harness/control.py:_read_back` answers **200 with a null id**, never 404 — a first
+    publish reads null and passes it straight back as `expected_active`. Pinned at
+    `tests/harness/test_control.py:184`.
+
+    A present-but-unparseable id refuses HERE, before anything is published. Finding M12:
+    a client that always sent null, or that misparsed a non-null read-back, would pass
+    every first-publish and race test while every republish returned 409 for ever.
+    """
+    req = _control_request(base, f"/v1/deployments/{name}", token, method="GET", body=None)
+    try:
+        _, payload = _control_call(req, CONTROL_READ_TIMEOUT, opener=opener)
+    except urllib.error.HTTPError as e:
+        raise StageError(5, f"reading back {name} failed with HTTP {e.code}. The publish "
+                             "was not attempted.") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise StageError(5, f"could not reach the control API at {base}: {e}. "
+                             "DOC_HARNESS_CONTROL_URL must name a reachable harness.") from e
+    if not isinstance(payload, dict):
+        raise StageError(5, f"the read-back for {name} was not a JSON object.")
+    active = payload.get("active_deployment_id")
+    if active is None:
+        return None
+    if not isinstance(active, int) or isinstance(active, bool):
+        raise StageError(
+            5, f"the read-back for {name} carries a non-integer active_deployment_id "
+               f"({active!r}). Refusing to publish against a value that cannot be compared "
+               "and swapped.")
+    return active
+
+
+def publish(base: str, manifest: dict, expected_active: int | None, token: str,
+            *, opener=None) -> int:
+    """POST the manifest and return the NEW deployment id from the 201.
+
+    `expected_active` is required and is sent EXPLICITLY, including as null: the parser
+    refuses an omitted field with its own message that omission and null are different
+    things.
+
+    The success contract is 201 with an integer `deployment_id` (`harness/control.py:217`).
+    A 201 whose body lacks one is a failure, not a pass — stage 6 would otherwise verify
+    against the wrong deployment.
+    """
+    for asset in manifest.get("assets", []):
+        bad = _NEEDS_ENCODING & set(asset.get("url_path", ""))
+        if bad:
+            raise StageError(
+                5, f"url_path {asset['url_path']!r} contains {''.join(sorted(bad))!r}, which "
+                   "harness/routing.py:canonical_url_path refuses unencoded (422). "
+                   "Percent-encode it before publishing.")
+        if "content_type" in asset:
+            raise StageError(5, "assets must not carry content_type: the harness derives it "
+                                "from the extension, and sending one is a 422.")
+
+    body = json.dumps({**manifest, "expected_active": expected_active}).encode("utf-8")
+    req = _control_request(base, "/v1/deployments", token, method="POST", body=body)
+    try:
+        _, payload = _control_call(req, PUBLISH_TIMEOUT, opener=opener)
+    except urllib.error.HTTPError as e:
+        raise _publish_http_error(e) from e
+    except (TimeoutError, OSError) as e:
+        # Deliberately NOT retried. The POST is not idempotent, and a retry after an
+        # ambiguous timeout races `expected_active` against a deployment its own first
+        # attempt may have created — which then 409s and looks like someone else won.
+        raise StageError(
+            5, f"the publish timed out after {PUBLISH_TIMEOUT}s ({e}). It is NOT retried "
+               "automatically, because it is not idempotent and it may already have "
+               f"succeeded. Read back GET {base}/v1/deployments/{manifest.get('name')} to "
+               "see the real state before trying again.") from e
+
+    deployment_id = (payload or {}).get("deployment_id")
+    if not isinstance(deployment_id, int) or isinstance(deployment_id, bool):
+        raise StageError(
+            5, "the harness answered 201 without an integer deployment_id, so there is "
+               "nothing to verify against. Treating this as a failure, not a pass.")
+    return deployment_id
+
+
+def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
+    try:
+        payload = json.loads(e.read().decode("utf-8"))
+    except Exception:                                    # noqa: BLE001 - body is advisory
+        payload = {}
+    if e.code == 409:
+        return StageError(
+            5, "another publisher won the race: the active deployment moved while this "
+               f"publish was in flight (it is now {payload.get('active_deployment_id')}). "
+               "Nothing was published. Re-run to publish on top of the new state.")
+    if e.code == 502:
+        # Findings A5 and S4: this is almost never transport. Stage 4a proved the
+        # PUBLISHER can see the repo; the harness fetches with DOC_HARNESS_GITHUB_TOKEN,
+        # a different identity that may not cover it at all.
+        return StageError(
+            5, "the harness could not fetch the blobs from GitHub. This is a GRANT "
+               "problem, not a network one: stage 4a proved YOUR credentials can see the "
+               "repository, but the harness fetches with DOC_HARNESS_GITHUB_TOKEN, which "
+               "is a different identity. Check that token's access to this repository.")
+    return StageError(5, f"the publish failed with HTTP {e.code}: {payload or e.reason}")
+
+
 # --- stage 1: render -----------------------------------------------------------------
 
 MAX_FETCH = 8_000_000

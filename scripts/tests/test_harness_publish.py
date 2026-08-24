@@ -281,3 +281,182 @@ class TestProvenanceFailsLocallyRatherThanAsAFourTwentyTwo:
             publish_doc.assert_head_reachable(Path("."), "origin", "main",
                                               fetch=True, runner=git)
         assert "scripted failure" in e.value.message
+
+
+# --------------------------------------------------------------------------- T3, AC1
+
+class FakeHTTP:
+    """A scriptable control API. `script` maps (method, path) to a response spec."""
+
+    def __init__(self, script=None):
+        self.script = dict(script or {})
+        self.calls = []          # (method, full_url, headers, body, timeout)
+
+    def __call__(self, req, timeout=None, **kw):
+        import io as _io
+        import json as _json
+        import urllib.error as _ue
+        method = req.get_method()
+        url = req.full_url
+        path = urllib.parse.urlsplit(url).path
+        body = req.data
+        self.calls.append((method, url, dict(req.header_items()), body, timeout))
+        spec = self.script.get((method, path))
+        if spec is None:
+            raise AssertionError(f"unscripted call: {method} {path}")
+        if isinstance(spec, Exception):
+            raise spec
+        status, payload = spec
+        raw = _json.dumps(payload).encode() if not isinstance(payload, bytes) else payload
+        if status >= 400:
+            raise _ue.HTTPError(url, status, "scripted", {}, _io.BytesIO(raw))
+        resp = _io.BytesIO(raw)
+        resp.status = status
+        resp.headers = {"Content-Type": "application/json"}
+        resp.__enter__ = lambda s=resp: s
+        resp.__exit__ = lambda *a: False
+        return resp
+
+    def header(self, i, name):
+        # urllib title-cases header names it sets via Request(headers=...).
+        got = self.calls[i][2]
+        for k, v in got.items():
+            if k.lower() == name.lower():
+                return v
+        return None
+
+
+import urllib.parse  # noqa: E402  (used by FakeHTTP above)
+
+BASE = "http://172.25.0.2:8080"
+TOKEN_ENV = {"DOC_HARNESS_CONTROL_URL": BASE, "DOC_HARNESS_PUBLISH_TOKEN": "s3cret"}
+
+
+class TestTheReadBackIsParsedBeforeAnythingIsPublished:
+
+    def test_a_first_publish_reads_null_and_passes_it_through(self):
+        http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
+                         (200, {"name": "example-design-12", "active_deployment_id": None})})
+        assert publish_doc.read_active(BASE, "example-design-12", "s3cret",
+                                       opener=http) is None
+
+    def test_an_existing_deployment_reads_its_integer_id(self):
+        """Finding M12. Every other listed case passes with a client that always sends
+        null, so the republish path is the one that actually needs proving."""
+        http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
+                         (200, {"active_deployment_id": 41})})
+        assert publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http) == 41
+
+    @pytest.mark.parametrize("bad", ["41", 41.5, True, [], {}])
+    def test_a_non_integer_active_id_refuses_before_the_post(self, bad):
+        http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
+                         (200, {"active_deployment_id": bad})})
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http)
+        assert len(http.calls) == 1, "nothing may be published after an unparseable read-back"
+
+    def test_the_read_back_carries_the_bearer(self):
+        http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
+                         (200, {"active_deployment_id": None})})
+        publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http)
+        assert http.header(0, "Authorization") == "Bearer s3cret"
+
+    def test_the_path_carries_the_v1_prefix(self):
+        """Finding M1. Revision 2 wrote /deployments, which is a 404 at
+        harness/control.py:83 — every publish would have failed at the first call."""
+        http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
+                         (200, {"active_deployment_id": None})})
+        publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http)
+        assert urllib.parse.urlsplit(http.calls[0][1]).path == "/v1/deployments/example-design-12"
+
+
+class TestThePublishCall:
+
+    MANIFEST = {"name": "example-design-12", "repo": "o/r", "commit_sha": "a" * 40,
+                "assets": [{"repo_path": "docs/p.html", "url_path": "/",
+                            "blob_id": "b" * 40, "size": 10, "sha256": "c" * 64}]}
+
+    def test_a_201_yields_the_new_deployment_id(self):
+        http = FakeHTTP({("POST", "/v1/deployments"):
+                         (201, {"deployment_id": 42, "name": "example-design-12",
+                                "commit_sha": "a" * 40, "assets": 1, "cache_warmed": True})})
+        assert publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http) == 42
+
+    def test_expected_active_is_sent_explicitly_as_null_on_a_first_publish(self):
+        import json as _json
+        http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 42})})
+        publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+        sent = _json.loads(http.calls[0][3])
+        assert "expected_active" in sent and sent["expected_active"] is None
+
+    def test_a_republish_sends_the_exact_integer_it_read_back(self):
+        import json as _json
+        http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 43})})
+        publish_doc.publish(BASE, self.MANIFEST, 41, "s3cret", opener=http)
+        assert _json.loads(http.calls[0][3])["expected_active"] == 41
+
+    def test_content_type_is_never_sent_in_the_manifest(self):
+        """The #34 boundary: the harness derives it, and sending one is a 422."""
+        import json as _json
+        http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 42})})
+        publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+        sent = _json.loads(http.calls[0][3])
+        assert all("content_type" not in a for a in sent["assets"])
+
+    def test_a_201_without_an_integer_deployment_id_is_a_failure_not_a_pass(self):
+        http = FakeHTTP({("POST", "/v1/deployments"): (201, {"name": "x"})})
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+
+    def test_a_409_is_reported_as_a_race_not_a_generic_failure(self):
+        http = FakeHTTP({("POST", "/v1/deployments"):
+                         (409, {"active_deployment_id": 44})})
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, self.MANIFEST, 41, "s3cret", opener=http)
+        assert "race" in e.value.message.lower() or "another publisher" in e.value.message.lower()
+        assert "44" in e.value.message
+
+    def test_a_502_names_the_github_grant_not_the_transport(self):
+        """Findings A5 and S4. Stage 4a exercises the PUBLISHER's git credentials; the
+        harness fetches blobs with a DIFFERENT identity. Every local check can pass while
+        the harness cannot read a single blob."""
+        http = FakeHTTP({("POST", "/v1/deployments"): (502, {"error": "upstream"})})
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+        assert "DOC_HARNESS_GITHUB_TOKEN" in e.value.message
+
+    def test_a_non_canonical_url_path_refuses_locally(self):
+        """The #34 boundary again: canonical_url_path refuses a non-canonically-encoded
+        path with a 422, so catching it here is one clear sentence instead."""
+        manifest = {**self.MANIFEST,
+                    "assets": [{**self.MANIFEST["assets"][0], "url_path": "/a b.css"}]}
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.publish(BASE, manifest, None, "s3cret", opener=FakeHTTP({}))
+
+    def test_the_post_is_never_retried_after_a_timeout(self):
+        """Not idempotent. A retry after an ambiguous timeout races expected_active against
+        a deployment its own first attempt may have created."""
+        import socket
+        http = FakeHTTP({("POST", "/v1/deployments"): socket.timeout("timed out")})
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+        assert len(http.calls) == 1
+        assert "not retried" in e.value.message.lower() or "retry" in e.value.message.lower()
+
+
+class TestTheBoundedCalls:
+    """Finding N8. The client is urllib.request.urlopen, which takes ONE per-socket
+    deadline — not separate connect and read deadlines. The contract is what it can
+    actually enforce, and the tests pin the values that reach it."""
+
+    def test_the_read_back_and_the_publish_carry_different_deadlines(self):
+        http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"active_deployment_id": None}),
+                         ("POST", "/v1/deployments"): (201, {"deployment_id": 1})})
+        publish_doc.read_active(BASE, "n", "s3cret", opener=http)
+        publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "s3cret", opener=http)
+        assert http.calls[0][4] == publish_doc.CONTROL_READ_TIMEOUT
+        assert http.calls[1][4] == publish_doc.PUBLISH_TIMEOUT
+
+    def test_the_publish_deadline_is_the_longer_one(self):
+        """The harness fetches every blob from GitHub inside the POST."""
+        assert publish_doc.PUBLISH_TIMEOUT > publish_doc.CONTROL_READ_TIMEOUT
