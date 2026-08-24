@@ -745,3 +745,62 @@ class TestTheRedirectContract:
         """urlopen follows a 302 silently, which would send Access credentials to the
         login host. The build must install a non-following handler."""
         assert publish_doc.NO_REDIRECTS is not None
+
+
+# --------------------------------------------------------------------------- T5, AC3
+
+class TestTheNameCapIsTheHarnessLimitNotVercels:
+    """AC3. The 35-character cap existed because Vercel truncates a .vercel.app label at
+    35 and the conventional URL then 404s forever. The harness has no such truncation: its
+    limit is the DNS label limit itself, 63 (harness/routing.py:49-56)."""
+
+    def test_the_cap_is_now_sixty_three(self):
+        assert publish_doc.MAX_ALIAS_LABEL == 63
+
+    def test_the_cap_agrees_with_the_harness_label_grammar(self):
+        """A publisher cap looser than the harness's would publish a name routing can
+        never address; tighter would refuse names that work."""
+        from harness.routing import is_valid_label
+        assert is_valid_label("a" * publish_doc.MAX_ALIAS_LABEL)
+        assert not is_valid_label("a" * (publish_doc.MAX_ALIAS_LABEL + 1))
+
+    def test_a_forty_character_name_now_warns_instead_of_refusing(self, tmp_path):
+        """It used to be a hard stage-2 refusal. Under the harness it is publishable."""
+        notes = publish_doc.check_name_length("x" * 40)
+        assert notes and any("40" in n for n in notes)
+
+    def test_a_short_name_says_nothing(self):
+        assert publish_doc.check_name_length("example-design-12") == []
+
+    def test_a_name_over_the_dns_label_limit_still_refuses(self):
+        """63 is the DNS limit, not a preference. The harness would refuse it, so refusing
+        here turns a 422 into a sentence."""
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.check_name_length("y" * 64)
+
+
+class TestEverySameOriginResourceIsDeclared:
+    """AC3. `stage_assets` already refuses a reference it cannot ship. This is the other
+    half: a resource that WAS staged but never reached the manifest would 404 on a
+    deployment that otherwise activated cleanly."""
+
+    def test_a_staged_asset_missing_from_the_manifest_is_refused(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_manifest_covers(["style.css", "diagram.png"],
+                                               ["/style.css"])
+        assert "diagram.png" in e.value.message
+
+    def test_full_coverage_passes(self):
+        publish_doc.assert_manifest_covers(["style.css", "diagram.png"],
+                                           ["/style.css", "/diagram.png"])
+
+    def test_no_assets_at_all_is_fine(self):
+        publish_doc.assert_manifest_covers([], [])
+
+    def test_a_manifest_entry_with_no_staged_file_is_also_refused(self):
+        """The reverse direction: declaring a blob nobody staged means the harness fetches
+        something the render never produced."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_manifest_covers(["style.css"],
+                                               ["/style.css", "/ghost.css"])
+        assert "ghost.css" in e.value.message

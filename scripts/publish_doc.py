@@ -147,13 +147,15 @@ WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic pro
 INDEX_PROJECT = "docs-index"
 MAX_NAME = 100
 
-# Vercel cuts the auto-assigned `<name>.vercel.app` label at 35 characters and strips a
-# trailing hyphen left by the cut (#23; measured 2026-08-13 across the 20 live projects:
-# longest intact label 33, every truncated label 34-35, shortest truncated name 36 — and
-# confirmed on the 2026-08-12 deploy where a 41-char name aliased to a 35-char label).
-# An over-cap name deploys FINE and then 404s at its conventional URL forever, so stage 2
-# refuses it: refusing before the deploy is cheaper than stage 6 discovering it after.
-MAX_ALIAS_LABEL = 35
+# #36 AC3: 35 -> 63. The old cap was VERCEL's, not a naming preference — Vercel cuts the
+# auto-assigned `<name>.vercel.app` label at 35 and strips a trailing hyphen left by the
+# cut (#23; measured 2026-08-13 across the 20 live projects), so an over-cap name deployed
+# fine and then 404d at its conventional URL forever. The harness truncates nothing. Its
+# limit is the DNS label limit itself, enforced by `harness/routing.py:is_valid_label`.
+#
+# So the refusal moves out to 63, where it is still a refusal because the harness would
+# refuse too, and 36-63 becomes a WARNING: publishable, just long.
+MAX_ALIAS_LABEL = 63
 
 # Local plumbing, so a hung git cannot hang a publish. Generous: a first fetch on a big
 # repository is genuinely slow.
@@ -938,14 +940,56 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
     # The alias cap comes AFTER name validity so the two limits stay distinguishable: an
     # unusable name gets the message above; a usable one that cannot round-trip to its
     # own `.vercel.app` domain gets this one (#23).
-    if len(name) > MAX_ALIAS_LABEL:
-        raise StageError(2, f"the derived name {name!r} is {len(name)} characters, over "
-                            f"the {MAX_ALIAS_LABEL}-char cap Vercel puts on a "
-                            f".vercel.app label. A longer name deploys, but its domain "
-                            f"gets TRUNCATED and the conventional URL 404s forever "
-                            f"(#23, measured live). Shorten --ref by at least "
-                            f"{len(name) - MAX_ALIAS_LABEL} character(s).")
+    check_name_length(name)
     return name
+
+
+# The length at which a name is worth mentioning. Below the hard limit, above comfortable.
+_NAME_WARN_AT = 35
+
+
+def check_name_length(name: str) -> list[str]:
+    """Refuse past the DNS label limit; WARN between 36 and 63. #36 AC3.
+
+    Returns the notes worth printing, so the caller prints them rather than this deciding
+    what a warning looks like.
+    """
+    if len(name) > MAX_ALIAS_LABEL:
+        raise StageError(
+            2, f"the derived name {name!r} is {len(name)} characters, over the "
+               f"{MAX_ALIAS_LABEL}-character DNS label limit. That is not a preference: "
+               "harness/routing.py:is_valid_label refuses it, so the deployment could "
+               f"never be addressed. Shorten --ref by at least "
+               f"{len(name) - MAX_ALIAS_LABEL} character(s).")
+    if len(name) > _NAME_WARN_AT:
+        return [f"note: the derived name is {len(name)} characters. That publishes fine on "
+                f"the harness, which truncates nothing — it would have been refused under "
+                f"the old {_NAME_WARN_AT}-character Vercel cap."]
+    return []
+
+
+def assert_manifest_covers(staged: list[str], url_paths: list[str]) -> None:
+    """Every staged resource is declared, and every declaration was staged. #36 AC3.
+
+    `stage_assets` already refuses a reference it cannot ship. This is the other half, and
+    it runs in both directions deliberately:
+
+    * staged but undeclared -> the harness never fetches it, and the page 404s a resource
+      on a deployment that otherwise activated cleanly;
+    * declared but unstaged -> the harness fetches a blob the render never produced.
+    """
+    want = {p.lstrip("/") for p in url_paths}
+    have = {s.lstrip("/") for s in staged}
+    missing = sorted(have - want)
+    if missing:
+        raise StageError(
+            3, "the page references resources that the manifest does not declare, so they "
+               f"would 404 on a live deployment: {', '.join(missing)}")
+    extra = sorted(want - have)
+    if extra:
+        raise StageError(
+            3, "the manifest declares resources the render did not produce, so the harness "
+               f"would fetch bytes nobody staged: {', '.join(extra)}")
 
 
 # --- stage 3: the lint gate ----------------------------------------------------------
