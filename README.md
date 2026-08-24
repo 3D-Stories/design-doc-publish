@@ -389,6 +389,27 @@ a server. `tests/harness/test_production_server.py` is the deliberate exception:
 entry point and drives raw sockets, and **skips visibly** when waitress is absent rather than
 quietly reporting coverage that did not run.
 
+## Migrating the old Vercel pages (#37)
+
+`scripts/backfill_vercel.py` moves documents that Vercel serves today onto the harness, one row at
+a time, without deleting anything from Vercel. Five phases, and the first three touch no registry:
+
+```bash
+python3 scripts/backfill_vercel.py --run-dir <run> inventory   # walk the Vercel listing, bounded
+python3 scripts/backfill_vercel.py --run-dir <run> map          # identify each page BY ITS BYTES
+#   ... then REVIEW the run's mapping.json by hand. That review is the point of the design.
+python3 scripts/backfill_vercel.py --run-dir <run> stage --execute <mapping digest>
+python3 scripts/backfill_vercel.py --run-dir <run> activate --execute <activation digest>
+python3 scripts/backfill_vercel.py --run-dir <run> report
+```
+
+Three things worth knowing before you run it. A page is identified by **hashing its live bytes
+against git history**, never by parsing its project name — a name can parse to a real but wrong
+project. The publish target is the **current** committed page, not the historical one that matches
+Vercel, so a drifted document is flagged rather than migrated stale. And `activate` is the one
+irreversible step: the control API has no deactivate, so undo is a forward repair. The runbook
+carries the detail: [`docs/runbooks/2026-08-24-37-vercel-backfill.md`](docs/runbooks/2026-08-24-37-vercel-backfill.md).
+
 ## Removing it
 
 ```bash
