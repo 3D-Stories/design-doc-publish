@@ -381,6 +381,18 @@ def candidate_paths(repo, ref: str, *, runner=None) -> list:
     return out
 
 
+def is_git_repository(path) -> bool:
+    """Is this a git repository at all?
+
+    A plain directory cannot hold a committed blob, so failing to search it says nothing about
+    uniqueness. Conflating "not a repository" with "a repository I could not search" made one stray
+    directory in the workspace block every row — measured on the live run.
+    """
+    proc = subprocess.run(["git", "-C", str(path), "rev-parse", "--git-dir"],
+                          capture_output=True, text=True)
+    return proc.returncode == 0
+
+
 def blob_present(repo, *, sha256_hex: str, size: int) -> bool:
     """Is a blob with these exact bytes anywhere in this repository's object store?
 
@@ -390,9 +402,15 @@ def blob_present(repo, *, sha256_hex: str, size: int) -> bool:
     differently named path in another repository were invisible and a non-unique match was reported
     as unique. A Critical-adjacent High, and it was right.
     """
+    # `--batch-check=<format>` with the EQUALS SIGN. Passing the format as a separate argument
+    # fails with "batch modes take no arguments" in every repository, which is exactly what
+    # happened on the live run: essentially every workspace entry came back unsearchable and every
+    # row became `mapping_ambiguous` for a reason that was entirely my own bug. The unit test did
+    # not catch it because it asserted the ambiguous OUTCOME, which the failure also produced.
     proc = subprocess.run(
-        ["git", "-C", str(repo), "cat-file", "--batch-all-objects", "--batch-check",
-         "%(objectname) %(objecttype) %(objectsize)"], capture_output=True, text=True)
+        ["git", "-C", str(repo), "cat-file", "--batch-all-objects",
+         "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+        capture_output=True, text=True)
     if proc.returncode != 0:
         raise RowError("uncommitted_or_unreachable",
                        f"git cat-file --batch-all-objects failed in {repo}: "
@@ -572,9 +590,13 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
             # would let the same bytes sit unnoticed in another repository and report a confident
             # unique answer. That was a confirmed review finding, not a hypothetical.
             refs = [r for _, _, r in row["splits"]] or [str(entry.get("name") or "")]
-            candidates, capped, unsearchable = [], False, []
+            candidates, capped, unsearchable, not_repos = [], False, [], []
+            row["unsearchable"], row["not_repositories"] = unsearchable, not_repos
             for project in dict.fromkeys(list(projects)):
                 repo = projects[project]
+                if not is_git_repository(repo):
+                    not_repos.append(project)
+                    continue
                 try:
                     for ref in dict.fromkeys(refs):
                         found, hit = history_candidates(repo, ref=ref, target=live,
@@ -613,6 +635,12 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
             for project in dict.fromkeys(list(projects)):
                 if project == match["project"]:
                     continue
+                if not is_git_repository(projects[project]):
+                    # Same rule as the search loop above: a plain directory holds no blobs, so its
+                    # unsearchability is not evidence about uniqueness.
+                    if project not in not_repos:
+                        not_repos.append(project)
+                    continue
                 try:
                     if blob_present(projects[project], sha256_hex=match["sha256"],
                                     size=len(live)):
@@ -632,6 +660,7 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
                                "searched at all — " + ", ".join(sorted(unsearchable))
                                + " — so the same bytes may sit in one of them")
             row["unsearchable"] = unsearchable
+            row["not_repositories"] = not_repos
             row["provenance"] = {k: match[k] for k in
                                  ("project", "commit", "repo_path", "blob_id", "sha256")}
             row["target"] = _target_at_tip(projects[match["project"]], match["repo_path"],

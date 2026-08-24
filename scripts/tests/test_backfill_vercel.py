@@ -411,6 +411,37 @@ class MapTests(unittest.TestCase):
         self.assertEqual("proj-plan-7", rows[0]["inventory"]["name"])
         self.assertEqual("https://proj-plan-7.vercel.app/", rows[0]["inventory"]["url"])
 
+    def test_blob_present_finds_a_blob_that_is_there_and_misses_one_that_is_not(self):
+        """The MECHANISM, tested directly.
+
+        The collision test below asserted only the ambiguous outcome, and a completely broken
+        `blob_present` produced that same outcome by failing every repository. So the mechanism
+        gets its own test: a broken one must not be able to pass this.
+        """
+        repo = self.tmp / "direct"
+        make_repo(repo, {"docs/x.html": "EXACT BYTES"})
+        import hashlib as _h
+        self.assertTrue(bf.blob_present(repo, sha256_hex=_h.sha256(b"EXACT BYTES").hexdigest(),
+                                        size=len(b"EXACT BYTES")))
+        self.assertFalse(bf.blob_present(repo, sha256_hex=_h.sha256(b"OTHER").hexdigest(),
+                                         size=len(b"OTHER")))
+
+    def test_a_plain_directory_is_not_treated_as_an_unsearchable_repository(self):
+        """It cannot hold a committed blob, so it says NOTHING about uniqueness."""
+        good = self.tmp / "proj"
+        make_repo(good, {"docs/planning/7-x.html": "B", "docs/planning/7-x.md": "# b"})
+        plain = self.tmp / "just-a-folder"
+        plain.mkdir()
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"B")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": good, "folder": plain}), opener=http,
+            run=self.run, fetch_remote=False)
+        self.assertIsNone(rows[0]["reason"], rows[0])
+        self.assertIn("folder", rows[0]["not_repositories"])
+
     def test_identical_bytes_at_a_DIFFERENTLY_NAMED_path_elsewhere_are_still_ambiguous(self):
         """The collision check must not depend on the ref narrowing, or a non-unique match reads
         as unique. It runs over every blob in every repository, by size then hash."""
@@ -426,6 +457,9 @@ class MapTests(unittest.TestCase):
             workspace_file=self._workspace({"proj": one, "other": two}), opener=http,
             run=self.run, fetch_remote=False)
         self.assertEqual("mapping_ambiguous", rows[0]["reason"])
+        # The DETAIL must name the collision, not merely say "unproven" — otherwise a broken
+        # collision check passes this test by failing every repository instead.
+        self.assertIn("also committed in", rows[0]["detail"])
         self.assertIn("other", rows[0]["detail"])
 
     def test_identical_bytes_in_two_repositories_are_ambiguous_even_when_the_name_narrows(self):
@@ -520,12 +554,11 @@ class MapTests(unittest.TestCase):
                              "updatedAt": 1}]),
             workspace_file=self._workspace({"proj": good, "junk": broken}), opener=http,
             run=self.run, fetch_remote=False)
-        # It is NOT charged to the row as a reachability problem — that was the bug. And it is not
-        # waved through either: an unsearchable repository means uniqueness is UNPROVEN, so the
-        # honest outcome is ambiguous, naming the entry a human has to deal with.
-        self.assertEqual("mapping_ambiguous", rows[0]["reason"])
-        self.assertIn("junk", rows[0]["detail"])
-        self.assertNotIn("uncommitted", rows[0]["reason"])
+        # It is NOT charged to the row as a reachability problem — that was the bug. `broken` here
+        # is a plain directory, which cannot hold a committed blob, so it is excluded from the
+        # uniqueness universe and recorded rather than blocking the row.
+        self.assertIsNone(rows[0]["reason"], rows[0])
+        self.assertIn("junk", rows[0]["not_repositories"])
 
     def test_the_mapping_is_persisted_with_its_digest(self):
         repo = self.tmp / "proj"
