@@ -12,7 +12,7 @@ no JavaScript bundle, and nothing fetched at runtime.
 
 <p align="center">
   <img src="https://img.shields.io/badge/licence-MIT-blue?style=flat" alt="MIT licence">
-  <img src="https://img.shields.io/badge/tests-2431_passed-2da44e?style=flat" alt="2431 tests passing">
+  <img src="https://img.shields.io/badge/tests-2943_passed-2da44e?style=flat" alt="2943 tests passing">
   <img src="https://img.shields.io/badge/python-3.12-blue?style=flat" alt="Python 3.12">
   <img src="https://img.shields.io/badge/dependencies-stdlib_only-2da44e?style=flat" alt="Standard library only">
   <img src="https://img.shields.io/badge/document_types-11-blue?style=flat" alt="11 document types">
@@ -293,7 +293,7 @@ pip install -r requirements-dev.txt
 pytest scripts/tests/ tests/ -q
 ```
 
-Expected: **2494 passed, 7 skipped**, exit 0.
+Expected: **2943 passed, 8 skipped**, exit 0.
 
 Several of those skips are deliberate and explain themselves under `pytest -rs`. Use `pytest`, not
 `python3 -m pytest` — on the machine this package came from, the interpreter cannot import pytest
