@@ -1604,7 +1604,7 @@ def build_parser() -> argparse.ArgumentParser:
     st = sub.add_parser("stage", help="compare, then publish under a staging label and verify")
     st.add_argument("--execute", default=None, help="the mapping digest, required to write")
     st.add_argument("--control-base", default=None, help="http://<ip>:<port> of the control API")
-    st.add_argument("--zone", default="3dstories.ca")
+    st.add_argument("--zone", default="docs.3dstories.ca")
     st.add_argument("--limit", type=int, default=None, help="bound one pass")
     st.add_argument("--run-id", default=None,
                     help="the run id baked into the staging label; defaults to the run dir's name")
@@ -1616,7 +1616,7 @@ def build_parser() -> argparse.ArgumentParser:
     act = sub.add_parser("activate", help="CAS-publish the production name and verify it")
     act.add_argument("--execute", default=None, help="the activation-plan digest")
     act.add_argument("--control-base", default=None)
-    act.add_argument("--zone", default="3dstories.ca")
+    act.add_argument("--zone", default="docs.3dstories.ca")
     act.add_argument("--limit", type=int, default=None)
 
     rep = sub.add_parser("report",

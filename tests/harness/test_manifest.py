@@ -5,6 +5,8 @@ plus the config, which is what makes the whole publish-refusal surface cheap to 
 """
 import pytest
 
+from harness.routing import RESERVED_LABELS
+
 from harness.config import load_config
 from harness.manifest import ManifestError, parse_manifest
 
@@ -187,7 +189,7 @@ class TestDeploymentNameValidation:
             parse_manifest(payload(name=bad), CFG)
         assert "name" in str(exc.value)
 
-    @pytest.mark.parametrize("reserved", ["docs-control", "docs-index"])
+    @pytest.mark.parametrize("reserved", sorted(RESERVED_LABELS))
     def test_a_reserved_name_is_refused(self, reserved):
         with pytest.raises(ManifestError) as exc:
             parse_manifest(payload(name=reserved), CFG)

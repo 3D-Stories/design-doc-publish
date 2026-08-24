@@ -55,7 +55,7 @@ def payload(expected_active=None):
 
 def post(app, body_dict):
     raw = json.dumps(body_dict).encode()
-    env = {"HTTP_HOST": "docs-control.3dstories.ca", "REQUEST_METHOD": "POST",
+    env = {"HTTP_HOST": "docs-control." + CFG.zone, "REQUEST_METHOD": "POST",
            "PATH_INFO": "/v1/deployments", "QUERY_STRING": "",
            "CONTENT_LENGTH": str(len(raw)), "wsgi.input": io.BytesIO(raw),
            "wsgi.errors": io.StringIO(), "HTTP_AUTHORIZATION": "Bearer s3cr3t"}

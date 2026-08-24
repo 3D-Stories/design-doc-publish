@@ -93,7 +93,7 @@ def _bind(env: Mapping[str, str]) -> str:
 
 def load_config(env: Mapping[str, str]) -> HarnessConfig:
     """Build the config from an environment mapping, or raise `ConfigError` naming the variable."""
-    zone = env.get("DOC_HARNESS_ZONE", "3dstories.ca").strip().strip(".").lower()
+    zone = env.get("DOC_HARNESS_ZONE", "docs.3dstories.ca").strip().strip(".").lower()
     if not zone:
         raise ConfigError("DOC_HARNESS_ZONE must not be empty")
 

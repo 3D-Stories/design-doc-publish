@@ -867,7 +867,7 @@ def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
 # read from `DOC_HARNESS_ZONE`. Validating the destination against a value drawn from the
 # same mutable environment as the destination is not validation: whoever can set
 # `DOC_HARNESS_PUBLIC_BASE` can set the zone to match it and pass.
-PINNED_ZONE = "3dstories.ca"
+PINNED_ZONE = "docs.3dstories.ca"
 
 # The committed allowlist for the PUBLISH BEARER. Loopback and the docker bridge ranges are
 # the operations path measured on the harness host; the one public origin is the control

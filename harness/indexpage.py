@@ -79,7 +79,7 @@ def _rows_for(snapshot: dict, bi, zone: str) -> list[dict]:
     return rows
 
 
-def render_index(registry: Registry, *, zone: str = "3dstories.ca",
+def render_index(registry: Registry, *, zone: str = "docs.3dstories.ca",
                  if_none_match: str | None = None) -> Response:
     # ONE snapshot, so the ETag and the body cannot describe different generations
     # (Step 11 finding F4). The 304 decision is made from the same read as the body.
