@@ -279,8 +279,11 @@ New directory. Carries, each with a one-line undo:
 
 - **Step 0, the zone inventory** — added in revision 3, and placed first because steps 2 and 4
   are both unanswerable without it.
-- the dashboard steps for the tunnel, and for the Access application **on exact hosts, with an
-  explicit CAUTION against the `*` that caused the live regression**.
+- the dashboard steps for the tunnel, and for the Access application — which **stops at the
+  scope decision rather than prescribing either branch**, because one of them is an
+  authentication bypass and the other amends a criterion.
+- the ordering the review corrected: the service token is created BEFORE the policy that selects
+  it, and the stack is brought up and its secret proven BEFORE any production DNS write.
 - the ingress specification A2 would have committed as a file, including that the service URL is
   `harness:8080` and never `localhost:8080`.
 - the DNS record as an exact API call, **plus the reconciliation rule** — create, no-op on an
@@ -473,7 +476,7 @@ and S2 for different findings.
 | --- | --- | --- |
 | 1 | `compose.yaml` cloudflared service; ingress specified in the runbook | `test_entrypoint.py` for the service; for the ingress, the live proof — **and its catch-all half needs its own negative request**, see below |
 | 2 | the wildcard CNAME, created after BOTH the zone inventory and the write spike pass | the record contract asserted field-by-field, then `dig` against two resolvers, then the live fetch |
-| 3 | Access application on **exact hosts**, created by the owner in the dashboard | an anonymous fetch of **`docs-index.3dstories.ca` and `docs-control.3dstories.ca` by name** getting the login page, AND `www.3dstories.ca` answering WITHOUT one |
+| 3 | Access application, scope **pending the owner's Option A / Option B decision** — see the fork above | an anonymous fetch of each protected host **by name** getting the login page; `www.3dstories.ca` proving RESTORATION, not merely the absence of Access; and an authenticated identity outside every include rule being DENIED |
 | 4 | the live proof itself | a service-token request returning 200 plus the `X-Doc-Deployment` echo |
 | 5 | `docs/runbooks/2026-08-24-35-harness-go-live.md` | reading it; secrets by NAME only, one undo per step |
 
@@ -523,7 +526,7 @@ No component here serves no criterion, so revision 2 adds no scope.
 | Addition | Serves |
 | --- | --- |
 | the live-regression section and its three measured probes | AC 3 — names a criterion violation that is already in production |
-| the Access layout moved from wildcard to exact hosts | AC 3 — this is AC 3's own conditional branch, taken correctly this time |
+| the Access layout raised as an explicit owner fork, not silently decided | AC 3 — revision 3 picked exact hosts and that branch is fail-open; revision 4 refuses to pick |
 | the `www.3dstories.ca`-answers-without-Access assertion | AC 3 — the check that distinguishes the intended outcome from the regression |
 | `docs-index` and `docs-control` named in the AC 3 proof | AC 3 — the criterion names them, so the proof must too |
 | the zone inventory as a written precondition | AC 2 and AC 3 — both criteria gate on it and neither had it |

@@ -68,12 +68,12 @@ outcome is to report AC 2 blocked rather than to route around the refusal.
 1. Open `one.dash.cloudflare.com` and select the account.
 2. **Networks → Tunnels → Create a tunnel**, connector **Cloudflared**, name `doc-harness`.
 3. Save. The install screen shows a command containing `--token <value>`. Copy only that token.
-   Do not run the command it prints — cloudflared runs as a container here, from step 3.
+   Do not run the command it prints — cloudflared runs as a container here, from step 5.
 4. Open the tunnel's **Published application route** and add one route:
 
    | Field | Value |
    | --- | --- |
-   | Subdomain | `*` |
+   | Subdomain | `*` (see the CAUTION in step 3 before you commit to this) |
    | Domain | `3dstories.ca` |
    | Path | leave empty (match all paths) |
    | Service Type | `HTTP` |
@@ -84,44 +84,23 @@ outcome is to report AC 2 blocked rather than to route around the refusal.
    which is how one container addresses another on the same network. The dashboard's placeholder
    is wrong for this topology.
 
-5. Add a second, lower-priority catch-all route returning a 404 for anything the wildcard does not
-   cover, per AC 1.
+5. Add a second, lower-priority catch-all route returning a 404 for anything the wildcard does
+   not cover, per AC 1.
 
 **Undo:** delete the tunnel in the same screen. That also removes its routes.
 
 **Known trap, measured:** the route screen says "DNS will be automatically configured." On the
 2026-08-24 run it did not create a wildcard record — the zone held 23 records and zero wildcards
-afterwards. Do not assume DNS exists because that sentence is on screen. Step 4 creates it, and
-step 5 verifies it.
+afterwards. Do not assume DNS exists because that sentence is on screen. Step 6 creates it, and
+step 7 verifies it.
 
-## Step 2 — the Access application and its policies (dashboard)
+## Step 2 — the service token (dashboard) — BEFORE the policy that uses it
 
-6. **Access → Applications → Add an application → Self-hosted**, name `doc-harness`.
-7. Public hostname: **exact hosts, never `*`.** Add `docs-index.3dstories.ca`,
-   `docs-control.3dstories.ca`, and one entry per published doc name.
+Ordering matters and an earlier draft got it wrong: the `automation` policy in step 3 selects
+this token, so it has to exist first.
 
-   **CAUTION: do not use subdomain `*` here.** AC 3 permits a single wildcard application only
-   when nothing else on the zone is proxied on a subdomain. Step 0 answers that, and on this zone
-   the answer is no — `www` is proxied. A wildcard application captures it and serves a login page
-   in front of a site that has nothing to do with this project. That is not hypothetical: it
-   happened on 2026-08-24 and the response header `cf-access-domain: *.3dstories.ca` is what
-   identified it.
-
-   **If the application already exists with `*`,** edit its public hostname to the exact list
-   above. Verify with `curl -s -o /dev/null -w '%{http_code}' https://www.3dstories.ca/` — a `302`
-   to `cloudflareaccess.com` means it is still captured.
-
-8. Policy `owner`: action **Allow**, include **Emails** → the owner's address.
-9. Policy `automation`: action **Service Auth**, include **Service Token** → the token from step 10.
-
-**Undo:** delete the application. Its policies go with it. Deleting the application removes
-authentication from those hostnames, so do it only together with step 1's undo or the harness is
-briefly exposed.
-
-## Step 3 — the service token (dashboard)
-
-10. **Access → Service Auth → Service Tokens → Create Service Token**, name
-    `doc-harness-publisher`. Copy the Client ID and the Client Secret; the secret is shown once.
+6. **Access → Service Auth → Service Tokens → Create Service Token**, name
+   `doc-harness-publisher`. Copy the Client ID and the Client Secret; the secret is shown once.
 
 The two values are consumed as request headers `CF-Access-Client-Id` and
 `CF-Access-Client-Secret`. **#36 consumes the same two** in `verify_live`, so they are not
@@ -129,24 +108,147 @@ single-use to this issue.
 
 **Undo:** revoke the service token; the `automation` policy then denies everything.
 
-## Step 4 — the three secrets on the host, and the wildcard record
+## Step 3 — the Access application — STOP, this needs an owner decision first
 
-11. Save the three values on `10.0.17.205`, one per file, mode 600:
+> **WARNING — do not improvise the hostname here.** Both available layouts are wrong in
+> different ways, and the choice between them amends an acceptance criterion, so it is the
+> owner's and not the operator's.
+>
+> | | Option A — narrow the wildcard | Option B — exact hosts |
+> | --- | --- | --- |
+> | Access hostname | `*.docs.3dstories.ca` | `docs-index`, `docs-control`, one per doc |
+> | DNS record (step 6) | `*.docs` | `*` as AC 2 says today |
+> | Can it capture `www`? | **No, structurally** | No, while the list stays right |
+> | A newly published doc is | protected automatically | **PUBLIC until someone adds an entry** |
+> | Cost | **amends AC 2's text** | a permanent maintenance duty on a security boundary |
+>
+> **Option A is the recommendation.** Option B's row in bold is an authentication bypass, not an
+> inconvenience: the tunnel route is a wildcard, so a new document host is servable the moment it
+> is published, and its Access entry is added by a human afterwards.
+>
+> **Do not proceed with Option B unless the Access host lifecycle contract in the planning
+> document is implemented first** — the entry is created and VERIFIED before the host becomes
+> servable, and publication FAILS if it cannot be. Without that contract, Option B is not an
+> acceptable configuration.
+
+7. **Access → Applications → Add an application → Self-hosted**, name `doc-harness`.
+8. Public hostname: whichever the owner chose above. If the application already exists with a
+   bare `*` on the apex zone, this is the step that fixes the live regression — narrowing it is
+   the whole point.
+9. Policy `owner`: action **Allow**, include **Emails** → the owner's address.
+10. Policy `automation`: action **Service Auth**, include **Service Token** → the token from
+    step 6.
+11. **Record both policies' action, include rule and precedence** in your notes. Step 7's
+    negative-identity check cannot be constructed without them.
+
+**Undo:** delete the application. Its policies go with it. Deleting the application removes
+authentication from those hostnames, so do it only together with step 1's undo or the harness is
+briefly exposed.
+
+**Verify the edit took, because this run's credential cannot read it back.** `access/apps`
+returns error 10000, so nothing here can be confirmed by API. After saving, re-open the
+application and confirm every intended host is listed and both policies are still attached.
+
+## Step 4 — the three secrets on the host
+
+12. Save the three values on `10.0.17.205`, one per file, mode 600:
 
     | File | Holds |
     | --- | --- |
-    | `~/.secrets/doc-harness-tunnel-token` | the tunnel token from step 3 |
-    | `~/.secrets/doc-harness-access-client-id` | the Access client id from step 10 |
-    | `~/.secrets/doc-harness-access-client-secret` | the Access client secret from step 10 |
+    | `~/.secrets/doc-harness-tunnel-token` | the tunnel token copied in step 1, item 3 |
+    | `~/.secrets/doc-harness-access-client-id` | the Access client id from step 6 |
+    | `~/.secrets/doc-harness-access-client-secret` | the Access client secret from step 6 |
 
-12. Point compose at the tunnel token by path, so no home directory is baked into a tracked file:
+13. Point compose at the tunnel token by path, so no home directory is baked into a tracked file:
 
     ```bash
     export DOC_HARNESS_TUNNEL_TOKEN_FILE=~/.secrets/doc-harness-tunnel-token
     ```
 
-13. Create the wildcard record. The tunnel id is the `t` field of the tunnel token, so it needs no
-    account-scoped API call — decode the token locally rather than looking the tunnel up:
+**Undo:** delete the three files.
+
+## Step 5 — bring the stack up and prove the secret works, BEFORE touching DNS
+
+This step moved ahead of the DNS write deliberately. An unreadable secret discovered here costs
+nothing; discovered after a production DNS record exists, it costs a rollback.
+
+14. `docker compose up -d` on `10.0.17.205`.
+15. Confirm the harness reports healthy before cloudflared advertises a route. cloudflared uses
+    `depends_on: service_healthy`, so `docker compose ps` showing cloudflared started IS that
+    confirmation.
+16. **The real-secret smoke test.** All three must hold:
+
+    ```bash
+    docker compose logs cloudflared | grep -iE "token|unauthor|error" | head
+    docker inspect "$(docker compose ps -q cloudflared)" | grep -c "$(cat ~/.secrets/doc-harness-tunnel-token)" || echo "token absent from inspect: good"
+    docker compose config | grep -c "$(cat ~/.secrets/doc-harness-tunnel-token)" || echo "token absent from rendered config: good"
+    ```
+
+    Require: cloudflared running with no token-read error, and **zero** matches in both the
+    container inspection and the rendered config. The tunnel also flips from `Inactive` to
+    `Active` in the dashboard once the connector attaches — a remotely-managed tunnel is
+    `Inactive` until then, so that transition is a positive signal rather than a fault clearing.
+
+    **If any of the three fails, ABORT. Do not continue to step 6.**
+
+**Undo:** `docker compose down` (add `-v` only if you also mean to discard the cache volume).
+
+## Step 6 — the wildcard DNS record, spike first
+
+**Read the whole step before running anything.** The production write is the LAST command here,
+not the first.
+
+17. **Reconcile any leftover spike record**, then run the disposable write spike. A successful
+    `GET` proves read, not write, and this is the only thing that proves write:
+
+    ```bash
+    ssh root@10.0.17.201 'bash -s' <<'REMOTE'
+    set -eu
+    CF_TOKEN=$(docker exec traefik printenv CF_DNS_API_TOKEN)
+    [ -z "$CF_TOKEN" ] && { echo "ABORT: token empty"; exit 1; }
+    ZONE=ebad2c7aa7b0a8151b2a1f7fce5a5dc6
+    API="https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records"
+    AUTH="Authorization: Bearer $CF_TOKEN"
+
+    # leftover spike from a previous aborted run?
+    OLD=$(curl -s "$API?type=TXT&name=_doc-harness-spike.3dstories.ca" -H "$AUTH" \
+          | python3 -c "import json,sys; r=json.load(sys.stdin).get('result') or []; print(r[0]['id'] if r else '')")
+    [ -n "$OLD" ] && curl -s -X DELETE "$API/$OLD" -H "$AUTH" >/dev/null && echo "reconciled leftover spike $OLD"
+
+    # the spike itself
+    ID=$(curl -s -X POST "$API" -H "$AUTH" -H "Content-Type: application/json" \
+         --data '{"type":"TXT","name":"_doc-harness-spike","content":"spike","ttl":60}' \
+         | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['result']['id'] if d.get('success') else '')")
+    [ -z "$ID" ] && { echo "ABORT: write spike failed — AC 2 is BLOCKED"; exit 1; }
+    curl -s -X DELETE "$API/$ID" -H "$AUTH" \
+      | python3 -c "import json,sys; sys.exit(0 if json.load(sys.stdin).get('success') else 1)" \
+      || { echo "ABORT: spike cleanup FAILED. Delete record id $ID by hand before retrying."; exit 1; }
+    echo "write spike passed and cleaned up"
+    REMOTE
+    ```
+
+    **If the spike aborts, stop. AC 2 is blocked and no production record is created.**
+
+18. **Look up `*` and decide which case you are in**, before writing anything:
+
+    | Case | Do this |
+    | --- | --- |
+    | no record at `*` | create it (step 19) |
+    | a record at `*` matching every field below | **no-op success** — skip step 19 |
+    | a record at `*` differing in any field | **ABORT** and report the difference |
+
+    | Field | Value |
+    | --- | --- |
+    | `type` | `CNAME` |
+    | `name` | `*` (or `*.docs` under Option A) |
+    | `content` | `85f6194f-3347-44b4-84c3-3bbcfbb076bb.cfargotunnel.com` |
+    | `proxied` | `true` |
+    | `ttl` | `1` |
+
+    The no-op case is not pedantry: a `POST` that times out may well have landed, and a blind
+    retry double-creates.
+
+19. **Only now** create the record, and assert the fields Cloudflare echoes back:
 
     ```bash
     ssh root@10.0.17.201 'bash -s' <<'REMOTE'
@@ -154,59 +256,33 @@ single-use to this issue.
     [ -z "$CF_TOKEN" ] && { echo "ABORT: token empty"; exit 1; }
     curl -s -X POST "https://api.cloudflare.com/client/v4/zones/ebad2c7aa7b0a8151b2a1f7fce5a5dc6/dns_records" \
       -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
-      --data '{"type":"CNAME","name":"*","content":"<TUNNEL-ID>.cfargotunnel.com",
-               "proxied":true,"ttl":1,"comment":"doc-harness tunnel (#35)"}'
+      --data '{"type":"CNAME","name":"*","content":"85f6194f-3347-44b4-84c3-3bbcfbb076bb.cfargotunnel.com",
+               "proxied":true,"ttl":1,"comment":"doc-harness tunnel (#35)"}' \
+      | python3 -m json.tool
     REMOTE
     ```
+
+    Check `success: true` **and** that the echoed `type`, `name`, `content`, `proxied` and `ttl`
+    match the table. Cloudflare answering `success: true` is not the same as the record being the
+    one you asked for.
 
     `proxied` must be **true** — the traffic has to reach the Cloudflare edge for Access to apply.
     That is the opposite of the rule for a Tailscale or LAN address, which must be grey-clouded.
     Keep the `comment` under 100 characters or Cloudflare rejects the whole request with code 9313.
 
-    **Reconcile before you create, in this order.** Step 0's inventory already tells you which
-    case you are in:
-
-    | Case | Do this |
-    | --- | --- |
-    | no record at `*` | create it |
-    | a record at `*` whose every field already matches the table below | **no-op success** — do not create a second one |
-    | a record at `*` with any field different | **ABORT** and report the difference; never overwrite a record this run did not create |
-
-    | Field | Value |
-    | --- | --- |
-    | `type` | `CNAME` |
-    | `name` | `*` |
-    | `content` | `85f6194f-3347-44b4-84c3-3bbcfbb076bb.cfargotunnel.com` |
-    | `proxied` | `true` |
-    | `ttl` | `1` |
-
-    The no-op case is not pedantry. A `POST` that times out may well have landed, and a blind
-    retry double-creates. After any create, **assert the returned record's fields against that
-    table** before running `dig`: Cloudflare answering `success: true` is not the same as the
-    record being the one you asked for.
-
-    **Run the disposable write spike first.** Create a throwaway `TXT` named
-    `_doc-harness-spike`, assert `success: true`, `DELETE` it, assert that too. A successful `GET`
-    proves read, not write. If either call does not report success, ABORT and report AC 2 blocked
-    rather than proceeding on the strength of a read.
-
 **Undo:** `DELETE` that one record by id. Explicit records are untouched, because an explicit
 record beats a wildcard.
 
-## Step 5 — bring the stack up and verify
+## Step 7 — verify, including the checks that can FAIL
 
-14. `docker compose up -d` on `10.0.17.205`.
-15. Confirm the harness reports healthy before cloudflared advertises a route. cloudflared uses
-    `depends_on: service_healthy`, so `docker compose ps` showing cloudflared started IS that
-    confirmation.
-16. Resolve the name through two public resolvers, because a Cloudflare `success: true` is not
+20. Resolve the name through two public resolvers, because a Cloudflare `success: true` is not
     proof the world can see it:
 
     ```bash
     for r in 1.1.1.1 8.8.8.8; do printf 'via %-8s ' "$r"; dig +short @$r test.3dstories.ca; done
     ```
 
-17. Anonymous fetch of **each host AC 3 names, by name** → expect the Access login page:
+21. Anonymous fetch of **each host AC 3 names, by name** → expect the Access login page:
 
     ```bash
     for h in docs-index docs-control; do
@@ -215,18 +291,25 @@ record beats a wildcard.
     done
     ```
 
-17a. **The regression check — a host that must NOT be gated.** `www.3dstories.ca` belongs to
-    something else on this zone and must answer without an Access interstitial:
+22. **The regression check, and it must prove RESTORATION, not merely the absence of Access.**
+    "No interstitial" is satisfied by a 404, a 5xx, a wrong origin or an unrelated redirect —
+    every one of which leaves `www` broken in a different way.
 
     ```bash
-    curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' https://www.3dstories.ca/
+    curl -s -D- -o /tmp/www-body https://www.3dstories.ca/
     ```
 
-    A `302` to `cloudflareaccess.com` means the Access application is still over-broad. **Go-live
-    FAILS.** Go back to step 2 and narrow the hostname list.
+    Require ALL of: the owner-provided expected final status; the expected redirect target if
+    there is one; one stable site-specific marker present in the body; and **no
+    `cf-access-domain` header**. **Go-live FAILS on any miss.**
 
-17b. **The catch-all check — an unconfigured name must 404.** Send this WITH the service token, so
-    a 404 cannot be confused with an Access redirect:
+    Honest caveat: the pre-change state cannot be captured now, because `www` is already behind
+    Access. The invariant has to come from the owner. If none can be established, this degrades
+    to "200 with no `cf-access-domain`", and **that weakening is recorded in the PR rather than
+    passed over**.
+
+23. **The catch-all check.** Send this WITH the service token, so a 404 cannot be confused with
+    an Access redirect:
 
     ```bash
     curl -s -D- -o /dev/null "https://unconfigured-probe.3dstories.ca/" \
@@ -234,12 +317,18 @@ record beats a wildcard.
       -H "CF-Access-Client-Secret: $(cat ~/.secrets/doc-harness-access-client-secret)"
     ```
 
-    Expect `404`, **no** `X-Doc-Deployment` header, and **no** matching request at the harness.
-    Anything else means the tunnel routes every name to the harness and AC 1's catch-all is not in
-    force. The literal `*` in the tunnel's Path column is the first suspect; that field takes a
-    regex and a bare `*` is not a meaningful one. Clearing it is dashboard-only.
+    Expect `404`, **no** `X-Doc-Deployment`, and **no matching request at the harness**. That last
+    clause needs the origin observation from step 8 — without it a misconfigured route that DOES
+    reach the harness and returns an origin 404 is indistinguishable from the catch-all working.
+    **If origin observation cannot be established, report AC 1 UNPROVED.** A bare 404 is not
+    evidence.
 
-18. Service-token fetch of the real host → expect `200` and the `X-Doc-Deployment` echo:
+24. **The negative-identity check.** Using an authenticated identity that is outside every
+    include rule recorded in step 3 item 11, request a harness host. Require an Access **denial**
+    and no request reaching the harness. This is the only check that detects an over-broad allow
+    rule; the anonymous and service-token checks both pass without it.
+
+25. Service-token fetch of the real host → expect `200` and the `X-Doc-Deployment` echo:
 
     ```bash
     curl -s -D- -o /dev/null "https://<name>.3dstories.ca/" \
@@ -252,21 +341,21 @@ symptom, and it is the one thing in this runbook the available credential cannot
 tunnel ingress is dashboard state and `cfd_tunnel` is refused. The live fetch is the only evidence
 for AC 1.
 
-## Step 6 — the slow-client check, inherited from #34
+## Step 8 — the slow-client check, inherited from #34 (C4)
 
 #34 deferred one High finding into this issue with an owner acknowledgement. waitress offers no
 absolute request deadline, so `DOC_HARNESS_CHANNEL_TIMEOUT` bounds inactivity rather than total
 request time, and a client that trickles bytes can hold a channel. While the harness published no
 port the exposure was nil. This runbook ends that, so the check is real work:
 
-19. **Start the observation BEFORE the first byte, and prove the observation works.** Capture in
+26. **Start the observation BEFORE the first byte, and prove the observation works.** Capture in
     the harness's network namespace, filtered to destination port 8080, for the whole window. Then
     send ONE ordinary request through the tunnel as a control and confirm the capture recorded it.
     A capture that cannot see a known-good request cannot prove the absence of a bad one, so this
     control is a prerequisite and not a formality.
-20. Open a connection to the public hostname and send one byte of a request header every 30
+27. Open a connection to the public hostname and send one byte of a request header every 30
     seconds, for up to 300 seconds.
-21. **Pass requires all three:** the control request appears in the capture; Cloudflare terminates
+28. **Pass requires all three:** the control request appears in the capture; Cloudflare terminates
     the slow connection within 120 seconds; and no SYN or payload from the slow-client run reaches
     port 8080 across the whole window.
 
@@ -278,6 +367,10 @@ port the exposure was nil. This runbook ends that, so the check is real work:
 
     If the capture cannot be made to work on this host, report C4 **NOT discharged** and leave it
     a deferred High. Never report it discharged on a check that did not run.
+
+    **This is the same origin observation step 7 item 23 needs.** One mechanism serves both
+    checks, so if it cannot be established, TWO acceptance claims fail together: C4 stays
+    deferred and AC 1's catch-all is UNPROVED. Solve it once, before either.
 
 If Cloudflare does not terminate it, the remedy is edge configuration, not a watchdog inside the
 harness — that option was considered in #34 and declined, with the reason recorded.
