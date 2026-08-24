@@ -727,9 +727,26 @@ class TestTheMimeDerivationIsSharedNotCopied:
         from harness.manifest import content_type_for
         assert publish_doc.content_type_for(url_path) == content_type_for(url_path)
 
-    def test_it_is_the_harness_function_itself_rather_than_a_copy(self):
-        from harness.manifest import content_type_for
-        assert publish_doc.content_type_for is content_type_for
+    def test_no_second_extension_mapping_exists_here(self):
+        """The intent, stated directly. It used to be an identity check against the harness
+        function, which broke the moment that import became lazy — and lazy is right, since
+        a module-scope import of `harness` would make the whole script unimportable. What
+        must not exist is a SECOND copy of the mapping, so that is what is asserted, and the
+        parity test above proves the two agree on every kind."""
+        src = (SCRIPTS / "publish_doc.py").read_text(encoding="utf-8")
+        for ext in ("text/css", "image/png", "font/woff2", "application/octet-stream"):
+            assert ext not in src, f"{ext!r} is hard-coded here; import the harness mapping"
+
+    def test_it_delegates_to_the_harness_rather_than_answering_itself(self):
+        """Monkeypatching the harness function must change this one's answer. A copy would
+        keep returning the old value, which is exactly the drift finding N7 named."""
+        import harness.manifest as hm
+        original = hm.content_type_for
+        try:
+            hm.content_type_for = lambda p: "sentinel/value"
+            assert publish_doc.content_type_for("/a.css") == "sentinel/value"
+        finally:
+            hm.content_type_for = original
 
 
 class TestTheRedirectContract:
@@ -990,3 +1007,69 @@ class TestTheUrlPathIsCanonicallyEncoded:
             asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
         for a in m["assets"]:
             canonical_url_path(a["url_path"])     # raises PathError if not canonical
+
+
+# --------------------------------------------------------------------------- Step 8a, inline
+
+class TestHeadersAreReadCaseInsensitively:
+    """Step 8a, inline mechanical pass. Found by reading, confirmed by measurement.
+
+    `resp.headers` from urllib is an `email.message.Message`, which is case-INSENSITIVE.
+    Converting it with `dict()` produces a plain dict, which is not. The harness itself
+    sends `X-Doc-Deployment` and `Content-Type` title-cased, so every local test passed —
+    but **HTTP/2 lowercases all header names**, and Cloudflare speaks HTTP/2. So this would
+    have broken precisely the edge half that nobody can exercise yet, and it would have
+    failed as a byte-verification error rather than as anything naming headers.
+    """
+
+    def _resp(self, headers, body=b"page"):
+        import email.message
+        import io as _io
+        m = email.message.Message()
+        for k, v in headers.items():
+            m[k] = v
+        r = _io.BytesIO(body)
+        r.status = 200
+        r.headers = m
+        r.__enter__ = lambda s=r: s
+        r.__exit__ = lambda *a: False
+        return r
+
+    def test_lowercase_headers_are_accepted(self):
+        publish_doc.check_verify_response(
+            self._resp({"x-doc-deployment": "42",
+                        "content-type": "text/html; charset=utf-8"}),
+            want=b"page", deployment_id=42, url_path="/index.html")
+
+    def test_title_case_headers_are_still_accepted(self):
+        publish_doc.check_verify_response(
+            self._resp({"X-Doc-Deployment": "42",
+                        "Content-Type": "text/html; charset=utf-8"}),
+            want=b"page", deployment_id=42, url_path="/index.html")
+
+    def test_a_wrong_echo_still_fails_whatever_the_case(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.check_verify_response(
+                self._resp({"x-doc-deployment": "41",
+                            "content-type": "text/html; charset=utf-8"}),
+                want=b"page", deployment_id=42, url_path="/index.html")
+
+
+class TestTheSharedMimeImportCannotBreakTheWholeScript:
+    """Step 8a, inline. A module-level `from harness.manifest import ...` makes the entire
+    script unimportable if that package is absent — the process would die before it could
+    print a sentence. Finding N7 wanted the SHARED function to prevent drift, and that
+    still holds; what changes is that the coupling fails loudly at the point of use."""
+
+    def test_the_import_is_not_performed_at_module_scope(self):
+        import ast
+        tree = ast.parse((SCRIPTS / "publish_doc.py").read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("harness"):
+                raise AssertionError(
+                    "harness is imported at module scope; an install without it could not "
+                    "even render, which is the one thing that needs no harness at all")
+
+    def test_it_still_resolves_to_the_harness_function(self):
+        from harness.manifest import content_type_for
+        assert publish_doc.content_type_for("/a.css") == content_type_for("/a.css")

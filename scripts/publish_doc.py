@@ -98,11 +98,27 @@ VDL = _load(HERE / "vdl_packs.py", "_publish_doc_vdl")
 
 # Finding N7. The manifest carries no content_type — the harness DERIVES it — so a second
 # copy of the extension mapping here would drift, and drift produces both false failures
-# and false passes. This is the harness's own function, imported, not a reimplementation.
-# `harness.manifest` is stdlib-only (the container's waitress lives in `harness.__main__`),
-# so importing it keeps the gate dependency-free.
-sys.path.insert(0, str(HERE.parent))
-from harness.manifest import content_type_for  # noqa: E402
+# and false passes. This is the harness's own function, not a reimplementation.
+#
+# LAZY, per the Step 8a inline pass. At module scope a missing `harness/` would make the
+# whole script unimportable, so the process would die before it could print a sentence —
+# and RENDERING, the one thing that needs no harness at all, would die with it. Deferring
+# the import to the point of use means the coupling fails loudly where it matters and
+# nowhere else.
+
+
+def content_type_for(url_path: str) -> str:
+    """The harness's own derivation, resolved on first use."""
+    if str(HERE.parent) not in sys.path:
+        sys.path.insert(0, str(HERE.parent))
+    try:
+        from harness.manifest import content_type_for as _impl
+    except ImportError as e:                                  # pragma: no cover - see below
+        raise StageError(
+            6, "cannot import the harness's content-type derivation "
+               f"(harness/manifest.py): {e}. Verification compares each asset against the "
+               "type the HARNESS derives, so a second copy here would drift silently.") from e
+    return _impl(url_path)
 CONFIG = _load(HERE / "user_config.py", "_publish_doc_user_config")
 
 # Offset past argparse's own exit code 2, so a usage error is never mistaken for a
@@ -803,17 +819,37 @@ def check_verify_response(resp, *, want: bytes, deployment_id: int, url_path: st
     """
     with resp as r:
         status = getattr(r, "status", 200)
-        headers = dict(getattr(r, "headers", {}) or {})
+        raw_headers = getattr(r, "headers", None)
         body = r.read()
+
+    def header(name: str):
+        """Case-INSENSITIVELY. Step 8a, inline pass.
+
+        `resp.headers` is an `email.message.Message`, whose `.get()` folds case. Wrapping
+        it in `dict()` produces a plain dict that does not — and every local test still
+        passed, because the harness sends these title-cased. **HTTP/2 lowercases all header
+        names and Cloudflare speaks HTTP/2**, so the plain-dict version would have failed
+        exactly the edge half nobody can exercise yet, reported as a byte mismatch rather
+        than as anything mentioning headers.
+        """
+        if raw_headers is None:
+            return None
+        get = getattr(raw_headers, "get", None)
+        if get is not None and not isinstance(raw_headers, dict):
+            return get(name)
+        for k, v in dict(raw_headers).items():
+            if k.lower() == name.lower():
+                return v
+        return None
     if status != 200:
         raise StageError(6, f"{url_path} answered HTTP {status}")
-    echo = headers.get("X-Doc-Deployment")
+    echo = header("X-Doc-Deployment")
     if str(echo) != str(deployment_id):
         raise StageError(
             6, f"{url_path} carries X-Doc-Deployment {echo!r}, not {deployment_id}. The "
                "page served is a different deployment from the one just published.")
     want_type = content_type_for(url_path)
-    got_type = headers.get("Content-Type")
+    got_type = header("Content-Type")
     if got_type != want_type:
         raise StageError(6, f"{url_path} is served as {got_type!r}, not {want_type!r}")
     if body != want:
