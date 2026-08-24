@@ -329,7 +329,36 @@ takes an exclusive lock on its cache volume and refuses to start if another proc
 cache accounting is process-local, so two writers would silently disagree about what is cached.
 
 Every setting is listed in the design's configuration table. The compose stack publishes **no host
-port** — the harness is reachable only from the compose network until the Cloudflare tunnel lands.
+port**, and #35 does not change that — cloudflared dials *outward* to Cloudflare, so putting the
+harness on the internet adds no inbound host surface at all.
+
+### Going live behind Cloudflare (#35)
+
+The stack carries a second service, `cloudflared`, which joins a Cloudflare tunnel and reaches the
+harness by service name on the compose network. It needs one more secret, supplied **by path**
+rather than by value, because `docker inspect` prints a container's environment:
+
+```bash
+export DOC_HARNESS_TUNNEL_TOKEN_FILE=~/.secrets/doc-harness-tunnel-token
+docker compose up -d
+```
+
+`cloudflared` waits for the harness to report healthy before it advertises a route, so the tunnel
+never points at a service that has not finished taking its cache lock. The image is pinned by
+digest rather than a tag: `--no-autoupdate` does not stop a later pull resolving a different
+image, and this project pins every runtime dependency exactly.
+
+The rest — the tunnel, the wildcard DNS record, and the Cloudflare Access application — is
+dashboard and API work with one undo per step, and it lives in
+[`docs/runbooks/2026-08-24-35-harness-go-live.md`](docs/runbooks/2026-08-24-35-harness-go-live.md).
+Read that runbook's warning before touching Access: an Access application whose hostname is a bare
+`*` matches **every** subdomain on the zone, including hosts this project does not own.
+
+**Two things are deliberately not finished, and the design says so rather than implying
+otherwise** ([`docs/planning/2026-08-24-35-harness-go-live.md`](docs/planning/2026-08-24-35-harness-go-live.md)):
+the Access scope needs an owner decision between a narrower wildcard and a maintained host list,
+and the slow-client check inherited from #34 is **not discharged** — it has numbers and pass
+criteria but no proven way to observe the origin yet.
 
 ### Its one dependency, and why the tests do not need it
 
