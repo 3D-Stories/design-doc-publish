@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -94,6 +95,13 @@ class Budget:
         return max(0.001, min(http_timeout, self.remaining()))
 
 
+_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def url_for_commit(api: str, repo: str, ref: str) -> str:
+    return f"{api}/repos/{repo}/commits/{ref}"
+
+
 @dataclasses.dataclass(frozen=True)
 class TreeEntry:
     path: str
@@ -143,8 +151,18 @@ class GitHubSource(Protocol):
     """The seam every caller depends on. Two methods, so both halves are fakeable."""
 
     def tree(self, repo: str, sha: str, budget: Budget, http_timeout: float = 20.0,
-             max_bytes: int | None = None) -> tuple[list[TreeEntry], bool]:
-        """Entries of ONE tree object, plus whether GitHub truncated the response."""
+             max_bytes: int | None = None, recursive: bool = False
+             ) -> tuple[list[TreeEntry], bool]:
+        """Entries of one tree, plus whether GitHub truncated the response.
+
+        `recursive` returns the whole tree, which is what a search by document NAME needs.
+        """
+
+    def commit(self, repo: str, ref: str, budget: Budget, http_timeout: float = 20.0) -> str:
+        """The commit sha `ref` points at, validated as a sha."""
+
+    def repos(self, owner: str, budget: Budget, http_timeout: float = 20.0) -> list[str]:
+        """Every repository name under `owner` this credential can see."""
 
     def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
              max_bytes: int | None = None) -> bytes:
@@ -206,8 +224,11 @@ class HttpGitHub:
         return Unavailable(f"GitHub returned {status}")
 
     def tree(self, repo: str, sha: str, budget: Budget, http_timeout: float = 20.0,
-             max_bytes: int | None = None) -> tuple[list[TreeEntry], bool]:
+             max_bytes: int | None = None, recursive: bool = False
+             ) -> tuple[list[TreeEntry], bool]:
         url = f"{self._api}/repos/{repo}/git/trees/{sha}"
+        if recursive:
+            url += "?recursive=1"
         cap = MAX_TREE_BYTES if max_bytes is None else max_bytes
         with self._request(url, "application/vnd.github+json", budget, http_timeout) as resp:
             raw = self._read(resp, budget, cap)
@@ -217,6 +238,58 @@ class HttpGitHub:
             raise Unavailable(f"GitHub returned a tree body this client cannot parse: {exc}") \
                 from None
         return _validated_tree(payload)
+
+    def commit(self, repo: str, ref: str, budget: Budget,
+               http_timeout: float = 20.0) -> str:
+        """The commit sha `ref` points at.
+
+        Asks for the `sha` media type, so the answer is the bare sha and no JSON body has to be
+        parsed or trusted. The result is interpolated into later URLs, so it is validated as a
+        sha here rather than anywhere downstream: an error page reaching a URL as a ref is how a
+        broken response becomes a request nobody intended.
+        """
+        with self._request(url_for_commit(self._api, repo, ref),
+                           "application/vnd.github.sha", budget, http_timeout) as resp:
+            raw = self._read(resp, budget, 128)
+        text = raw.decode("ascii", "replace").strip()
+        if not _SHA.match(text):
+            raise Unavailable(
+                "GitHub returned a commit body that is not a sha, so it cannot be used as a ref")
+        return text
+
+    def repos(self, owner: str, budget: Budget, http_timeout: float = 20.0,
+              page_cap: int = 10) -> list[str]:
+        """Every repository name under `owner` this credential can see.
+
+        Convention resolution cannot split a hostname without this: two of the three parts may
+        contain hyphens, so `herdr-dashboard-107` is grammatical as two different repositories.
+        Paged, and BOUNDED by `page_cap` — an unbounded follow would let a hostile or looping
+        listing spend the whole request budget.
+        """
+        names, page = [], 1
+        while page <= page_cap:
+            url = (f"{self._api}/orgs/{owner}/repos"
+                   f"?per_page=100&page={page}&type=all")
+            with self._request(url, "application/vnd.github+json", budget,
+                               http_timeout) as resp:
+                raw = self._read(resp, budget, MAX_TREE_BYTES)
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise Unavailable(
+                    f"GitHub returned a repository listing this client cannot parse: {exc}"
+                ) from None
+            if not isinstance(payload, list):
+                raise Unavailable(
+                    "GitHub returned a repository listing that is not a list; an unreadable "
+                    "listing is not an empty one, and an empty one would make every hostname "
+                    "unresolvable while looking like a clean answer")
+            batch = [r.get("name") for r in payload if isinstance(r, dict)]
+            names.extend(n for n in batch if isinstance(n, str) and n)
+            if len(payload) < 100:
+                return names
+            page += 1
+        return names
 
     def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
              max_bytes: int | None = None) -> bytes:
@@ -258,15 +331,21 @@ class FakeGitHub:
     """An in-memory source for tests. Same Protocol, no sockets."""
 
     def __init__(self, trees: dict | None = None, blobs: dict | None = None,
-                 truncated: set | None = None, errors: dict | None = None):
+                 truncated: set | None = None, errors: dict | None = None,
+                 commits: dict | None = None, repos=None):
         self._trees = {k: _entries(v) for k, v in (trees or {}).items()}
         self._blobs = dict(blobs or {})
         self._truncated = set(truncated or ())
         self._errors = dict(errors or {})
+        self._commits = dict(commits or {})
         self.tree_calls = 0
         self.blob_calls = 0
+        self.commit_calls = 0
+        self._repos = list(repos or [])
+        self.repos_calls = 0
 
-    def tree(self, repo, sha, budget, http_timeout: float = 20.0, max_bytes=None):
+    def tree(self, repo, sha, budget, http_timeout: float = 20.0, max_bytes=None,
+             recursive: bool = False):
         budget.spend_call()
         self.tree_calls += 1
         if (repo, sha) in self._errors:
@@ -274,6 +353,20 @@ class FakeGitHub:
         if (repo, sha) not in self._trees:
             raise NotFound(f"no tree {sha}")
         return self._trees[(repo, sha)], (repo, sha) in self._truncated
+
+    def repos(self, owner, budget, http_timeout: float = 20.0, page_cap: int = 10):
+        budget.spend_call()
+        self.repos_calls += 1
+        return list(self._repos)
+
+    def commit(self, repo, ref, budget, http_timeout: float = 20.0):
+        budget.spend_call()
+        self.commit_calls += 1
+        if (repo, ref) in self._errors:
+            raise self._errors[(repo, ref)]
+        if (repo, ref) not in self._commits:
+            raise NotFound(f"no ref {ref}")
+        return self._commits[(repo, ref)]
 
     def blob(self, repo, blob_id, budget, http_timeout: float = 20.0, max_bytes=None):
         budget.spend_call()
