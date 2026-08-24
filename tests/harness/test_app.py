@@ -24,6 +24,11 @@ def git_blob_id(data): return hashlib.sha1(b"blob %d\0" % len(data) + data).hexd
 
 BLOB = git_blob_id(PAGE)
 CFG = load_config({"DOC_HARNESS_GITHUB_TOKEN": "g", "DOC_HARNESS_PUBLISH_TOKEN": "s3cr3t"})
+# Hosts are built from the CONFIGURED zone, never from a literal: the zone moved from the apex
+# to `docs.` so that every host this service answers sits inside the `*.docs` Access application.
+ZONE = CFG.zone
+# The one host that must stay a literal, because the point of its test is that it is now refused.
+OLD_APEX_INDEX_HOST = "docs-index.3dstories.ca"
 
 
 @pytest.fixture()
@@ -61,7 +66,7 @@ def publish(app):
                            "size": len(PAGE), "sha256": PAGE_SHA}],
                "title": "T", "project": "proj", "purpose": "design",
                "published_at": "2026-08-24T00:00:00Z", "expected_active": None}
-    return call(app, "docs-control.3dstories.ca", "/v1/deployments", "POST",
+    return call(app, f"docs-control.{ZONE}", "/v1/deployments", "POST",
                 {"Authorization": "Bearer s3cr3t"}, json.dumps(payload).encode())
 
 
@@ -76,35 +81,55 @@ class TestDispatch:
         assert cap["status"].startswith("404")
 
     def test_control_routes_are_404_on_a_serving_host(self, app):
-        cap, _ = call(app, "proj-design-1.3dstories.ca", "/v1/deployments", "POST",
+        cap, _ = call(app, f"proj-design-1.{ZONE}", "/v1/deployments", "POST",
                       {"Authorization": "Bearer s3cr3t"}, b"{}")
         assert cap["status"].startswith("404")
 
     def test_a_publish_then_a_fetch_round_trips(self, app):
         cap, body = publish(app)
         assert cap["status"].startswith("201"), body
-        cap, body = call(app, "proj-design-1.3dstories.ca", "/")
+        cap, body = call(app, f"proj-design-1.{ZONE}", "/")
         assert cap["status"].startswith("200")
         assert body == PAGE
 
     def test_the_index_host_renders(self, app):
         publish(app)
-        cap, body = call(app, "docs-index.3dstories.ca", "/")
+        cap, body = call(app, f"index.{ZONE}", "/")
         assert cap["status"].startswith("200")
         assert b"3dstories" in body
 
+    def test_the_index_is_served_at_index_under_the_docs_zone(self, app):
+        # `resolve_host` accepts exactly ONE label before the configured zone. With the zone at
+        # the apex, no `*.docs.3dstories.ca` name could ever be answered — so the Access
+        # application narrowed to that wildcard protected nothing this service serves. The zone
+        # moved under `docs.` and the index label became `index`, which is the one pair that
+        # puts the index inside the protected wildcard.
+        publish(app)
+        cap, body = call(app, "index.docs.3dstories.ca", "/")
+        assert cap["status"].startswith("200")
+        assert b"3dstories" in body
+
+    def test_the_old_apex_index_host_is_no_longer_answered(self, app):
+        # Publishes first so the ONLY variable is the host: an empty registry is its own error
+        # path, and this test must fail on routing rather than on having nothing to render.
+        # Two labels before the new zone, so routing refuses this rather than serving the index
+        # on a name the Access application does not cover.
+        publish(app)
+        cap, _ = call(app, OLD_APEX_INDEX_HOST, "/")
+        assert cap["status"].startswith("404")
+
     def test_an_unpublished_name_is_404(self, app):
-        cap, _ = call(app, "never-published.3dstories.ca", "/")
+        cap, _ = call(app, f"never-published.{ZONE}", "/")
         assert cap["status"].startswith("404")
 
 
 class TestWsgiContract:
     def test_start_response_is_called_exactly_once_per_request(self, app):
-        cap, _ = call(app, "proj-design-1.3dstories.ca", "/")
+        cap, _ = call(app, f"proj-design-1.{ZONE}", "/")
         assert cap["calls"] == 1
 
     def test_every_response_carries_a_content_length(self, app):
-        for host, path in [("nope.example.test", "/"), ("docs-index.3dstories.ca", "/")]:
+        for host, path in [("nope.example.test", "/"), (f"index.{ZONE}", "/")]:
             cap, body = call(app, host, path)
             assert cap["headers"]["Content-Length"] == str(len(body))
 
@@ -114,7 +139,7 @@ class TestWsgiContract:
         def boom(*a, **k):
             raise RuntimeError("a secret-looking internal detail")
         monkeypatch.setattr(mod, "render_index", boom)
-        cap, body = call(app, "docs-index.3dstories.ca", "/")
+        cap, body = call(app, f"index.{ZONE}", "/")
         assert cap["status"].startswith("500")
         assert b"secret-looking" not in body
         assert b"Traceback" not in body
@@ -129,12 +154,12 @@ class TestStep11EncodedAssetNames:
                             "size": len(PAGE), "sha256": PAGE_SHA}],
                 "expected_active": None}
         raw = json.dumps(body).encode()
-        cap, _ = call(app, "docs-control.3dstories.ca", "/v1/deployments", method="POST",
+        cap, _ = call(app, f"docs-control.{ZONE}", "/v1/deployments", method="POST",
                       headers={"Authorization": "Bearer s3cr3t"}, body=raw)
         assert cap["status"].startswith("201"), cap["status"]
 
         # waitress hands the application the DECODED path.
-        cap, served = call(app, "proj-design-2.3dstories.ca", "/a b.html")
+        cap, served = call(app, f"proj-design-2.{ZONE}", "/a b.html")
         assert cap["status"].startswith("200"), cap["status"]
         assert served == PAGE
 
@@ -144,8 +169,8 @@ class TestStep11EncodedAssetNames:
                 "assets": [{"url_path": "/a%20b.html", "repo_path": "i.html", "blob_id": BLOB,
                             "size": len(PAGE), "sha256": PAGE_SHA}],
                 "expected_active": None}
-        call(app, "docs-control.3dstories.ca", "/v1/deployments", method="POST",
+        call(app, f"docs-control.{ZONE}", "/v1/deployments", method="POST",
              headers={"Authorization": "Bearer s3cr3t"}, body=json.dumps(body).encode())
-        cap, served = call(app, "proj-design-3.3dstories.ca", "/")
+        cap, served = call(app, f"proj-design-3.{ZONE}", "/")
         assert cap["status"].startswith("200"), cap["status"]
         assert served == PAGE

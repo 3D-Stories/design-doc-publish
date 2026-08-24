@@ -19,7 +19,7 @@ services:
     environment:
       DOC_HARNESS_GITHUB_TOKEN: ${DOC_HARNESS_GITHUB_TOKEN:?set DOC_HARNESS_GITHUB_TOKEN}
       DOC_HARNESS_PUBLISH_TOKEN: ${DOC_HARNESS_PUBLISH_TOKEN:?set DOC_HARNESS_PUBLISH_TOKEN}
-      DOC_HARNESS_ZONE: ${DOC_HARNESS_ZONE:-3dstories.ca}
+      DOC_HARNESS_ZONE: ${DOC_HARNESS_ZONE:-docs.3dstories.ca}
     volumes:
       - registry:/var/lib/doc-harness      # durable: the registry must survive
       - blobcache:/var/cache/doc-harness   # disposable: rebuilds from GitHub by design

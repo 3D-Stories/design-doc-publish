@@ -36,7 +36,7 @@ import re
 from urllib.parse import quote, unquote
 
 CONTROL_LABEL = "docs-control"
-INDEX_LABEL = "docs-index"
+INDEX_LABEL = "index"
 
 # One DNS label: letters, digits and inner hyphens, 1..63 characters. Lowercase only, because
 # `resolve_host` lowercases first and an uppercase label at this point means the caller bypassed it.

@@ -83,7 +83,7 @@ class TestTheControlEndpointIsRequiredRatherThanDefaulted:
     @pytest.mark.parametrize("raw,want", [
         ("http://172.25.0.2:8080", "http://172.25.0.2:8080"),
         ("http://172.25.0.2:8080/", "http://172.25.0.2:8080"),
-        ("https://docs-control.3dstories.ca", "https://docs-control.3dstories.ca"),
+        ("https://docs-control.docs.3dstories.ca", "https://docs-control.docs.3dstories.ca"),
         ("  http://127.0.0.1:8080  ", "http://127.0.0.1:8080"),
     ])
     def test_a_usable_base_is_normalized_to_scheme_host_port(self, raw, want):
@@ -117,14 +117,14 @@ class TestTheEdgeHalfSkipsVisiblyRatherThanSilently:
 
     def test_a_set_public_base_is_normalized(self):
         assert publish_doc.public_base(
-            {"DOC_HARNESS_PUBLIC_BASE": "https://<name>.3dstories.ca/"}
-        ) == "https://<name>.3dstories.ca"
+            {"DOC_HARNESS_PUBLIC_BASE": "https://<name>.docs.3dstories.ca/"}
+        ) == "https://<name>.docs.3dstories.ca"
 
     def test_the_public_base_must_be_https(self):
         """Finding N4. The Access service tokens ride on this host, so plaintext is
         refused rather than downgraded."""
         with pytest.raises(publish_doc.StageError):
-            publish_doc.public_base({"DOC_HARNESS_PUBLIC_BASE": "http://<name>.3dstories.ca"})
+            publish_doc.public_base({"DOC_HARNESS_PUBLIC_BASE": "http://<name>.docs.3dstories.ca"})
 
     def test_the_flag_that_converted_the_skip_to_zero_does_not_exist(self):
         """Finding N3. `--allow-unverified-edge` turned exit 26 into 0, which contradicts
@@ -602,7 +602,7 @@ class TestACredentialNeverReachesAnUnvalidatedDestination:
 
     @pytest.mark.parametrize("ok", [
         "http://127.0.0.1:8080", "http://localhost:8080",
-        "https://docs-control.3dstories.ca",
+        "https://docs-control.docs.3dstories.ca",
     ])
     def test_a_permitted_origin_passes(self, ok):
         """A bridge address is no longer here: finding S3 made it require an explicit
@@ -624,12 +624,12 @@ class TestACredentialNeverReachesAnUnvalidatedDestination:
 
     def test_the_access_headers_go_only_to_the_pinned_zone(self):
         publish_doc.assert_access_destination(
-            "https://example-design-12.3dstories.ca/p.html", "example-design-12")
+            "https://example-design-12.docs.3dstories.ca/p.html", "example-design-12")
 
     @pytest.mark.parametrize("url", [
         "https://example-design-12.evil.com/p.html",
-        "https://other-name.3dstories.ca/p.html",
-        "http://example-design-12.3dstories.ca/p.html",
+        "https://other-name.docs.3dstories.ca/p.html",
+        "http://example-design-12.docs.3dstories.ca/p.html",
     ])
     def test_a_wrong_host_or_scheme_refuses_the_access_headers(self, url):
         with pytest.raises(publish_doc.StageError):
@@ -639,7 +639,7 @@ class TestACredentialNeverReachesAnUnvalidatedDestination:
         """Finding N11. Revision 3 validated against DOC_HARNESS_ZONE, which is supplied by
         the same mutable environment as the destination — so an attacker who can set the
         destination can set the anchor to match it."""
-        assert publish_doc.PINNED_ZONE == "3dstories.ca"
+        assert publish_doc.PINNED_ZONE == "docs.3dstories.ca"
         # Checked against the CODE, not the file text: a comment naming the variable in
         # order to explain why it is NOT read is exactly what should be there.
         import ast
@@ -666,16 +666,16 @@ class TestTheVerificationRequest:
         The origin URL's own host is a bridge address, which routes to nothing."""
         req = publish_doc.build_verify_request(
             BASE, "/p.html", 42, name="example-design-12", access=None, env=BRIDGE_OK)
-        assert req.get_header("Host") == "example-design-12.3dstories.ca"
+        assert req.get_header("Host") == "example-design-12.docs.3dstories.ca"
         assert req.full_url == f"{BASE}/p.html?__deployment=42"
 
     def test_the_edge_half_carries_access_headers_and_no_host_override(self):
         req = publish_doc.build_verify_request(
-            "https://example-design-12.3dstories.ca", "/p.html", 42,
+            "https://example-design-12.docs.3dstories.ca", "/p.html", 42,
             name="example-design-12", access=("i", "s"))
         assert req.get_header("Cf-access-client-id") == "i"
         assert req.get_header("Cf-access-client-secret") == "s"
-        assert req.full_url.startswith("https://example-design-12.3dstories.ca/p.html")
+        assert req.full_url.startswith("https://example-design-12.docs.3dstories.ca/p.html")
 
     def test_the_deployment_query_pins_the_new_id_not_the_previous_one(self):
         req = publish_doc.build_verify_request(
@@ -767,7 +767,7 @@ class TestTheRedirectContract:
 
     def test_the_initial_request_does_carry_its_credentials(self):
         req = publish_doc.build_verify_request(
-            "https://n.3dstories.ca", "/p.html", 42, name="n", access=("i", "s"))
+            "https://n.docs.3dstories.ca", "/p.html", 42, name="n", access=("i", "s"))
         assert req.get_header("Cf-access-client-id") == "i"
 
     def test_a_three_xx_is_a_failure_and_nothing_follows_it(self):
@@ -783,7 +783,7 @@ class TestTheRedirectContract:
         with pytest.raises(publish_doc.StageError) as e:
             publish_doc.fetch_for_verify(
                 publish_doc.build_verify_request(
-                    "https://n.3dstories.ca", "/p.html", 42, name="n", access=("i", "s")),
+                    "https://n.docs.3dstories.ca", "/p.html", 42, name="n", access=("i", "s")),
                 opener=opener)
         assert len(calls) == 1, "no follow-up request may be made to the redirect target"
         assert "redirect" in e.value.message.lower()
