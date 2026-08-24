@@ -16,6 +16,7 @@ import hashlib
 import re
 import time
 
+from .github import GitHubError
 from .manifest import Asset, content_type_for
 from .registry import ActiveDeployment
 
@@ -152,3 +153,109 @@ class ConventionResolver:
             deployment_id=0, name=label, repo=full_repo, commit_sha=commit,
             entry_path="/index.html", title=document, project=repo,
             purpose=None, published_at="", assets={"/index.html": asset})
+
+
+_MAX_DNS_LABEL = 63
+
+
+def label_for(repo: str, repo_path: str) -> str:
+    """The hostname label a document is served at. The INVERSE of `split_label`.
+
+    The index generates its links with this, so the two must agree: a link the index prints and
+    `split_label` cannot read is a link that resolves to nothing. A round-trip test pins that.
+
+    Owner rule: `{date}-{repo}-{html name}`, the date taken from the FILENAME when it carries
+    one and omitted when it does not. An omitted date still resolves, because `find_document`
+    tries the undated filename as its fallback.
+    """
+    stem = re.sub(r"\.html?$", "", str(repo_path).rsplit("/", 1)[-1], flags=re.IGNORECASE)
+    match = _DATE_PREFIX.match(stem)
+    if match:
+        try:
+            datetime.date.fromisoformat(match.group(1))
+        except ValueError:
+            match = None
+    parts = [match.group(1), repo, match.group(2)] if match else [repo, stem]
+    label = "-".join(p for p in parts if p).lower()
+    # One DNS label is 63 characters. The TAIL is cut, never the date and never the repository,
+    # and the cut must not leave a trailing hyphen, which is not a legal label.
+    if len(label) > _MAX_DNS_LABEL:
+        label = label[:_MAX_DNS_LABEL].rstrip("-")
+    return label
+
+
+class ConventionIndex:
+    """The index, built by WALKING the repositories rather than reading the registry.
+
+    Convention-resolved documents have no registry rows, so the registry-derived index went
+    blank when resolution replaced publishing. This produces the SAME snapshot shape the
+    registry produced, so the renderer is unchanged.
+
+    Only `docs/` is listed. A repository's application assets and test fixtures are not design
+    documents; they stay servable by hostname and are simply not advertised.
+    """
+
+    DOC_PREFIX = "docs/"
+
+    def __init__(self, owner: str, source, *, ttl: float = 900.0, now=time.time):
+        self._owner = owner
+        self._source = source
+        self._ttl = ttl
+        self._now = now
+        self._snapshot = None
+        self._at = 0.0
+
+    def snapshot(self, budget, *, http_timeout: float = 20.0) -> dict:
+        if self._snapshot is not None and (self._now() - self._at) <= self._ttl:
+            return self._snapshot
+        rows, projects, unreadable = [], [], []
+        for repo in sorted(self._source.repos(self._owner, budget)):
+            full = "%s/%s" % (self._owner, repo)
+            try:
+                commit = self._source.commit(full, "HEAD", budget, http_timeout)
+                entries, truncated = self._source.tree(full, commit, budget, http_timeout,
+                                                       recursive=True)
+            except GitHubError:
+                # ONE unreadable repository must not turn the whole index into a confident
+                # blank page. It is recorded and named, not swallowed.
+                unreadable.append(repo)
+                continue
+            if truncated:
+                unreadable.append(repo)
+                continue
+            found = [e for e in entries
+                     if e.type == "blob" and e.mode in _REGULAR_FILE_MODES
+                     and e.path.startswith(self.DOC_PREFIX)
+                     and e.path.lower().endswith((".html", ".htm"))]
+            # A basename appearing twice cannot be SERVED — `find_document` refuses it — so
+            # advertising it would print a link that answers 409.
+            seen = {}
+            for entry in found:
+                seen.setdefault(entry.path.rsplit("/", 1)[-1], []).append(entry)
+            listed = False
+            for basename, group in sorted(seen.items()):
+                if len(group) > 1:
+                    continue
+                entry = group[0]
+                rows.append({
+                    "name": label_for(repo, entry.path),
+                    "title": re.sub(r"\.html?$", "", basename, flags=re.IGNORECASE),
+                    "project": repo,
+                    "purpose": None,
+                    "commit_sha": commit,
+                    "published_at": "",
+                })
+                listed = True
+            if listed:
+                projects.append(repo)
+        rows.sort(key=lambda r: r["name"])
+        # The generation is derived from the ROWS, so the ETag changes exactly when the listing
+        # does and a reader's cached copy is never stale in a way they cannot see.
+        digest = hashlib.sha256(
+            "\n".join("%s\t%s" % (r["name"], r["commit_sha"]) for r in rows).encode()
+        ).hexdigest()[:16]
+        self._snapshot = {"generation": digest, "generated_at": self._now(),
+                          "rows": rows, "projects": sorted(projects, key=len, reverse=True),
+                          "unreadable": sorted(unreadable)}
+        self._at = self._now()
+        return self._snapshot

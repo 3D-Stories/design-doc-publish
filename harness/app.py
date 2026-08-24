@@ -21,7 +21,8 @@ from .registry import Registry
 from .routing import CONTROL_LABEL, INDEX_LABEL, RouteError, resolve_host
 from .serving import Response, serve
 from .github import Budget, GitHubError, NotFound, Unauthorized
-from .convention import ConventionResolver, DocumentAmbiguous, TreeTruncated
+from .convention import (ConventionIndex, ConventionResolver, DocumentAmbiguous,
+                         TreeTruncated)
 
 
 def _plain(status: int, message: str, extra: dict | None = None) -> Response:
@@ -44,6 +45,10 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
     # The registry is still consulted FIRST, so a published deployment keeps winning and nothing
     # that works today changes.
     resolver = ConventionResolver(cfg.github_owner, source)
+    # The index walks the repositories for the same reason: a convention-resolved document has
+    # no registry row, so a registry-derived listing shows nothing that anybody can actually
+    # reach. Cached hard, because one refresh costs two calls per repository.
+    index = ConventionIndex(cfg.github_owner, source)
 
     def _log(message: str) -> None:
         if log is not None:
@@ -80,8 +85,17 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
                                   registry=registry, cache=cache, source=source, cfg=cfg)
 
         if label == INDEX_LABEL:
+            try:
+                snapshot = index.snapshot(
+                    Budget(cfg.http_timeout * 4, cfg.max_github_calls * 4),
+                    http_timeout=cfg.http_timeout)
+            except GitHubError:
+                # The listing could not be built. A blank index would read as "no documents
+                # exist", which is a lie, so this says the truth instead.
+                return _plain(503, "the document listing could not be built from GitHub")
             return render_index(registry, zone=cfg.zone,
-                                if_none_match=environ.get("HTTP_IF_NONE_MATCH"))
+                                if_none_match=environ.get("HTTP_IF_NONE_MATCH"),
+                                snapshot=snapshot)
 
         # Control routes exist ONLY on the control host. Reaching them from a serving host
         # is a 404, not a 401, so their existence is not confirmed to a caller who cannot

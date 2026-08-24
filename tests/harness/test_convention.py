@@ -175,3 +175,120 @@ class TestConventionResolver:
         with pytest.raises(Exception):
             ConventionResolver("3D-Stories", src).resolve(
                 "2026-08-19-rawgentic-unified-roadmap", budget())
+
+
+from harness.convention import label_for
+
+
+class TestLabelFor:
+    """The INVERSE of `split_label`. The index generates links with it, so if the two ever
+    disagreed the index would publish links that resolve to nothing."""
+
+    def test_the_owners_worked_example(self):
+        assert label_for("rawgentic", "docs/planning/2026-08-19-unified-roadmap.html") == \
+            "2026-08-19-rawgentic-unified-roadmap"
+
+    def test_a_file_with_no_date_omits_the_date(self):
+        assert label_for("rawgentic", "docs/campaign-log.html") == "rawgentic-campaign-log"
+
+    def test_it_is_lowercased(self):
+        assert label_for("MyRepo", "d/2026-08-19-My-Doc.HTML") == "2026-08-19-myrepo-my-doc"
+
+    def test_an_over_long_label_is_trimmed_to_the_dns_limit(self):
+        got = label_for("thewanderinginn",
+                        "docs/2026-08-17-166-manifest-overwrite-discards-spans.html")
+        assert len(got) == 63
+        assert not got.endswith("-")
+
+    @pytest.mark.parametrize("repo,path", [
+        ("rawgentic", "docs/planning/2026-08-19-unified-roadmap.html"),
+        ("rawgentic", "docs/campaign-log.html"),
+        ("herdr-dashboard", "docs/2026-08-04-107-usage-strip-redesign.html"),
+    ])
+    def test_every_generated_label_splits_back_to_its_repository(self, repo, path):
+        # The round trip is the whole point: a link the index prints must resolve.
+        label = label_for(repo, path)
+        split = split_label(label, ["rawgentic", "herdr-dashboard", "herdr", "thewanderinginn"])
+        assert split is not None, label
+        assert split[1] == repo
+
+
+from harness.convention import ConventionIndex
+
+
+def index_source(**per_repo):
+    """A fake whose repositories each carry the html paths given."""
+    trees, commits, repos = {}, {}, []
+    for repo, paths in per_repo.items():
+        repo = repo.replace("_", "-")
+        full = "3D-Stories/%s" % repo
+        sha = (repo[:1] * 40)[:40]
+        repos.append(repo)
+        commits[(full, "HEAD")] = sha
+        trees[(full, sha)] = [
+            {"path": p, "type": "blob", "mode": "100644", "sha": BLOB, "size": 10}
+            for p in paths]
+    return FakeGitHub(trees=trees, commits=commits, repos=repos)
+
+
+class TestConventionIndex:
+    """The index is built by WALKING the repositories, because convention-resolved documents
+    have no registry rows to read."""
+
+    def test_it_lists_a_document_from_every_repository(self):
+        src = index_source(rawgentic=["docs/planning/2026-08-19-unified-roadmap.html"],
+                           saystory=["docs/design-log.html"])
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        names = sorted(r["name"] for r in snap["rows"])
+        assert names == ["2026-08-19-rawgentic-unified-roadmap", "saystory-design-log"]
+        assert sorted(snap["projects"]) == ["rawgentic", "saystory"]
+
+    def test_files_outside_the_documents_directory_are_not_listed(self):
+        # A repository's application assets and test fixtures are not design documents. They
+        # remain SERVABLE by hostname; they are simply not advertised.
+        src = index_source(rawgentic=["docs/a.html", "src/templates/widget.html",
+                                      "archive/old.html"])
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["rawgentic-a"]
+
+    def test_a_name_that_appears_twice_in_one_repository_is_not_listed(self):
+        # It cannot be served — `find_document` refuses it — so advertising it would print a
+        # link that answers 409.
+        src = index_source(rawgentic=["docs/a/x.html", "docs/b/x.html", "docs/ok.html"])
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["rawgentic-ok"]
+
+    def test_a_repository_that_cannot_be_read_does_not_empty_the_index(self):
+        # One unreadable repository must not turn the whole index into a confident blank page.
+        from harness.github import Unauthorized
+        src = index_source(rawgentic=["docs/a.html"], secret=["docs/b.html"])
+        src._errors[("3D-Stories/secret", "HEAD")] = Unauthorized("nope")
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["rawgentic-a"]
+        assert snap["unreadable"] == ["secret"]
+
+    def test_the_walk_is_cached_and_reused(self):
+        src = index_source(rawgentic=["docs/a.html"])
+        idx = ConventionIndex("3D-Stories", src)
+        idx.snapshot(budget()); idx.snapshot(budget())
+        assert src.tree_calls == 1
+
+    def test_the_generation_changes_when_the_documents_change(self):
+        one = ConventionIndex("3D-Stories", index_source(rawgentic=["docs/a.html"])
+                              ).snapshot(budget())
+        two = ConventionIndex("3D-Stories", index_source(rawgentic=["docs/a.html",
+                                                                    "docs/b.html"])
+                              ).snapshot(budget())
+        assert one["generation"] != two["generation"]
+
+    def test_every_listed_name_resolves_back_to_its_repository(self):
+        # The index must never print a link that cannot be read back.
+        src = index_source(rawgentic=["docs/planning/2026-08-19-unified-roadmap.html"],
+                           herdr_dashboard=["docs/2026-08-04-107-usage.html"])
+        idx = ConventionIndex("3D-Stories", src)
+        snap = idx.snapshot(budget())
+        repos = src.repos("3D-Stories", budget())
+        for row in snap["rows"]:
+            split = split_label(row["name"], repos)
+            assert split is not None, row["name"]
+            assert split[1] == row["project"]

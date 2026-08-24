@@ -117,3 +117,16 @@ class TestGrouping:
         c.execute("INSERT INTO deployment(name,repo,commit_sha,entry_path,published_at,project,"
                   "sealed) VALUES('ghost-design-1','o/r','c'*40,'/i.html','now','retired',1)")
         assert "retired" not in reg.index_projects()
+
+
+def test_an_empty_listing_renders_instead_of_crashing():
+    """Found live 2026-08-24: with no documents the renderer raised IndexError at `order[0]`
+    and the index answered 500. An account with no documents yet, or a credential that cannot
+    read any repository, is a real state — and 500 tells the reader nothing true about it."""
+    from datetime import datetime, timezone
+
+    from harness.indexpage import build_index_module
+    bi = build_index_module()
+    pinned = datetime(2026, 8, 24, tzinfo=timezone.utc)
+    out = bi.render([], pinned.strftime("%Y-%m-%d"), pinned, bi.signature([]), eyebrow="x")
+    assert isinstance(out, str) and len(out) > 0
