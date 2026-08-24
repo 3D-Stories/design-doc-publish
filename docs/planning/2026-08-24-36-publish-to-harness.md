@@ -6,10 +6,26 @@ API.
 
 Expected diff: **700-900 lines, most of it tests**. This document stays shorter than that.
 
-**Revision 3**, after Step 4 pass 2 — 12 findings, 11 adopted and 1 declined as scope. Two of
-them were found INDEPENDENTLY by the inline self-review and by the cross-model reviewer, so they
-are treated as confirmed rather than plausible: the control endpoint had no reachable value at all
-(M2, below), and the credentials were attached to a destination nothing validated (M7).
+**Revision 4**, after Step 4 pass 3 — 12 further findings, 11 adopted and 1 declined a second
+time. This is the FINAL revision: the design loop-back budget is spent (design 2/2, global 2/3),
+the ambiguity breaker returned `stop`, and `exhaustion-decision` returned `escalate`. The owner
+authorized closing the gate here and narrowing what this child claims.
+
+Across three passes the design accumulated 34 findings. Two were found INDEPENDENTLY by both the
+inline self-review and the cross-model reviewer, and are therefore treated as confirmed rather than
+plausible: the control endpoint had no reachable value at all, and the operations command named a
+file that is not in the image.
+
+## The headline risk, stated first because merging this changes what works
+
+**`publish_doc.py` loses the ability to publish anywhere the moment this merges.** Acceptance
+criterion 1 retires `vercel link/deploy`, and the harness replacement cannot serve yet: no
+hostname resolves, and the doc-harness stack is not running on `10.0.17.205` at all (`docker ps -a`
+matches no harness container and no harness network). The spec's *parallel-run window*, where both
+hosts serve during migration (#37), cannot open while only one of them is reachable.
+
+This child is therefore code and tests, not a working publish path. The PR says **Part of #36**,
+the issue stays **OPEN**, and the risk is the first line of the PR body rather than a footnote.
 
 ## The correction that matters most: there is no reachable default, so there is no default
 
@@ -90,8 +106,14 @@ Stages 1-4 (render, source gate, derive name, lint) keep their shape.
    check while the harness cannot fetch the commit from `repo`. So the check is one bound
    sequence, and every branch of it refuses rather than guessing:
 
-   1. Enumerate remotes. Select the ONE whose URL parses to a GitHub `owner/name`. **Two
-      candidates, or none, refuses** — naming them. No implicit preference for `origin`.
+   1. Select the remote in this order, stopping at the first that resolves (finding N9 —
+      revision 3 refused whenever two GitHub remotes existed, which is every ordinary
+      fork-plus-upstream checkout, so it would have refused far more often than it caught
+      anything):
+      a. `--publish-remote <name>`, when given. An explicit override always wins.
+      b. The current branch's configured upstream remote, when its URL parses to GitHub.
+      c. The single GitHub remote, when there is exactly one.
+      Only when none of those resolves does it refuse, naming every candidate it saw.
    2. `repo` in the manifest IS that parsed `owner/name`, normalized (strip `.git`, lowercase the
       host). It is never taken from configuration or cwd.
    3. `git fetch <that remote>` must succeed. A failure refuses, quoting git's own message.
@@ -159,7 +181,7 @@ manifest, each by its own `url_path` — and differ only in URL and headers:
 | | origin half | edge half |
 | --- | --- | --- |
 | URL | `{DOC_HARNESS_CONTROL_URL}{url_path}?__deployment={deployment_id}` | `{DOC_HARNESS_PUBLIC_BASE with <name> substituted}{url_path}?__deployment={deployment_id}` |
-| `Host` header | `<name>.{DOC_HARNESS_ZONE}` — **mandatory**: serving routes on Host, and the origin URL's own host is the compose service name, which routes to nothing (`harness/routing.py:84`) | not set; the URL already carries it |
+| `Host` header | `<name>.` plus the committed zone — **mandatory**: serving routes on the Host header, and the origin URL's own host is a bridge address, which routes to nothing. `harness/app.py:49` calls `resolve_host(environ["HTTP_HOST"], cfg.zone)`; `resolve_host` is `harness/routing.py:66` (finding N12 — revision 3 cited line 84, which is inside it rather than at it) | not set; the URL already carries it |
 | Auth headers | none | `CF-Access-Client-Id`, `CF-Access-Client-Secret` |
 
 `{deployment_id}` is the integer from the stage-5 **201**, never the id read back in step 1 — that
@@ -171,6 +193,14 @@ resource are two cache keys (`harness/routing.py:89-95`).
 Pass, per asset: 200, the `X-Doc-Deployment: <deployment_id>` echo (`harness/serving.py:56`,
 pinned at `tests/harness/test_serving.py:56`), **that asset's own content type**, and byte
 equality. Redirects disabled; an Access login redirect is a failure, not a retry.
+
+**"That asset's own content type" needs a SHARED derivation, not a second copy** (finding N7). The
+manifest deliberately carries no `content_type` — the harness derives it — so a publisher that
+re-implements the extension mapping will drift, and drift here produces both false failures and
+false passes. The publisher therefore imports the harness's own derivation rather than restating
+it, and a parity test pins the two together across HTML, CSS, JavaScript, an image, an unknown
+extension, and a type carrying a `charset` parameter. If the two ever disagree, the parity test
+fails rather than a publish.
 
 **`text/html` applies to the ENTRY page only** (finding A3). Revision 1 put `text/html` in a pass
 condition it then repeated for every asset, which would have rejected every valid CSS, JavaScript
@@ -195,46 +225,72 @@ the block, at **25 and 26**:
 | **26** | published and origin-verified; the edge half SKIPPED because `DOC_HARNESS_PUBLIC_BASE` is unset |
 
 - edge half verified → exit 0.
-- edge half skipped → exit 26, with the skip and its reason on stdout. Callers that accept an
-  origin-only publish opt in explicitly with `--allow-unverified-edge`, which turns 26 into 0 and
-  still prints the skip.
+- edge half skipped → exit 26, always, with the skip and its reason on stdout.
 - origin half failed → 16, the existing stage-6 code.
 
-**`--allow-unverified-edge` is an ADDITION no acceptance criterion asked for** (finding M9). It is
-kept because exit 26 alone would break every existing caller that treats non-zero as fatal, and it
-is named in the PR body as an addition rather than folded in silently.
+**Revision 3's `--allow-unverified-edge` is DELETED** (finding N3). It converted 26 into 0, which
+contradicts the declared meaning of 0 and would let a caller reading only the status record a
+criterion-2 pass that never happened. That is precisely the misreport this exit contract exists to
+prevent, reintroduced by the thing meant to soften it. A caller that accepts an origin-only publish
+interprets 26 itself, outside `publish_doc.py`, where the decision is visible in that caller's own
+code. This also removes the one component revision 3 had to declare as serving no criterion.
 
 **The origin half is an OPERATIONS check, not a gate test** (finding A8). Revision 1 called it
 "runnable now" with nothing cited. `capabilities.has_docker` is **false** for this project and the
 gate is deliberately dependency-free — `pytest scripts/tests/ tests/ -q` must never require a
 running container. So the origin verification is a documented ops step whose result is RECORDED in
 the PR, and the pytest suite covers the new code with the HTTP layer faked, exactly as the
-existing `FakeUrlopen` tests do. The exact invocation, on `10.0.17.205`:
+existing `FakeUrlopen` tests do.
+
+**Revision 3 named an invocation that cannot run** (finding N2, found by both passes). It said
+`docker compose exec ... python3 /opt/publish/publish_doc.py`. The `Dockerfile` copies only
+`harness/` and `index/` into the image, so the publisher is not in there. The image has no git,
+and the process runs as the unprivileged `harness` user.
+
+**The mechanism that does work was MEASURED on `10.0.17.205`, 2026-08-24.** The publisher stays on
+the host and reaches the container directly at its bridge address:
 
 ```
-docker compose exec -e DOC_HARNESS_CONTROL_URL=http://harness:8080 harness \
-  python3 /opt/publish/publish_doc.py --md <doc>.md --out <doc>.html --allow-unverified-edge
+CONTROL_IP=$(docker compose ps -q harness | xargs docker inspect \
+  -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+DOC_HARNESS_CONTROL_URL="http://$CONTROL_IP:8080" \
+  python3 scripts/publish_doc.py --md <doc>.md --out <doc>.html
 ```
 
-Its stdout and exit code are pasted into the PR body. A run that cannot be performed is recorded
-as NOT performed — never as a pass.
+The probe, run on this host with a throwaway container on its own bridge network and no published
+port: `curl http://172.25.0.2:8080/` returned `HTTP/1.0 200 OK` carrying `X-Doc-Deployment`, while
+`curl http://ddp-probe:8080/` returned `curl: (6) Could not resolve host`. So the host reaches a
+container IP without any port being published, and never resolves a compose service name. That is
+the whole of revision 2's error, measured rather than argued.
+
+**This step has NOT been performed, and cannot be today**: the stack is not running here. It is
+recorded as NOT performed. A step that could not run is never written up as a pass.
 
 ### The network failure contract (finding M11)
 
 Every replacement call is bounded, because the only named timeout test retires with Vercel and a
-server that accepts a connection and then stops responding would hang the CLI for ever:
+server that accepts a connection and then stops responding would hang the CLI for ever.
 
-| Call | Connect | Read |
+**The client is `urllib.request.urlopen`, and the contract is what IT can enforce** (finding N8).
+Revision 3 tabulated separate connect and read deadlines. `publish_doc.py` already uses
+`urllib.request.urlopen(req, timeout=...)` (`scripts/publish_doc.py:763`), the repository has no
+`requests` dependency, and the gate must stay dependency-free — so a separate connect deadline is
+not available without adding one. `urlopen`'s `timeout` is a per-socket-operation deadline, not a
+whole-call budget, and the contract says so rather than implying a total:
+
+| Call | `timeout=` | Why |
 | --- | --- | --- |
-| stage 5 `GET /v1/deployments/<name>` | 5 s | 20 s |
-| stage 5 `POST /v1/deployments` | 5 s | 120 s — the harness fetches every blob from GitHub inside this call |
-| stage 6, each origin fetch | 5 s | 20 s |
-| stage 6, each edge fetch | 5 s | 20 s |
+| stage 5 `GET /v1/deployments/<name>` | 20 s | a registry read |
+| stage 5 `POST /v1/deployments` | 120 s | the harness fetches every blob from GitHub inside this call |
+| stage 6, each fetch | 20 s | one asset |
 
-A timeout is that stage's failure, with the call and the elapsed time named. **The POST is never
-retried automatically**: it is not idempotent, and a retry after an ambiguous timeout races the
-`expected_active` compare-and-swap against a deployment its own first attempt may have created.
-The refusal says so and names the read-back call the operator should run.
+Because a per-operation deadline does not bound a slow trickle, each stage ALSO carries a total
+wall-clock budget checked between calls, and names whichever bound it hit. **Redirects stay
+refused, not followed** — `verify_live` already does this (`scripts/publish_doc.py:808`).
+
+**The POST is never retried automatically**: it is not idempotent, and a retry after an ambiguous
+timeout races the `expected_active` compare-and-swap against a deployment its own first attempt may
+have created. The refusal says so and names the read-back call the operator should run.
 
 ### Stage 7 — deleted
 
@@ -257,19 +313,41 @@ Lint extends: every same-origin resource the HTML references must appear in the 
    `publish_doc.py`'s existing failure path prints subprocess logs verbatim, which is exactly the
    shape that leaks a header. A test asserts a failing publish and a failing verify both produce
    output containing none of the three.
-2. **Nothing sends a credential to an unvalidated destination** (finding M7, found by both review
-   passes). Redaction protects the LOG; it does nothing about the wire or the wrong server. Both
-   base URLs come from the environment, so either can name any host and any scheme. The
-   destination is therefore checked BEFORE any header is attached:
-   - the Access service-token headers attach only over **https** and only to a host equal to
-     `<name>.{DOC_HARNESS_ZONE}`;
-   - the publish bearer attaches only over **https**, with one explicit exception: a plain-`http`
-     URL whose host is a bare label with no dot (the compose service name) or a loopback address.
-     Any other plain-`http` destination refuses rather than sending the token;
-   - redirects stay disabled everywhere, so no credential can follow a 302 to a third host.
+2. **Every credential is present before anything is built** (finding N6). A missing or
+   half-present credential must fail as a LOCAL refusal, not indirectly as a 401 or a login
+   redirect. Before either control call, the publish token must be present and non-empty. Before
+   the edge half, the two Access values must be present and non-empty **as a pair** — one without
+   the other refuses. Each refusal names the variable and never prints a value. Every
+   missing-and-partial combination is tested.
 
-   Three tests: an unexpected host, an invalid scheme, and a redirect each produce a request
-   carrying none of the three headers.
+3. **Nothing sends a credential to a destination that was not validated against a TRUSTED anchor**
+   (findings M7 and N4, M7 found by both passes). Redaction protects the LOG. It does nothing about
+   the wire or about the wrong server, and a syntactic rule does not establish server identity.
+   Revision 3 allowed the bearer to go to *any* https host and to any dotless http host, which
+   exfiltrates the token to whatever a mistaken or hostile environment names.
+
+   **The anchor is committed configuration, never the same environment as the destination**
+   (finding N11). Revision 3 validated the Access host against `DOC_HARNESS_ZONE`, which is
+   environment-supplied — so an attacker who can set `DOC_HARNESS_PUBLIC_BASE` can set the zone to
+   match it and pass validation. The zone is therefore pinned in committed project configuration.
+
+   Before ANY header is attached, the destination URL is normalized and checked:
+   - **userinfo, path, query and fragment are rejected outright** on a control base URL. Only
+     scheme, host and port are permitted.
+   - the **publish bearer** attaches only to an origin on an allowlist held in committed
+     configuration: `https://` origins listed there, plus exactly the loopback origins and the
+     container-bridge form the operations step uses. Any other origin refuses.
+   - the **Access service-token headers** attach only over `https`, and only to a host equal to
+     `<name>.` plus the COMMITTED zone.
+   - **redirects stay refused everywhere** (`scripts/publish_doc.py:808` already does this), so no
+     credential can follow a 3xx to a third host.
+
+   Tests: an unexpected host, an invalid scheme, a URL carrying userinfo, and a control base
+   carrying a path each refuse before any request is built. **The redirect test is different, and
+   revision 3 got it backwards** (finding N10): it demanded the FIRST request carry no credentials,
+   which would simply return 401 and prove nothing. It asserts instead that the initial request to
+   the validated origin carries the credentials it should, that a 3xx is surfaced as a failure, and
+   that **no follow-up request is made to the redirect target**.
 
 ## What retires in the tests
 
@@ -304,8 +382,12 @@ that the risk left with Vercel.
   `harness/control.py:83`.
 - **Bearer auth on both control calls** — `harness/control.py:60-61`, compared with
   `hmac.compare_digest`; 401 at `harness/control.py:75`.
-- **Serving routes on the `Host` header** — `harness/routing.py:84`, which is why the origin half
-  must set it explicitly.
+- **Serving routes on the `Host` header** — `harness/app.py:49` calls `resolve_host` with
+  `environ["HTTP_HOST"]`; `resolve_host` is defined at `harness/routing.py:66` and refuses a host
+  outside the configured zone. This is why the origin half must set the header explicitly.
+- **The HTTP client is `urllib.request.urlopen`** — `scripts/publish_doc.py:763`, one
+  per-socket-operation `timeout=`, with redirects already refused at
+  `scripts/publish_doc.py:808`. No `requests` dependency exists and none is added.
 - **NOT proven, declared** — the harness's GitHub grant over an arbitrary document repository,
   and anything past the Cloudflare edge. Neither is provable from here.
 
@@ -314,7 +396,7 @@ that the risk left with Vercel.
 | AC | Where it lands | How it is proved |
 | --- | --- | --- |
 | 1 | stages 4a + 5 | tests over the manifest builder and both control calls: `expected_active: null` first publish, **a successful REPUBLISH over an existing deployment** (finding M12), the 409 race, a non-integer read-back id refusing before the POST, and `deployment_id` read from the 201 |
-| 2 | stage 6 | origin half runs as a recorded ops step; **edge half DEFERRED, skipping with exit 26** |
+| 2 | stage 6 | **DEFERRED WHOLE — both halves** (owner decision D22). The code and its tests ship; neither half has been executed against a running harness, because none is running. Exit 26 records the edge skip |
 | 3 | lint + cap 63 | a referenced same-origin resource missing from the manifest fails lint; a 40-char name warns and passes |
 | 4 | delete `refresh_index` | a test asserts the symbol is gone and no Vercel index deploy remains; `build_index.py` still imports |
 | 5 | `--dry-run` + the gate | the dry-run boundary below, asserted directly; gate green; **end-to-end live proof DEFERRED with AC 2** |
@@ -359,25 +441,40 @@ this child's to clear:
 
 | # | Precondition | Blocks | Owner |
 | --- | --- | --- | --- |
+| 0 | **the doc-harness stack is actually RUNNING on `10.0.17.205`** | AC 2 entirely, both halves | unowned — see below |
 | 1 | a hostname resolves — the wildcard `*.3dstories.ca` CNAME | AC 2's edge half | #35 AC 2 |
 | 2 | Cloudflare Access apps, policies and a service token | AC 2's edge half | #35 AC 3 |
 | 3 | `DOC_HARNESS_GITHUB_TOKEN` genuinely grants read on the document's repository | AC 5's live proof | unowned — see below |
 
-**Precondition 3 is independent of DNS and is the one nobody was tracking.** Stage 4a exercises the
-PUBLISHER's git credentials; the harness fetches blobs with a DIFFERENT identity. Every local check
-can pass while the harness cannot read a single blob, and the symptom is a 502 that looks like
-transport. It is recorded here as an explicit precondition with a preflight: before the live proof
-is attempted, the grant is demonstrated by a recorded read of one blob from the target repository
-using that token, and the result is pasted into whichever child performs it.
+**Precondition 0 was discovered while reviewing this design and is recorded nowhere else.**
+Measured 2026-08-24 on `10.0.17.205`: `docker ps -a` matches no harness or cloudflared container,
+and no harness network exists. The stack has never been brought up here. Every previous artifact
+treats missing DNS as the single blocker, and it is not — even the origin half, which needs no DNS
+at all, has nothing to talk to. Bringing it up needs `DOC_HARNESS_GITHUB_TOKEN` and
+`DOC_HARNESS_PUBLISH_TOKEN`, neither of which this run holds. **This is why AC 2 is deferred WHOLE
+rather than by its edge half alone** (owner decision D22).
 
-Local proxy for all three: the origin-half verification against the compose network, which
-exercises every line of the new code except the edge.
+**Precondition 3 is independent of DNS and is the one nobody was tracking.** Stage 4a exercises the
+PUBLISHER's git credentials, and the harness fetches blobs with a DIFFERENT identity. Every local
+check can pass while the harness cannot read a single blob, and the symptom is a 502 that looks
+like transport. It is recorded here as an explicit precondition with a preflight: before the live
+proof is attempted, the grant is demonstrated by a recorded read of one blob from the target
+repository using that token, and the result is pasted into whichever child performs it.
+
+**There is no local proxy any more.** Revision 3 offered the origin-half verification as one.
+Precondition 0 removes it: with nothing running, the origin half cannot be executed either. The
+only evidence this child can produce is its test suite, with the HTTP layer faked.
 
 ## Declined, with the reason recorded
 
 **M4 — no rollback after a failed verification.** The cross-model reviewer raised it as High: if
 stage 6 fails after the stage-5 POST has activated the new deployment, the failed deployment keeps
 serving, and nothing rolls back, quarantines, or verifies before activating.
+
+**Raised TWICE and declined twice** — as M4 at pass 2, and again as N1 at pass 3, where the
+reviewer located it at this very section. Neither the exact-key backstop nor the fuzzy layer
+matched it, because both its wording and its stated location changed, so this is adjudicated by
+hand and recorded in `dispositions.jsonl` so a fourth raising resolves mechanically.
 
 **Declined as scope, not refuted.** The finding is correct. It is also work no acceptance criterion
 asks for — the reviewer's own `criterion_relations` marks the concern `relation: scope` with an
@@ -409,4 +506,9 @@ criterion would be a scope addition; there is exactly one, and it is declared.
 | The republish and non-integer-read-back test cases | AC 1 |
 | The stated `--dry-run` boundary | AC 5 |
 | Precondition 3, the GitHub grant, in the deferred table | AC 5 |
-| **`--allow-unverified-edge`** | **an ADDITION.** No criterion asks for a flag. It exists so exit 26 does not break callers that treat non-zero as fatal, and it is named as an addition in the PR body. |
+| `--publish-remote` | AC 1 — the override that keeps remote selection deterministic on a fork-plus-upstream checkout |
+| `skills/design-doc-publish/SKILL.md` updates | AC 1 — the retired flag and the new exit codes are documented where callers read them |
+| The committed control-origin allowlist and pinned zone | AC 2 — the trust anchor the credential check needs |
+
+**Revision 4 adds no component that serves no criterion.** Revision 3's one such addition,
+`--allow-unverified-edge`, is deleted rather than declared.
