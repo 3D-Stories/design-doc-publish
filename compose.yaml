@@ -36,6 +36,10 @@ services:
     # --token-file support was probed.
     image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
     restart: unless-stopped
+    # OPT-IN. #34 documented running the harness locally with no Cloudflare at all, and an
+    # always-on tunnel service broke exactly that path. `docker compose up` still brings up
+    # only the harness; `docker compose --profile tunnel up -d` is what goes live.
+    profiles: ["tunnel"]
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       # The token arrives as a FILE. docker inspect prints a container's environment, so a
@@ -52,11 +56,17 @@ services:
         condition: service_healthy
 
 secrets:
-  # The PATH comes from a required substitution, matching the pattern the harness secrets
-  # already use. The file itself lives outside the repo; baking one operator's home
-  # directory into a tracked file would be a host-specific value in shared source.
+  # The PATH comes from a substitution, never a literal: baking one operator's home directory
+  # into a tracked file would be a host-specific value in shared source.
+  #
+  # It carries a DEFAULT rather than the `:?` required form, and that is a deliberate trade.
+  # A top-level secrets: block is interpolated whatever profile is active, so the required
+  # form failed `docker compose config` for anyone who just wanted the harness — breaking
+  # #34's documented local path. The default is a repo-relative placeholder that does not
+  # exist, so nothing silently mounts the wrong file: bringing the tunnel profile up without
+  # setting the variable fails on a missing file that names itself.
   tunnel_token:
-    file: ${DOC_HARNESS_TUNNEL_TOKEN_FILE:?set DOC_HARNESS_TUNNEL_TOKEN_FILE}
+    file: ${DOC_HARNESS_TUNNEL_TOKEN_FILE:-./.tunnel-token-not-configured}
 
 volumes:
   registry:

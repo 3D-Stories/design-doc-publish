@@ -200,6 +200,7 @@ price of the credential situation, not a design preference.
   cloudflared:
     image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
     restart: unless-stopped
+    profiles: ["tunnel"]          # opt-in; see "the local path" below
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
@@ -227,10 +228,28 @@ Docker socket. `--token-file` and its `TUNNEL_TOKEN_FILE` env form both exist �
 below — so the token sits in a `secrets:` mount at `/run/secrets/tunnel_token` and never enters
 the repo, the compose file, or the container environment.
 
-**The secret's PATH comes from a required-substitution env var** (pass-1 finding S3), matching the pattern
-`compose.yaml` already uses for the two harness secrets. The token file lives at
+**The tunnel is an OPT-IN PROFILE, and that is a defect this design caused and then caught.**
+Neither review pass raised it; testing the README's own documented command did. #34 documents
+running the harness locally with **no Cloudflare at all**, and a top-level `secrets:` block is
+interpolated whatever profile is active — so the required-substitution form below made plain
+`docker compose config` fail with `required variable DOC_HARNESS_TUNNEL_TOKEN_FILE is missing a
+value` for anyone who just wanted the harness. Measured, then fixed, then measured again:
+`docker compose config --services` with no tunnel variable now prints `harness` and exits 0,
+and `--profile tunnel` prints `harness` and `cloudflared` and exits 0.
+
+The secret's default is a repo-relative placeholder that does not exist, deliberately, so nothing
+silently mounts the wrong file: bringing the tunnel profile up without setting the variable fails
+on a missing file that names itself.
+
+**The secret's PATH still comes from a substitution rather than a literal** (pass-1 finding S3). The token file lives at
 `~/.secrets/doc-harness-tunnel-token`, outside the repo, and hardcoding one operator's home
 directory into a tracked file would be a host-specific value in shared source.
+
+It no longer matches the two harness secrets exactly, and the difference is worth naming rather
+than glossing: those use the required `:?` form, this one uses `:-` with a placeholder default.
+The reason is the interpolation asymmetry above — an `environment:` value is only interpolated
+for a service that is actually starting, while a top-level `secrets:` entry is interpolated
+always. The required form is right for the first and wrong for the second.
 
 **The image is pinned by digest, not `:latest`** (findings S6 and A7, one merged finding). This
 project pins every runtime dependency exactly and `test_the_requirement_is_pinned_exactly` asserts

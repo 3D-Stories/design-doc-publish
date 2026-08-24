@@ -172,7 +172,9 @@ application and confirm every intended host is listed and both policies are stil
 This step moved ahead of the DNS write deliberately. An unreadable secret discovered here costs
 nothing; discovered after a production DNS record exists, it costs a rollback.
 
-14. `docker compose up -d` on `10.0.17.205`.
+14. `docker compose --profile tunnel up -d` on `10.0.17.205`. **The profile is required** —
+    cloudflared is opt-in so that plain `docker compose up` keeps working for anyone running the
+    harness locally with no Cloudflare at all.
 15. Confirm the harness reports healthy before cloudflared advertises a route. cloudflared uses
     `depends_on: service_healthy`, so `docker compose ps` showing cloudflared started IS that
     confirmation.

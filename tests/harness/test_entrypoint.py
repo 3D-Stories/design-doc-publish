@@ -156,9 +156,23 @@ class TestComposeAndDockerfile:
         # point of asserting on the file at all.
         assert "env_file" not in block, "the token must not arrive via env_file"
 
-    def test_the_secret_path_comes_from_a_required_substitution(self):
-        # No operator's home directory baked into a tracked file.
-        assert "DOC_HARNESS_TUNNEL_TOKEN_FILE:?" in self._compose()
+    def test_the_secret_path_comes_from_a_substitution_not_a_literal(self):
+        # The invariant is that no operator's home directory is baked into a tracked file.
+        text = self._compose()
+        assert "${DOC_HARNESS_TUNNEL_TOKEN_FILE" in text
+        assert "/home/" not in text, "no absolute home directory in shared source"
+        assert "~/" not in text, "no home shorthand in shared source either"
+
+    def test_the_tunnel_is_opt_in_so_the_local_no_cloudflare_path_still_works(self):
+        """#34 documented running the harness with no Cloudflare at all. This is the guard
+        for that path, and it exists because #35 broke it once: a top-level secrets: block is
+        interpolated whatever profile is active, so a `:?` required substitution made plain
+        `docker compose config` fail for anyone who only wanted the harness."""
+        assert 'profiles: ["tunnel"]' in self._service("cloudflared")
+        top = self._compose().split("\nsecrets:\n", 1)[1]
+        assert "DOC_HARNESS_TUNNEL_TOKEN_FILE:?" not in top, (
+            "a required substitution here breaks `docker compose config` for the harness-only path")
+        assert "DOC_HARNESS_TUNNEL_TOKEN_FILE:-" in top, "it must still carry a default"
 
     def test_cloudflared_waits_for_a_healthy_harness(self):
         # Without this cloudflared advertises a route to a harness that has not finished

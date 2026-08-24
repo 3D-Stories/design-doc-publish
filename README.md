@@ -340,8 +340,12 @@ rather than by value, because `docker inspect` prints a container's environment:
 
 ```bash
 export DOC_HARNESS_TUNNEL_TOKEN_FILE=~/.secrets/doc-harness-tunnel-token
-docker compose up -d
+docker compose --profile tunnel up -d
 ```
+
+**The tunnel is opt-in.** Plain `docker compose up` still brings up the harness alone with no
+Cloudflare involvement, exactly as it did before #35 — the `tunnel` profile is what goes live.
+Without the profile you do not need the token variable at all.
 
 `cloudflared` waits for the harness to report healthy before it advertises a route, so the tunnel
 never points at a service that has not finished taking its cache lock. The image is pinned by
