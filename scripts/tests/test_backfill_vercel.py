@@ -108,5 +108,98 @@ class ReadOnlyByDefaultTests(unittest.TestCase):
         bf.require_execute(execute="abc123", expected="abc123", what="mapping")
 
 
+class FakeCli:
+    """The SUBPROCESS seam. Hands back canned pages in order, and records every argv."""
+
+    def __init__(self, pages):
+        self.pages = list(pages)
+        self.calls = []
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        if not self.pages:
+            raise AssertionError("the fake CLI was called more times than the test allowed")
+        return self.pages.pop(0)
+
+
+def page(names, nxt=None):
+    return 0, json.dumps({
+        "projects": [{"id": f"prj_{n}", "name": n, "latestProductionUrl": f"https://{n}.vercel.app/",
+                      "nodeVersion": "22.x", "deprecated": False, "updatedAt": 1}
+                     for n in names],
+        "pagination": {"next": nxt},
+        "contextName": "test",
+    }), ""
+
+
+class InventoryTests(unittest.TestCase):
+    """T2 — bounded walks, honest cutoffs, and a listing failure that stops the campaign."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.run = bf.RunDir(pathlib.Path(self._tmp.name) / "run")
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_pagination_follows_next_until_absent(self):
+        cli = FakeCli([page(["a", "b"], nxt="123"), page(["c"]), page(["a", "b"], nxt="123"),
+                       page(["c"])])
+        snap = bf.inventory(self.run, runner=cli, max_walks=3)
+        self.assertEqual(["a", "b", "c"], [r["name"] for r in snap["rows"]])
+        self.assertTrue(snap["converged"])
+        self.assertFalse(snap["cutoff"])
+        # The second page must carry --next; the first must not.
+        self.assertNotIn("--next", cli.calls[0])
+        self.assertIn("--next", cli.calls[1])
+        self.assertIn("123", cli.calls[1])
+
+    def test_two_agreeing_walks_converge(self):
+        cli = FakeCli([page(["a"]), page(["a"])])
+        snap = bf.inventory(self.run, runner=cli, max_walks=3)
+        self.assertTrue(snap["converged"])
+        self.assertEqual(2, snap["walks"])
+
+    def test_walks_that_never_agree_record_a_non_atomic_cutoff(self):
+        cli = FakeCli([page(["a"]), page(["a", "b"]), page(["a", "b", "c"])])
+        snap = bf.inventory(self.run, runner=cli, max_walks=3)
+        self.assertFalse(snap["converged"])
+        self.assertTrue(snap["cutoff"])
+        self.assertEqual(3, snap["walks"])
+        # The LAST fully completed walk is what is frozen, and it is bounded by two instants.
+        self.assertEqual(["a", "b", "c"], [r["name"] for r in snap["rows"]])
+        self.assertLessEqual(snap["started_at"], snap["completed_at"])
+
+    def test_max_walks_is_honoured(self):
+        cli = FakeCli([page(["a"]), page(["a", "b"]), page(["a", "b", "c"]), page(["d"])])
+        snap = bf.inventory(self.run, runner=cli, max_walks=2)
+        self.assertEqual(2, snap["walks"])
+        self.assertTrue(snap["cutoff"])
+
+    def test_non_zero_cli_exit_is_inventory_failed_not_an_empty_inventory(self):
+        cli = FakeCli([(1, "", "Error: not authenticated")])
+        with self.assertRaises(bf.CampaignFailed) as caught:
+            bf.inventory(self.run, runner=cli, max_walks=3)
+        self.assertEqual(bf.INVENTORY_FAILED, caught.exception.outcome)
+        self.assertIn("not authenticated", str(caught.exception))
+
+    def test_a_listing_missing_its_projects_array_is_inventory_failed(self):
+        cli = FakeCli([(0, json.dumps({"pagination": {"next": None}}), "")])
+        with self.assertRaises(bf.CampaignFailed) as caught:
+            bf.inventory(self.run, runner=cli, max_walks=3)
+        self.assertEqual(bf.INVENTORY_FAILED, caught.exception.outcome)
+
+    def test_unparseable_json_is_inventory_failed(self):
+        cli = FakeCli([(0, "not json at all", "")])
+        with self.assertRaises(bf.CampaignFailed):
+            bf.inventory(self.run, runner=cli, max_walks=3)
+
+    def test_the_snapshot_is_persisted_and_digested(self):
+        cli = FakeCli([page(["a"]), page(["a"])])
+        snap = bf.inventory(self.run, runner=cli, max_walks=3)
+        stored = self.run.read_json("inventory.json")
+        self.assertEqual(snap["rows"], stored["rows"])
+        self.assertEqual(bf.digest(stored["rows"]), stored["digest"])
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(unittest.main())

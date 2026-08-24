@@ -19,8 +19,10 @@ Vercel bytes, so comparing that same blob back against Vercel is a tautology and
 stale version of every drifted document. The publish TARGET is the document's current committed
 page at the remote tip, and the compare is target-versus-Vercel, which is a real question.
 
-**Nothing writes to a registry without an explicit `--execute` carrying the digest of the exact
-plan being executed.** Every command is read-only otherwise.
+**`--execute` gates REGISTRY mutations, and only those.** Every command writes local artifacts
+under its own run directory — that is what a resumable campaign is made of, and `inventory` could
+not otherwise start, since it is the command that produces the first digest. No `POST` reaches the
+control API without an explicit `--execute` carrying the digest of the exact plan being executed.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ import hashlib
 import json
 import os
 import pathlib
+import subprocess
 import sys
 import time
 
@@ -69,6 +72,20 @@ INVENTORY_FAILED = "inventory_failed"
 
 class Refused(Exception):
     """A gate refused. Never a bug — the refusal IS the feature."""
+
+
+class CampaignFailed(Exception):
+    """The whole campaign stops. NOT a row outcome.
+
+    A truncated or invalid listing is not a property of any one project, so recording it against a
+    row — or worse, continuing with a partial walk — would report an incomplete campaign as a
+    complete one.
+    """
+
+    def __init__(self, outcome: str, detail: str = ""):
+        super().__init__(f"{outcome}: {detail}" if detail else outcome)
+        self.outcome = outcome
+        self.detail = detail
 
 
 class RowError(Exception):
@@ -153,6 +170,91 @@ class RunDir:
         return json.loads(target.read_text(encoding="utf-8"))
 
 
+def _default_cli(argv):
+    """The real subprocess seam. Returns (returncode, stdout, stderr) and never raises for a
+    non-zero exit — the caller decides what a failure means."""
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _one_walk(runner) -> list:
+    """One complete walk of the Vercel listing, following `pagination.next` to exhaustion.
+
+    Every failure here is `inventory_failed`, never an empty list. A partial walk that read as
+    "there are no projects" would activate nothing and report success, which is the worst possible
+    way for this to break.
+    """
+    rows, nxt = [], None
+    while True:
+        argv = ["vercel", "project", "list", "-F", "json", "--limit", "100"]
+        if nxt:
+            argv += ["--next", str(nxt)]
+        code, out, err = runner(argv)
+        if code != 0:
+            raise CampaignFailed(INVENTORY_FAILED,
+                                 f"`vercel project list` exited {code}: {(err or '').strip()}")
+        try:
+            payload = json.loads(out)
+        except (ValueError, TypeError) as exc:
+            raise CampaignFailed(INVENTORY_FAILED,
+                                 f"the listing was not JSON: {exc}") from None
+        projects = payload.get("projects") if isinstance(payload, dict) else None
+        if not isinstance(projects, list):
+            raise CampaignFailed(INVENTORY_FAILED,
+                                 "the listing carries no `projects` array, so it cannot be read "
+                                 "as an inventory")
+        for item in projects:
+            rows.append({"id": item.get("id"), "name": item.get("name"),
+                         "latestProductionUrl": item.get("latestProductionUrl"),
+                         "updatedAt": item.get("updatedAt")})
+        nxt = (payload.get("pagination") or {}).get("next")
+        if not nxt:
+            break
+    # Sorted, because the listing's own order may vary between walks and convergence has to mean
+    # "the same set", not "the same order the server happened to answer in".
+    return sorted(rows, key=lambda r: (str(r.get("name")), str(r.get("id"))))
+
+
+def inventory(run: RunDir, *, runner=None, max_walks: int = 3) -> dict:
+    """Walk the listing until two consecutive walks agree, or the bound is hit.
+
+    A paginated walk cannot establish an atomic set at an instant, so a converged snapshot is the
+    strongest claim available and a non-converged one is recorded as a CUTOFF bounded by two
+    instants — never as a moment. Sessions in this workspace publish continuously, so this is the
+    normal case, not a corner.
+    """
+    runner = runner or _default_cli
+    started = int(time.time())
+    previous, walks = None, 0
+    while walks < max(1, int(max_walks)):
+        rows = _one_walk(runner)
+        walks += 1
+        if previous is not None and digest(previous) == digest(rows):
+            snapshot = {"rows": rows, "walks": walks, "converged": True, "cutoff": False,
+                        "started_at": started, "completed_at": int(time.time())}
+            snapshot["digest"] = digest(rows)
+            run.write_json("inventory.json", snapshot)
+            run.journal("_campaign", {"phase": "inventory", "converged": True,
+                                      "rows": len(rows), "walks": walks})
+            return snapshot
+        previous = rows
+    snapshot = {"rows": previous or [], "walks": walks, "converged": False, "cutoff": True,
+                "started_at": started, "completed_at": int(time.time())}
+    snapshot["digest"] = digest(snapshot["rows"])
+    run.write_json("inventory.json", snapshot)
+    run.journal("_campaign", {"phase": "inventory", "converged": False, "cutoff": True,
+                              "rows": len(snapshot["rows"]), "walks": walks})
+    return snapshot
+
+
+def _cmd_inventory(args, run) -> int:
+    snapshot = inventory(run, max_walks=args.max_walks)
+    kind = "converged" if snapshot["converged"] else "CUTOFF (walks never agreed)"
+    print(f"inventory: {len(snapshot['rows'])} rows, {snapshot['walks']} walk(s), {kind}")
+    print(f"inventory digest: {snapshot['digest']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="backfill_vercel.py",
@@ -205,7 +307,7 @@ def _not_yet(args, run):  # pragma: no cover - replaced per task
 
 
 COMMANDS = {
-    "inventory": _not_yet,
+    "inventory": _cmd_inventory,
     "map": _not_yet,
     "stage": _not_yet,
     "activate": _not_yet,
