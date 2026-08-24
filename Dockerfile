@@ -19,4 +19,14 @@ RUN useradd --system --uid 10001 harness \
  && chown -R harness:harness /var/lib/doc-harness /var/cache/doc-harness
 USER harness
 
+# A TCP connect from inside the container, deliberately NOT an HTTP health endpoint: the whole
+# design is that only gated hosts answer, so an unauthenticated route would be a new request
+# surface no criterion asked for. Measured in both states on this base image: exit 1 with
+# nothing listening (ConnectionRefusedError), exit 0 with a listener.
+# It assumes the harness accepts on loopback, which DOC_HARNESS_BIND's default 0.0.0.0:8080
+# does. Narrowing that bind breaks this silently AND stops cloudflared ever starting, because
+# it waits on service_healthy. Change both in one commit or neither.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+  CMD ["python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8080), 2).close()"]
+
 CMD ["python3", "-m", "harness"]

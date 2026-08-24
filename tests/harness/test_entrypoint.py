@@ -95,6 +95,63 @@ class TestComposeAndDockerfile:
                  if l.strip() and not l.strip().startswith("#")]
         assert lines == ["waitress==3.0.2"], "one exactly-pinned runtime dependency"
 
+    # ---- #35: the cloudflared service that puts the harness on the internet ----
+    # Read as text, not parsed: this repo's compose assertions are all textual and the
+    # test gate is deliberately dependency-free, so no YAML parser is introduced here.
+
+    def test_the_cloudflared_service_exists(self):
+        assert "cloudflared:" in self._compose()
+
+    def test_cloudflared_is_pinned_by_digest_and_never_a_moving_tag(self):
+        # --no-autoupdate does not stop a later pull resolving a different image, so a
+        # moving tag would let the stack's behavior change with no commit to review.
+        lines = [l.strip() for l in self._compose().splitlines()
+                 if l.strip().startswith("image:") and "cloudflared" in l]
+        assert len(lines) == 1, "exactly one cloudflared image line"
+        assert "@sha256:" in lines[0], lines[0]
+        assert ":latest" not in lines[0], lines[0]
+
+    def test_the_tunnel_token_is_a_declared_top_level_file_secret(self):
+        # A service referencing an undeclared secret makes compose reject the whole file,
+        # so cloudflared would never start. This is the assertion for that.
+        text = self._compose()
+        assert "\nsecrets:\n" in text, "a TOP-LEVEL secrets: block must exist"
+        top = text.split("\nsecrets:\n", 1)[1]
+        assert "tunnel_token:" in top and "file:" in top
+
+    def test_the_tunnel_token_is_never_an_environment_value(self):
+        # docker inspect prints a container's environment, so the token rides a file
+        # secret. cloudflared's own --help says --token takes precedence over
+        # --token-file, so setting both would silently defeat this.
+        for line in self._compose().splitlines():
+            stripped = line.strip()
+            assert not stripped.startswith("TUNNEL_TOKEN:"), stripped
+            assert not stripped.startswith("- TUNNEL_TOKEN="), stripped
+
+    def test_the_secret_path_comes_from_a_required_substitution(self):
+        # No operator's home directory baked into a tracked file.
+        assert "DOC_HARNESS_TUNNEL_TOKEN_FILE:?" in self._compose()
+
+    def test_cloudflared_waits_for_a_healthy_harness(self):
+        # Without this cloudflared advertises a route to a harness that has not finished
+        # taking its cache lock.
+        assert "condition: service_healthy" in self._compose()
+
+    def test_the_dockerfile_declares_a_healthcheck_with_no_new_request_surface(self):
+        # A TCP connect, deliberately NOT an HTTP /health route: the whole design is that
+        # only gated hosts answer, so a new unauthenticated route would undo it.
+        text = open(os.path.join(REPO_ROOT, "Dockerfile")).read()
+        assert "HEALTHCHECK" in text
+        # Assert on the directive itself, not the whole file: a prose comment must not be
+        # able to fail this, and it is the COMMAND that either adds a request surface or does
+        # not. Joins the continued line so the CMD travels with its HEALTHCHECK.
+        joined = text.replace("\\\n", " ")
+        line = next(l for l in joined.splitlines() if l.strip().startswith("HEALTHCHECK"))
+        assert "socket.create_connection" in line
+        assert "import socket" in line, "the probe must import what it calls"
+        for http in ("curl", "wget", "http://", "urllib", "/health"):
+            assert http not in line, f"the healthcheck must add no request surface: {http}"
+
 
 class TestBuildWiring:
     def test_build_constructs_the_real_stack_without_a_server(self, tmp_path):
