@@ -4,9 +4,9 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 #23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-3 | issues on this log
-38 | newest: epic in flight, #34 PR open
-2815/2823 | suite at last PR
+4 | issues on this log
+36 | newest: PR open, the publish swap
+2823/2943 | suite, baseline to this PR
 ```
 
 ```callout
@@ -29,11 +29,46 @@ gpt-5.6-sol), adversarially reviewed (deepseek-v4-pro: 10 findings, 8 fixed, 1 d
 with reason, 1 partial), owner-confirmed.
 
 ```phases
-#34 harness service | registry, control API, serving path, derived index | PR open
-#35 go-live | cloudflared tunnel, wildcard DNS, Cloudflare Access | pending
-#36 publish swap | publish_doc.py deploy/verify to the control API | pending
+#34 harness service | registry, control API, serving path, derived index | merged
+#35 go-live | cloudflared service merged; wildcard DNS and Cloudflare Access need an owner decision, so the issue stays open | blocked
+#36 publish swap | publish_doc.py publishes and verifies through the control API; live verification deferred whole | wip
 #37 migration | backfill 179 Vercel projects, 163 with a purpose token, byte-compare per row | pending
 ```
+
+## #36 — Publish through the harness, and the Vercel path retires
+
+PR open 2026-08-24, third child of #38. `publish_doc.py` goes from seven Vercel stages to six
+harness stages: render, name, lint, provenance, publish, verify. The inversion underneath is that
+the harness **never receives rendered bytes** — it takes a manifest naming a repository, a 40-hex
+commit and per-asset blob ids, then fetches every blob from GitHub itself. So the page must be
+committed and pushed *before* it is published, and one consequence is a gift: stage 6's byte
+equality now also proves the render matches the commit, which turns "rendered but forgot to commit"
+into a caught failure. Version **2.0.0**, not 1.5.0 — `--new-project`, `--vercel-scope` and
+`--limit` are gone, so an existing invocation now fails with argparse exit 2.
+
+```phases
+Design gate | 3 passes, 34 findings disposed, closed budget-exhausted by D22 | done
+Implementation | red before green on every task with a red, 17 commits | done
+Per-task review | 2 waves over the high-risk commits, 18 findings, 4 security | done
+Code review | 12 findings, 11 applied, 1 carried, plus the adversarial diff layer | done
+Security scan | 0 blocking, 0 advisory, 0 skipped — all five scanners ran | done
+Live verification | no hostname resolves and the stack is not running | blocked
+```
+
+```callout
+warn | Merging this removes the ability to publish, and that is deliberate
+The Vercel deploy path goes away here, and the harness cannot serve yet: no `*.3dstories.ca`
+hostname resolves, and the doc-harness stack is not running on 10.0.17.205 — measured, not
+assumed. So this version renders and lints exactly as before and can publish nowhere until the
+harness is live. Anyone who needs to publish today should stay on 1.4.0. Acceptance criterion 2 is
+**deferred whole, both halves**, the PR says *Part of* #36 rather than closing it, and #36 stays
+open. The likeliest-wrong claim in the deferred half is named in the PR: that the harness's
+`X-Doc-Deployment` echo and derived content types survive Cloudflare unchanged.
+```
+
+Suite: **2943 passed, 8 skipped, exit 0** against a recorded baseline of 2823 and 8. The delta is
+net — two whole Vercel test files were retired in the same change. This repository has no CI, so
+that local run is the regression evidence.
 
 ## #34 — Harness service: registry, control API, serving path, derived index
 

@@ -1,44 +1,68 @@
 #!/usr/bin/env python3
 """One command from a committed markdown doc to a verified-live page (#12, wave 5).
 
-Design: `docs/planning/2026-08-01-12-publish-pipeline.md` (revision 2, after a Step 4
-gate returned FAIL with six High findings).
+Design: `docs/planning/2026-08-01-12-publish-pipeline.md`, and for the harness migration
+`docs/planning/2026-08-24-36-publish-to-harness.md` (revision 4).
 
 Every step here already existed as prose in `SKILL.md`, and the prose had a measured
-failure rate: 37 Vercel projects, junk names like `deploy-713`, three duplicate deploys
-of one page, no index. Prose is re-performed by a model on every publish; a command is
-not. So the exit code is the verdict.
+failure rate: junk names like `deploy-713`, three duplicate deploys of one page, no index.
+Prose is re-performed by a model on every publish; a command is not. So the exit code is
+the verdict.
 
     python3 publish_doc.py --md docs/planning/x.md --project herdr-dashboard \\
                            --type design --ref 81 --title "#81 The Design"
 
-Seven stages, each able to refuse (exit ``EXIT_BASE + stage``):
+**PUBLISH-BEFORE-MERGE is the thing to understand first (#36).** The doc harness never
+receives rendered bytes. It takes a manifest naming a repo, a full 40-hex commit and, per
+asset, a repo path and a blob id — then fetches every blob FROM GITHUB itself. So the page
+must be committed and pushed BEFORE it is published, and the publish pins that commit. The
+working order is: render with ``--dry-run``, commit the ``.md`` and the ``.html`` together,
+push, then publish.
 
-    1 render  2 name  3 LINT  4 reuse-or-create  5 deploy  6 verify  7 index
+One consequence is a gift: because the harness serves the COMMITTED bytes, stage 6's byte
+equality also proves the render matches the commit. "Rendered but forgot to commit" becomes
+a caught failure rather than a stale page nobody notices.
 
-**The gate runs BEFORE the deploy, and that is a correction to the issue's own order.**
-The issue lists deploy → lint → verify, but AC4 requires a lint failure to leave
-"nothing deployed". Those cannot both hold: linting after the deploy means a page with
-an external request or a sub-AA token pair is already public by the time it is caught.
+Six stages, each able to refuse (exit ``EXIT_BASE + stage``):
 
-Three things this file is careful about, each because the first draft got it wrong:
+    1 render   2 name   3 LINT   4 provenance   5 publish   6 verify
+
+Two exits are NOT stage failures, and they sit above the 11-17 block so a caller can tell
+them apart: **25** means ``DOC_HARNESS_CONTROL_URL`` is unset and nothing was published,
+**26** means the page published and origin-verified while the edge half SKIPPED. 26 is not
+a pass.
+
+**The gate runs BEFORE the publish, and that is a correction to the issue's own order.**
+The issue lists deploy -> lint -> verify, but AC4 requires a lint failure to leave
+"nothing deployed". Those cannot both hold: linting afterwards means a page with an
+external request or a sub-AA token pair is already public by the time it is caught.
+
+Four things this file is careful about, each because a draft got it wrong:
 
 * **A name is validated by COMPONENT, never by shape.** `--project deploy --type design
   --ref 713` yields `deploy-design-713`, which matches the convention's pattern
   perfectly and is exactly the junk the convention exists to stop.
-* **The deploy is bound to the rendered file**, not to ambient link state — a temp dir
-  holding it as `index.html`, linked in that directory. `vercel deploy --prod` from the
-  wrong directory deploys the repository.
+* **Provenance is bound to the repository the MANIFEST names**, never to the process's
+  cwd. `--md` and `--out` are arbitrary paths used across a whole workspace, so resolving
+  from cwd pins the wrong repo — and the dangerous failure is not a 422, it is the path
+  existing in the wrong repo, where the harness serves a DIFFERENT file under the right
+  name with every later check still passing.
+* **No credential reaches a destination that was not validated first**, and no credential
+  is ever rendered into an error message, a log line, or a redirect that gets followed.
+  Redaction alone protects only the log; the destination check is what protects the wire.
 * **The verifier is written here, not borrowed.** `page_meta()` in `build_index.py`
   sends no cache-buster, exposes no status code, and collapses every failure into
   `(name, None)` — so a dead page and a live one are indistinguishable.
 
-Version control and PR sequencing stay OUT of this script (AC6): committing and opening
-a pull request remain the workflows' business, and a test greps this file to keep it so.
+Version control stays OUT of this script in the sense that matters (AC6): it READS git —
+the repository, the committed blob ids, whether HEAD is pushed — because the harness
+fetches from GitHub and none of that is answerable otherwise. It never COMMITS, stages,
+pushes, branches or opens a pull request, and a test enforces exactly that split.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import importlib.util
 import json
@@ -53,6 +77,7 @@ import tempfile
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from urllib.parse import unquote
@@ -93,6 +118,30 @@ CHECK_STYLE_DEVICES = _LINT.check_style_devices
 CHECK_TEMPLATE_CLASSIFICATION = _LINT.check_template_classification
 INDEX = _load(INDEX_SCRIPT, "_publish_doc_index")
 VDL = _load(HERE / "vdl_packs.py", "_publish_doc_vdl")
+
+# Finding N7. The manifest carries no content_type — the harness DERIVES it — so a second
+# copy of the extension mapping here would drift, and drift produces both false failures
+# and false passes. This is the harness's own function, not a reimplementation.
+#
+# LAZY, per the Step 8a inline pass. At module scope a missing `harness/` would make the
+# whole script unimportable, so the process would die before it could print a sentence —
+# and RENDERING, the one thing that needs no harness at all, would die with it. Deferring
+# the import to the point of use means the coupling fails loudly where it matters and
+# nowhere else.
+
+
+def content_type_for(url_path: str) -> str:
+    """The harness's own derivation, resolved on first use."""
+    if str(HERE.parent) not in sys.path:
+        sys.path.insert(0, str(HERE.parent))
+    try:
+        from harness.manifest import content_type_for as _impl
+    except ImportError as e:                                  # pragma: no cover - see below
+        raise StageError(
+            6, "cannot import the harness's content-type derivation "
+               f"(harness/manifest.py): {e}. Verification compares each asset against the "
+               "type the HARNESS derives, so a second copy here would drift silently.") from e
+    return _impl(url_path)
 CONFIG = _load(HERE / "user_config.py", "_publish_doc_user_config")
 
 # Offset past argparse's own exit code 2, so a usage error is never mistaken for a
@@ -138,13 +187,19 @@ WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic pro
 INDEX_PROJECT = "docs-index"
 MAX_NAME = 100
 
-# Vercel cuts the auto-assigned `<name>.vercel.app` label at 35 characters and strips a
-# trailing hyphen left by the cut (#23; measured 2026-08-13 across the 20 live projects:
-# longest intact label 33, every truncated label 34-35, shortest truncated name 36 — and
-# confirmed on the 2026-08-12 deploy where a 41-char name aliased to a 35-char label).
-# An over-cap name deploys FINE and then 404s at its conventional URL forever, so stage 2
-# refuses it: refusing before the deploy is cheaper than stage 6 discovering it after.
-MAX_ALIAS_LABEL = 35
+# #36 AC3: 35 -> 63. The old cap was VERCEL's, not a naming preference — Vercel cuts the
+# auto-assigned `<name>.vercel.app` label at 35 and strips a trailing hyphen left by the
+# cut (#23; measured 2026-08-13 across the 20 live projects), so an over-cap name deployed
+# fine and then 404d at its conventional URL forever. The harness truncates nothing. Its
+# limit is the DNS label limit itself, enforced by `harness/routing.py:is_valid_label`.
+#
+# So the refusal moves out to 63, where it is still a refusal because the harness would
+# refuse too, and 36-63 becomes a WARNING: publishable, just long.
+MAX_ALIAS_LABEL = 63
+
+# Local plumbing, so a hung git cannot hang a publish. Generous: a first fetch on a big
+# repository is genuinely slow.
+_GIT_TIMEOUT = 120
 
 
 class StageError(Exception):
@@ -154,6 +209,865 @@ class StageError(Exception):
         super().__init__(message)
         self.stage = stage
         self.message = message
+
+
+# --- #36: the declared states, and why they sit ABOVE the stage block ------------------
+#
+# `EXIT_BASE + stage` owns 11 through 17. A code inside that range cannot be told apart
+# from a stage FAILURE, and these two are not failures — they are states the operator
+# declared by leaving a variable unset. Putting them at 25 and 26 is what lets a caller
+# distinguish "you did not configure an endpoint" from "stage 5 tried and could not".
+
+EXIT_CONTROL_URL_UNSET = 25
+EXIT_EDGE_SKIPPED = 26
+
+
+class DeclaredStateError(Exception):
+    """Not a stage failure: a state the operator declared by leaving a variable unset.
+
+    Carries its own exit code rather than deriving one from a stage, because the whole
+    point is that no stage was reached.
+    """
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _normalized_origin(raw: str, *, stage: int, varname: str) -> str:
+    """`scheme://host[:port]`, or raise.
+
+    Step-4 finding N4: the previous rule was syntactic — https, or a host with no dot —
+    which still let the publish bearer reach ANY https host. Transport syntax does not
+    establish server identity. This function does the half that IS mechanical: it refuses
+    anything that is not exactly scheme, host and port, so a base URL can never smuggle
+    userinfo (which is a credential), a path, a query or a fragment past the allowlist
+    check that follows it.
+    """
+    parsed = urllib.parse.urlsplit(raw.strip())
+    if parsed.scheme not in ("http", "https"):
+        raise StageError(stage, f"{varname} must be an http or https URL, not {raw.strip()!r}")
+    if not parsed.hostname:
+        raise StageError(stage, f"{varname} carries no host: {raw.strip()!r}")
+    if parsed.username or parsed.password:
+        raise StageError(
+            stage, f"{varname} carries userinfo, which is a credential in a URL. "
+                   "Give scheme, host and port only.")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise StageError(
+            stage, f"{varname} must be scheme, host and port only — no path, query or "
+                   f"fragment. Got {raw.strip()!r}")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def control_base(env) -> str:
+    """The control API base, or raise. **There is no default** (owner decision D21).
+
+    Revision 2 of the #36 design defaulted this to the compose-network address
+    ``http://harness:8080`` and called it reachable today. Measured on the harness host
+    2026-08-24: the host reaches a container's BRIDGE IP with no published port, and never
+    resolves a compose SERVICE name. `compose.yaml` states the harness publishes no host
+    port and never will. So there is no value that is right by default, and guessing one
+    is how a publish fails with a connection error instead of a sentence.
+    """
+    raw = (env.get("DOC_HARNESS_CONTROL_URL") or "").strip()
+    if not raw:
+        raise DeclaredStateError(
+            EXIT_CONTROL_URL_UNSET,
+            "DOC_HARNESS_CONTROL_URL is not set, and it has no default. Point it at the "
+            "harness control API. From the harness host that is the container's bridge "
+            "address: DOC_HARNESS_CONTROL_URL=http://$(docker compose ps -q harness | "
+            "xargs docker inspect -f "
+            "'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'):8080")
+    return _normalized_origin(raw, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+
+
+def public_base(env) -> str | None:
+    """The public host pattern for stage 6's edge half, or ``None`` meaning SKIP.
+
+    Unset is a legitimate declared state, not an error: no harness hostname resolves yet.
+    The skip is visible and exits ``EXIT_EDGE_SKIPPED``; it never exits 0, because every
+    caller and script reads 0 as a pass.
+    """
+    raw = (env.get("DOC_HARNESS_PUBLIC_BASE") or "").strip()
+    if not raw:
+        return None
+    base = _normalized_origin(raw, stage=6, varname="DOC_HARNESS_PUBLIC_BASE")
+    if not base.startswith("https://"):
+        raise StageError(
+            6, "DOC_HARNESS_PUBLIC_BASE must be https: the Cloudflare Access service "
+               f"tokens are sent to this host, and plaintext would expose them. Got {base!r}")
+    return base
+
+
+# --- #36 stage 4a: provenance, failing LOCALLY -----------------------------------------
+#
+# The harness does not accept rendered bytes. It takes a manifest naming a repo, a full
+# commit sha and, per asset, a repo path and a blob id, then fetches every blob FROM
+# GITHUB and refuses on any mismatch. So the page must be committed and pushed BEFORE the
+# publish, and the publish pins that commit.
+#
+# Each check below is a refusal the harness would eventually make anyway. Making it here
+# turns a 422 about a blob id into one clear local sentence.
+
+_GITHUB_SLUG = re.compile(
+    r"^(?:git@github\.com:|ssh://git@github\.com/|https?://(?:[^@/]+@)?github\.com/)"
+    r"(?P<slug>[^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+
+
+def _git(argv: list[str], cwd: Path | None = None, *, runner=None):
+    """One git call. `runner` exists so the suite can script git without a real repository.
+
+    Looked up on the module at call time (never bound at import) so the existing
+    `monkeypatch.setattr(subprocess, "run", ...)` fixture keeps working unchanged.
+    """
+    run = runner if runner is not None else subprocess.run
+    full = ["git", *(["-C", str(cwd)] if cwd is not None else []), *argv]
+    return run(full, capture_output=True, text=True, check=False, timeout=_GIT_TIMEOUT)
+
+
+def github_slug(url: str) -> str | None:
+    """`owner/name` for a GitHub remote URL, else None. Normalizing here is what lets the
+    manifest's `repo` be DERIVED from the selected remote rather than configured beside it,
+    so the two can never disagree."""
+    m = _GITHUB_SLUG.match((url or "").strip())
+    return m.group("slug") if m else None
+
+
+def repo_root(path: Path, *, runner=None) -> str | None:
+    r = _git(["rev-parse", "--show-toplevel"], path, runner=runner)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def assert_one_repository(md: Path, out: Path, *, runner=None) -> str:
+    """Finding S1. `--md` and `--out` are arbitrary paths and this tool runs across a whole
+    workspace, so the document routinely lives in a different repository from the process's
+    cwd. Resolving via cwd pins the WRONG repo. The benign failure is a 422; the dangerous
+    one is that the path exists in the wrong repo and the harness serves a **different file
+    under the right name**, with every downstream check still passing."""
+    a = repo_root(md.resolve().parent, runner=runner)
+    b = repo_root(out.resolve().parent, runner=runner)
+    if a is None or b is None:
+        raise StageError(4, f"--md and --out must live inside a git repository; "
+                            f"{'--md' if a is None else '--out'} does not.")
+    if a != b:
+        raise StageError(
+            4, f"--md and --out resolve into different repositories ({a} and {b}). "
+               "The harness would serve a different file under the right name, and every "
+               "later check would still pass. Refusing.")
+    return a
+
+
+def assert_blob_committed(root: Path, repo_path: str, blob_id: str, *, runner=None) -> None:
+    """Finding A2. Compare against the COMMITTED blob, never against the file's own bytes.
+
+    `git hash-object <file>` hashes the working tree, so comparing it to itself proves
+    nothing about the commit being pinned. The real question is whether `HEAD:<repo_path>`
+    is that same blob.
+    """
+    r = _git(["rev-parse", f"HEAD:{repo_path}"], root, runner=runner)
+    if r.returncode != 0:
+        raise StageError(
+            4, f"{repo_path} is not committed at HEAD, so the harness cannot fetch it. "
+               "Commit and push the rendered page and its assets before publishing.")
+    committed = r.stdout.strip()
+    if committed != blob_id:
+        raise StageError(
+            4, f"{repo_path} in the working tree is not what HEAD holds "
+               f"(working tree {blob_id}, HEAD {committed}). The publish would pin a commit "
+               "that does not contain these bytes. Commit the change first.")
+
+
+def select_remote(root: Path, override: str | None, *, runner=None) -> tuple[str, str]:
+    """The remote to pin, and the `owner/name` derived FROM it. Findings M5 and N9.
+
+    Ordered, stopping at the first that resolves. The order matters: the first attempt at
+    this refused whenever two GitHub remotes existed, which is every ordinary
+    fork-plus-upstream checkout — it would have refused far more often than it caught
+    anything.
+    """
+    names = [n for n in _git(["remote"], root, runner=runner).stdout.split() if n]
+
+    def slug_of(name):
+        return github_slug(_git(["remote", "get-url", name], root, runner=runner).stdout)
+
+    # a. an explicit override always wins.
+    if override:
+        if override not in names:
+            raise StageError(4, f"--publish-remote {override!r} is not a remote here. "
+                                f"Remotes: {', '.join(names) or 'none'}")
+        slug = slug_of(override)
+        if slug is None:
+            raise StageError(4, f"--publish-remote {override!r} is not a GitHub remote. "
+                                "The harness fetches blobs from GitHub.")
+        return override, slug
+
+    # b. the branch's own upstream, when it is a GitHub remote.
+    up = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+              root, runner=runner)
+    if up.returncode == 0 and "/" in up.stdout.strip():
+        name = up.stdout.strip().split("/", 1)[0]
+        slug = slug_of(name)
+        if slug is not None:
+            return name, slug
+
+    # c. exactly one GitHub remote needs no upstream at all.
+    github = [(n, slug_of(n)) for n in names]
+    github = [(n, sl) for n, sl in github if sl is not None]
+    if len(github) == 1:
+        return github[0]
+    if not github:
+        raise StageError(
+            4, f"no GitHub remote here, and the harness fetches blobs from GitHub. "
+               f"Remotes: {', '.join(names) or 'none'}")
+    raise StageError(
+        4, "cannot tell which remote to pin: this branch has no upstream and there are "
+           f"several GitHub remotes ({', '.join(n for n, _ in github)}). "
+           "Pass --publish-remote <name>.")
+
+
+def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
+                          runner=None) -> None:
+    """Finding A6. "Is HEAD pushed" is NOT `ls-remote` succeeding, and it is NOT ref-tip
+    equality — a pushed commit that is no longer a tip is still perfectly reachable, and
+    tip-matching would falsely reject it. The rule is that nothing on HEAD is missing from
+    the remote-tracking ref.
+
+    `fetch` is False under `--dry-run` (finding N10, AC5): the fetch is new network access
+    and it mutates remote-tracking refs, so a flag whose whole point is touching nothing
+    must not perform it.
+    """
+    # Finding S7. `rev-parse --abbrev-ref HEAD` yields the literal string "HEAD" when
+    # detached, and passing it through compares against `<remote>/HEAD` — a symbolic ref
+    # that may well contain the commit, so provenance PASSED where the design says refuse.
+    if not branch or branch == "HEAD":
+        raise StageError(
+            4, "HEAD is detached, so there is no branch to check against the remote. "
+               "Check out the branch you intend to publish from.")
+    if fetch:
+        # Finding A7: WITHOUT --prune a tracking ref left behind by a deleted branch or a
+        # changed remote URL still contains HEAD, so this passes while GitHub no longer
+        # exposes that commit — and the harness then cannot fetch it.
+        f = _git(["fetch", "--prune", remote], root, runner=runner)
+        if f.returncode != 0:
+            raise StageError(4, f"git fetch --prune {remote} failed, so reachability cannot be "
+                                f"established: {(f.stderr or f.stdout).strip()}")
+    ref = f"{remote}/{branch}"
+    r = _git(["rev-list", "--count", f"{ref}..HEAD"], root, runner=runner)
+    if r.returncode != 0:
+        raise StageError(4, f"cannot compare HEAD against {ref}: "
+                            f"{(r.stderr or r.stdout).strip()}")
+    if r.stdout.strip() != "0":
+        listing = _git(["rev-list", "--oneline", f"{ref}..HEAD"], root, runner=runner)
+        raise StageError(
+            4, f"HEAD is not reachable from {ref}: {r.stdout.strip()} commit(s) are not "
+               f"pushed. The harness fetches from GitHub and would not find them.\n"
+               + listing.stdout.rstrip())
+
+
+# --- #36 stage 5: publish through the control API ---------------------------------------
+#
+# Two calls, both bearing `Authorization: Bearer $DOC_HARNESS_PUBLISH_TOKEN`, both under
+# `/v1` (`harness/control.py:34` — an unprefixed path is a 404 at `harness/control.py:83`,
+# which is what revision 2 of the design would have shipped).
+
+# Finding N8. `urllib.request.urlopen` takes ONE per-socket-operation deadline, not
+# separate connect and read deadlines, and this repository has no `requests` dependency —
+# the gate is deliberately dependency-free. So the contract is what urllib can enforce,
+# stated honestly rather than tabulated as something it cannot.
+# Step 8a finding R0. A per-socket deadline does not bound an unqualified `read()`: a
+# server that trickles bytes keeps the call alive for ever, and a huge response exhausts
+# memory. Every response this tool reads is capped.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_READ_CHUNK = 64 * 1024
+# The WHOLE-read budget. Separate from the per-socket deadline, because that one is reset
+# by every byte a hostile peer sends.
+RESPONSE_DEADLINE = 60.0
+
+CONTROL_READ_TIMEOUT = 20      # a registry read
+PUBLISH_TIMEOUT = 120          # the harness fetches every blob from GitHub inside this call
+
+# The characters `harness/routing.py:canonical_url_path` refuses unencoded. Catching them
+# here turns a 422 about an encoding into one sentence naming the file.
+_NEEDS_ENCODING = set(" +(),&'=@!$*")
+
+
+_HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def validate_manifest(manifest: dict) -> None:
+    """Refuse locally anything `harness/manifest.py` would refuse with a 422.
+
+    **`entry_path` is the field the design forgot.** The manifest carries a top-level
+    `entry_path` that must name a declared asset (`harness/manifest.py:192-199`), an asset
+    `url_path` of `/` is refused outright (`harness/manifest.py:113`), and serving maps a
+    request for `/` onto `entry_path` (`harness/serving.py:80`). None of that appears in the
+    #36 design, and none of the three review passes caught it — so the first manifest this
+    tool built would have been a 422 about a field nobody had written down. Every rule below
+    mirrors one in the harness, so the refusal arrives here as a sentence instead.
+    """
+    def bad(msg):
+        raise StageError(5, f"manifest: {msg}")
+
+    name = manifest.get("name")
+    if not isinstance(name, str) or not re.match(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", name):
+        bad(f"name must be one DNS label, lowercase, 1-63 characters. Got {name!r}")
+    repo = manifest.get("repo")
+    if (not isinstance(repo, str) or not _REPO_RE.match(repo)
+            or any(part in (".", "..") for part in repo.split("/"))):
+        bad(f"repo must be 'owner/name' with no '.' or '..' segment. Got {repo!r}")
+    sha = manifest.get("commit_sha")
+    if not isinstance(sha, str) or not _HEX40_RE.match(sha.lower()):
+        bad(f"commit_sha must be a full 40-hex commit id, not a ref. Got {sha!r}")
+
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or not assets:
+        bad("assets must be a non-empty list")
+
+    seen = set()
+    for i, a in enumerate(assets):
+        if not isinstance(a, dict):
+            bad(f"assets[{i}] must be an object")
+        url_path = a.get("url_path")
+        if not isinstance(url_path, str) or not url_path.startswith("/"):
+            bad(f"assets[{i}].url_path must be an absolute path. Got {url_path!r}")
+        if url_path == "/":
+            bad(f"assets[{i}].url_path must name a file, not '/'. The entry page is declared "
+                "by its real path and reached through entry_path.")
+        if url_path in seen:
+            bad(f"duplicate url_path {url_path!r}")
+        seen.add(url_path)
+        repo_path = a.get("repo_path")
+        if (not isinstance(repo_path, str) or repo_path.startswith("/")
+                or ".." in repo_path.split("/")):
+            bad(f"assets[{i}].repo_path must be relative with no '..'. Got {repo_path!r}")
+        if not isinstance(a.get("blob_id"), str) or not _HEX40_RE.match(a["blob_id"].lower()):
+            bad(f"assets[{i}].blob_id must be 40 hex characters")
+        if not isinstance(a.get("sha256"), str) or not _HEX64_RE.match(a["sha256"].lower()):
+            bad(f"assets[{i}].sha256 must be 64 hex characters")
+        if not isinstance(a.get("size"), int) or isinstance(a.get("size"), bool):
+            bad(f"assets[{i}].size must be an integer")
+
+    entry_path = manifest.get("entry_path")
+    if not isinstance(entry_path, str) or not entry_path:
+        bad("entry_path is required: it is what a request for '/' resolves to")
+    if entry_path not in seen:
+        bad(f"entry_path {entry_path!r} names no declared asset, so '/' would 404 on a "
+            "deployment that otherwise activated cleanly")
+
+
+def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base: Path,
+                   name: str, repo: str, commit_sha: str, md_path: Path | None = None,
+                   rendered: str | None = None) -> dict:
+    """Describe what is COMMITTED, never what is in hand.
+
+    The harness fetches every blob from GitHub by `blob_id`, which is git's own object id
+    (`harness/control.py:git_blob_id`) — a sha256 in its place would look up nothing. The
+    per-asset `sha256` is a SECOND, independent check the harness makes on the bytes it
+    fetched, so both are sent.
+
+    `content_type` is deliberately absent: the harness derives it from the extension and a
+    sent one is a 422.
+    """
+    root = root.resolve()
+
+    def entry_for(path: Path, url_path: str) -> dict:
+        # Finding S5. `stage_assets` refuses a symlink, and this REOPENS the original path
+        # afterwards — so a swap in between would be followed here, publishing unrelated
+        # committed bytes under an allowed asset URL. The same rule, applied at the second
+        # place the path is touched.
+        if path.is_symlink():
+            raise StageError(
+                4, f"{path} is a symlink. An asset must be a real file: this runs after "
+                   "staging already checked, and following a link swapped in between is "
+                   "how other committed bytes reach a public URL.")
+
+        path = path.resolve()
+        if not path.is_relative_to(root):
+            raise StageError(
+                4, f"{path} is outside the repository at {root}, so the harness could "
+                   "never fetch it. Everything published must be committed here.")
+        raw = path.read_bytes()
+        blob = _git(["hash-object", str(path)], root)
+        if blob.returncode != 0:
+            raise StageError(4, f"git could not hash {path}: {blob.stderr.strip()}")
+        blob_id = blob.stdout.strip()
+        repo_path = str(path.relative_to(root))
+        assert_blob_committed(root, repo_path, blob_id)
+        return {"url_path": url_path, "repo_path": repo_path, "blob_id": blob_id,
+                "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    # The entry page is served at a real path and REACHED through `entry_path`; an asset
+    # `url_path` of `/` is refused outright (`harness/manifest.py:113`).
+    # Finding R5. Every surface here says the `.md` and the `.html` ship together, and
+    # nothing checked the markdown — so committing only the HTML published happily, with
+    # the pinned commit carrying a source that never produced that page.
+    if md_path is not None:
+        md_path = md_path.resolve()
+        if not md_path.is_relative_to(root):
+            raise StageError(4, f"{md_path} is outside the repository at {root}.")
+        blob = _git(["hash-object", str(md_path)], root)
+        if blob.returncode != 0:
+            raise StageError(4, f"git could not hash {md_path}: {blob.stderr.strip()}")
+        assert_blob_committed(root, str(md_path.relative_to(root)), blob.stdout.strip())
+
+    # Partial mitigation for finding R3. The full remedy is to thread captured bytes from
+    # the render all the way through, which is a larger refactor than this child should
+    # carry. What is closed here is the exact danger named: between the lint gate and this
+    # point, the output path could be replaced by a DIFFERENT committed page, which would
+    # then be hashed, published and verified against — every check passing on a file the
+    # gate never saw. Comparing against the bytes the renderer returned catches that.
+    if rendered is not None and page_path.read_bytes() != rendered.encode("utf-8"):
+        raise StageError(
+            4, f"{page_path} changed after it was rendered and linted. Refusing: the "
+               "manifest would pin a page this run never checked.")
+
+    # The url_path must be CANONICALLY PERCENT-ENCODED or the publish is a 422. This is
+    # the #34 boundary learning, and it is easy to lose: `stage_assets` resolves a
+    # percent-encoded reference back to the real filename, so `rel` here carries the
+    # DECODED name — a literal space, or any of `+ ( ) , & ' = @ ! $ *`. Prefixing "/" and
+    # sending that is exactly the 422 the learning warns about.
+    #
+    # `repo_path` keeps the real decoded name, because that is what git holds.
+    assets = [entry_for(page_path, "/index.html")]
+    assets += [entry_for(asset_base / rel, "/" + urllib.parse.quote(rel, safe="/"))
+               for rel in staged]
+    return {"name": name, "repo": repo, "commit_sha": commit_sha,
+            "entry_path": "/index.html", "assets": assets}
+
+
+def _control_request(base: str, path: str, token: str, *, method: str, body: bytes | None,
+                     env=None):
+    """Finding A4, and the sharpest of the Step-11 wave.
+
+    The destination check used to live in `main()` while THIS function — the one that
+    actually attaches `Authorization: Bearer` — validated nothing. Any caller that did not
+    reproduce main()'s separate step could send the token anywhere, and the proof was
+    already in the test suite: it called `read_active` and `publish` directly, with no
+    guard, and they worked. A guard a caller must remember is not a guard.
+    """
+    assert_bearer_destination(base, env=env, stage=5)
+    req = urllib.request.Request(f"{base}{path}", data=body, method=method)
+    req.add_header("Authorization", f"Bearer {token}")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    return req
+
+
+def _read_bounded(resp, *, stage: int, deadline_s: float = RESPONSE_DEADLINE) -> bytes:
+    """At most `MAX_RESPONSE_BYTES`, and at most `deadline_s` of wall clock.
+
+    Findings P1 and A2, raised independently by both Step-11 passes. A size cap is NOT a
+    time bound: a peer sending one byte inside each socket timeout keeps a single blocking
+    `read()` alive for ever, and the earlier version did exactly one such read. The design
+    promised a stage wall-clock budget; this is it, enforced between chunks.
+    """
+    end = time.monotonic() + deadline_s
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        if time.monotonic() > end:
+            raise StageError(
+                stage, f"the response did not finish within its {deadline_s:g}s budget. A "
+                       "peer that trickles bytes can hold a socket timeout open for ever, "
+                       "so the whole read is bounded rather than each operation.")
+        chunk = resp.read(_READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            raise StageError(
+                stage, f"the response exceeded {MAX_RESPONSE_BYTES} bytes and was refused "
+                       "rather than truncated. A truncated body would parse as something "
+                       "other than what was sent.")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _control_call(req, timeout: int, *, opener=None):
+    """Returns (status, parsed-json-or-None).
+
+    **The default opener does NOT follow redirects** (Step 8a finding R1). Both control
+    calls carry `Authorization: Bearer <publish token>`, and `urlopen` follows a 302
+    silently — so a redirect from an allowlisted control origin would have handed the
+    bearer to whatever host the redirect named, straight past `assert_bearer_destination`.
+    `NO_REDIRECTS` already existed for exactly this reason and was not used here.
+    """
+    call = opener if opener is not None else NO_REDIRECTS.open
+    with call(req, timeout=timeout) as resp:
+        raw = _read_bounded(resp, stage=5)
+    try:
+        return getattr(resp, "status", 200), json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return getattr(resp, "status", 200), None
+
+
+def read_active(base: str, name: str, token: str, *, opener=None, env=None) -> int | None:
+    """The active deployment id, or None when nothing is published yet.
+
+    `harness/control.py:_read_back` answers **200 with a null id**, never 404 — a first
+    publish reads null and passes it straight back as `expected_active`. Pinned at
+    `tests/harness/test_control.py:184`.
+
+    A present-but-unparseable id refuses HERE, before anything is published. Finding M12:
+    a client that always sent null, or that misparsed a non-null read-back, would pass
+    every first-publish and race test while every republish returned 409 for ever.
+    """
+    req = _control_request(base, f"/v1/deployments/{name}", token, method="GET",
+                           body=None, env=env)
+    try:
+        status, payload = _control_call(req, CONTROL_READ_TIMEOUT, opener=opener)
+    except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise StageError(
+                5, f"the control API answered {e.code}, a redirect. It is NOT followed: "
+                   "the request carries the publish bearer, and following a redirect "
+                   "would send that token to a host the allowlist never approved.") from e
+        raise StageError(5, f"reading back {name} failed with HTTP {e.code}. The publish "
+                             "was not attempted.") from e
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise StageError(5, f"could not reach the control API at {base}: {e}. "
+                             "DOC_HARNESS_CONTROL_URL must name a reachable harness.") from e
+    # Finding S2: the STATUS is part of the contract, not decoration. Accepting any 2xx
+    # lets a wrong-version or no-op endpoint answer for one that does not exist.
+    if status != 200:
+        raise StageError(5, f"the read-back for {name} answered HTTP {status}, and the "
+                            "contract is exactly 200.")
+    if not isinstance(payload, dict):
+        raise StageError(5, f"the read-back for {name} was not a JSON object.")
+    # Finding R6: a MISSING field is indeterminate, not "nothing is published". Treating
+    # the two alike let a truncated or wrong-version response publish with
+    # `expected_active: null`, which is a compare-and-swap against a state never read.
+    if "active_deployment_id" not in payload:
+        raise StageError(
+            5, f"the read-back for {name} carries no active_deployment_id field at all, so "
+               "the current state is unknown. Refusing rather than publishing as if "
+               "nothing were live.")
+    active = payload.get("active_deployment_id")
+    if active is None:
+        return None
+    if not isinstance(active, int) or isinstance(active, bool):
+        raise StageError(
+            5, f"the read-back for {name} carries a non-integer active_deployment_id "
+               f"({active!r}). Refusing to publish against a value that cannot be compared "
+               "and swapped.")
+    return active
+
+
+def publish(base: str, manifest: dict, expected_active: int | None, token: str,
+            *, opener=None, env=None) -> int:
+    """POST the manifest and return the NEW deployment id from the 201.
+
+    `expected_active` is required and is sent EXPLICITLY, including as null: the parser
+    refuses an omitted field with its own message that omission and null are different
+    things.
+
+    The success contract is 201 with an integer `deployment_id` (`harness/control.py:217`).
+    A 201 whose body lacks one is a failure, not a pass — stage 6 would otherwise verify
+    against the wrong deployment.
+    """
+    validate_manifest(manifest)
+    for asset in manifest.get("assets", []):
+        bad = _NEEDS_ENCODING & set(asset.get("url_path", ""))
+        if bad:
+            raise StageError(
+                5, f"url_path {asset['url_path']!r} contains {''.join(sorted(bad))!r}, which "
+                   "harness/routing.py:canonical_url_path refuses unencoded (422). "
+                   "Percent-encode it before publishing.")
+        if "content_type" in asset:
+            raise StageError(5, "assets must not carry content_type: the harness derives it "
+                                "from the extension, and sending one is a 422.")
+
+    body = json.dumps({**manifest, "expected_active": expected_active}).encode("utf-8")
+    req = _control_request(base, "/v1/deployments", token, method="POST", body=body,
+                           env=env)
+    try:
+        status, payload = _control_call(req, PUBLISH_TIMEOUT, opener=opener)
+    except urllib.error.HTTPError as e:
+        raise _publish_http_error(e) from e
+    except (TimeoutError, OSError) as e:
+        # Deliberately NOT retried. The POST is not idempotent, and a retry after an
+        # ambiguous timeout races `expected_active` against a deployment its own first
+        # attempt may have created — which then 409s and looks like someone else won.
+        raise StageError(
+            5, f"the publish timed out after {PUBLISH_TIMEOUT}s ({e}). It is NOT retried "
+               "automatically, because it is not idempotent and it may already have "
+               f"succeeded. Read back GET {base}/v1/deployments/{manifest.get('name')} to "
+               "see the real state before trying again.") from e
+
+    # Finding S2. 201 is the sole success status (harness/control.py:217). A 200 carrying
+    # an EXISTING deployment_id would otherwise read as success, and if the committed bytes
+    # happened to be unchanged, verification would pass too — reporting a publish that
+    # never happened.
+    if status != 201:
+        raise StageError(5, f"the publish answered HTTP {status}, and the success contract "
+                            "is exactly 201. Refusing to treat it as published.")
+    deployment_id = (payload or {}).get("deployment_id")
+    if not isinstance(deployment_id, int) or isinstance(deployment_id, bool):
+        raise StageError(
+            5, "the harness answered 201 without an integer deployment_id, so there is "
+               "nothing to verify against. Treating this as a failure, not a pass.")
+    return deployment_id
+
+
+def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
+    """Finding R4: the response body is NEVER rendered verbatim.
+
+    A server can reflect the `Authorization` header back inside its own JSON error, and
+    interpolating that into stderr writes the bearer into terminal and CI logs — which
+    contradicts the guarantee this design states outright. Only fields this function
+    itself selects, and only after a type check, reach a message.
+    """
+    try:
+        raw = json.loads(e.read(MAX_RESPONSE_BYTES).decode("utf-8"))
+        payload = raw if isinstance(raw, dict) else {}
+    except Exception:                                    # noqa: BLE001 - body is advisory
+        payload = {}
+    if 300 <= e.code < 400:
+        return StageError(
+            5, f"the control API answered {e.code}, a redirect. It is NOT followed: the "
+               "request carries the publish bearer.")
+    if e.code == 409:
+        # Findings P4 and A5, raised independently by both passes. The wholesale body echo
+        # was fixed and THIS field was left — and `active_deployment_id` is a field a
+        # hostile server fills in, so a reflected credential landed in stderr.
+        current = payload.get("active_deployment_id")
+        where = (f"it is now {current}" if isinstance(current, int)
+                 and not isinstance(current, bool)
+                 else "the server did not report a valid current id")
+        return StageError(
+            5, "another publisher won the race: the active deployment moved while this "
+               f"publish was in flight ({where}). Nothing was published. Re-run to publish "
+               "on top of the new state.")
+    if e.code == 502:
+        # Findings A5 and S4: this is almost never transport. Stage 4a proved the
+        # PUBLISHER can see the repo; the harness fetches with DOC_HARNESS_GITHUB_TOKEN,
+        # a different identity that may not cover it at all.
+        return StageError(
+            5, "the harness could not fetch the blobs from GitHub. This is a GRANT "
+               "problem, not a network one: stage 4a proved YOUR credentials can see the "
+               "repository, but the harness fetches with DOC_HARNESS_GITHUB_TOKEN, which "
+               "is a different identity. Check that token's access to this repository.")
+    # The status only. No body, no `reason` — both are attacker-controlled strings.
+    return StageError(5, f"the publish failed with HTTP {e.code}. The response body is "
+                         "deliberately not shown: it is attacker-controlled and could "
+                         "carry a reflected credential.")
+
+
+# --- #36 stage 6: verify, and bind every credential to its destination -----------------
+#
+# Findings M7 and N4, M7 found independently by both review passes. Redaction protects the
+# LOG. It does nothing about the wire or about the wrong server, and transport syntax does
+# not establish server identity: "https" alone permits ANY https host.
+
+# Finding N11. The trust anchor is PINNED HERE, in committed source, and deliberately not
+# read from `DOC_HARNESS_ZONE`. Validating the destination against a value drawn from the
+# same mutable environment as the destination is not validation: whoever can set
+# `DOC_HARNESS_PUBLIC_BASE` can set the zone to match it and pass.
+PINNED_ZONE = "3dstories.ca"
+
+# The committed allowlist for the PUBLISH BEARER. Loopback and the docker bridge ranges are
+# the operations path measured on the harness host; the one public origin is the control
+# hostname the tunnel will answer for. Everything else refuses.
+# Step 8a finding R2: this used to admit all of 10/8 and 192.168/16 as well, which is
+# every corporate LAN — an attacker-influenced control URL could send the bearer to any
+# reachable service on one. Only loopback and the docker BRIDGE space (172.16/12) have any
+# reason to host the harness endpoint the operations step uses, so only those remain.
+_BEARER_HOSTS_PLAINTEXT = re.compile(
+    r"^(?:localhost|127\.\d+\.\d+\.\d+|::1|"
+    r"172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)$")
+_BEARER_HOSTS_TLS = frozenset({f"docs-control.{PINNED_ZONE}"})
+
+# `urlopen` follows a 302 silently, which would send the Access service tokens to whatever
+# login host the redirect names. An opener with no redirect handler cannot.
+NO_REDIRECTS = urllib.request.build_opener(_NoRedirect := type(
+    "_NoRedirect", (urllib.request.HTTPRedirectHandler,),
+    {"redirect_request": lambda self, *a, **kw: None})())
+
+
+def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
+    """Refuse locally before a request is built. Finding N6.
+
+    A missing or half-present credential otherwise fails indirectly as a 401 or an Access
+    login redirect, both of which read as a server problem rather than a local one.
+    **No message here ever renders a value**, only a variable name.
+    """
+    if not (env.get("DOC_HARNESS_PUBLISH_TOKEN") or "").strip():
+        # Finding R7: STAGE 5, not 6. The exit code is the verdict, so reporting 16 for a
+        # publish that never happened says stage 6 tried and failed. It did not run.
+        raise StageError(5, "DOC_HARNESS_PUBLISH_TOKEN is not set. The control API needs a "
+                            "bearer, and refusing here is clearer than a 401 later.")
+    if not edge:
+        return None
+    cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
+    secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
+    if bool(cid) != bool(secret):
+        missing = "CF_ACCESS_CLIENT_SECRET" if cid else "CF_ACCESS_CLIENT_ID"
+        raise StageError(
+            6, f"the Cloudflare Access service token is a PAIR and {missing} is not set. "
+               "One half alone produces a login redirect that looks like a server fault.")
+    if not cid:
+        raise StageError(
+            6, "the edge half needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, and "
+               "neither is set. Unset DOC_HARNESS_PUBLIC_BASE to skip the edge half instead.")
+    return cid, secret
+
+
+_LOOPBACK = re.compile(r"^(?:localhost|127\.\d+\.\d+\.\d+|::1)$")
+
+
+def assert_bearer_destination(base: str, env=None, *, stage: int = 6) -> None:
+    """The publish bearer goes only where the committed allowlist permits (finding N4),
+    and a NON-LOOPBACK plaintext destination is a deliberate act (finding S3).
+
+    172.16/12 is a whole range, not the one container that was inspected, so any reachable
+    service in it could capture the token. Attesting the exact container would need docker
+    access this publisher does not have. So the honest narrower control is consent: the
+    bridge address the operations step uses requires
+    `DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT`, and setting it is a decision somebody makes
+    rather than a default they inherit.
+    """
+    env = os.environ if env is None else env
+    parsed = urllib.parse.urlsplit(base)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS:
+        return
+    if parsed.scheme == "http" and _LOOPBACK.match(host):
+        return
+    if parsed.scheme == "http" and _BEARER_HOSTS_PLAINTEXT.match(host):
+        # Finding P3: a flag that authorizes a whole /12 is consent, not validation. It
+        # cannot become validation without attesting the container, which needs docker
+        # access this publisher does not have — but it CAN be narrowed from "any bridge
+        # address" to "exactly the one you named". The variable now carries the
+        # `host:port` it grants, and nothing else is covered by it.
+        granted = (env.get("DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT") or "").strip()
+        if granted and granted == parsed.netloc.lower():
+            return
+        raise StageError(
+            stage, f"refusing to send the publish bearer over plaintext to {parsed.netloc}. "
+                   "That is the docker bridge range, and a range is not the one container "
+                   "you inspected. To allow exactly this endpoint for the operations step, "
+                   f"set DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT={parsed.netloc} — a bare truthy "
+                   "value grants nothing.")
+    raise StageError(
+        stage, f"refusing to send the publish bearer to {base!r}: it is not on the allowlist in "
+           "publish_doc.py. Permitted are the loopback and private-range addresses the "
+           f"operations path uses over http, and https://docs-control.{PINNED_ZONE}. "
+           "An https URL is NOT sufficient on its own — that would send the token to any "
+           "host the environment happens to name.")
+
+
+def assert_access_destination(url: str, name: str) -> None:
+    """The Access service tokens go only to this deployment's own host, over TLS."""
+    parsed = urllib.parse.urlsplit(url)
+    expected = f"{name}.{PINNED_ZONE}"
+    if parsed.scheme != "https":
+        raise StageError(6, f"refusing to send Cloudflare Access credentials over "
+                            f"{parsed.scheme!r}: they would cross the network in the clear.")
+    if (parsed.hostname or "").lower() != expected:
+        raise StageError(
+            6, f"refusing to send Cloudflare Access credentials to {parsed.hostname!r}; "
+               f"this deployment's host is {expected}.")
+
+
+def build_verify_request(base: str, url_path: str, deployment_id: int, *, name: str,
+                         access: tuple[str, str] | None,
+                         env=None) -> urllib.request.Request:
+    """One verification request. Finding M3 — revision 2 defined no request at all, so
+    plausible implementations verified the ACTIVE deployment rather than the pinned one,
+    hit the control route, or asked for the wrong asset.
+
+    `deployment_id` is the integer from the stage-5 **201**, never the id read back before
+    it: that one is the PREVIOUS deployment.
+    """
+    url = f"{base}{url_path}?__deployment={deployment_id}"
+    req = urllib.request.Request(url, method="GET")
+    if access is None:
+        # The origin half talks to a bridge address, and serving routes on the Host header
+        # (`harness/app.py:49` -> `harness/routing.py:66`), so the address's own host
+        # resolves to no deployment at all. The header is mandatory, not cosmetic.
+        assert_bearer_destination(base, env=env)
+        req.add_header("Host", f"{name}.{PINNED_ZONE}")
+    else:
+        assert_access_destination(url, name)
+        req.add_header("CF-Access-Client-Id", access[0])
+        req.add_header("CF-Access-Client-Secret", access[1])
+    return req
+
+
+def fetch_for_verify(req, *, opener=None):
+    """Fetch with redirects REFUSED, never followed."""
+    call = opener if opener is not None else NO_REDIRECTS.open
+    try:
+        return call(req, timeout=CONTROL_READ_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            # Finding S4. The BODY echo was fixed and this HEADER echo was left. An edge
+            # server that receives the Access credentials can reflect one into `Location`,
+            # which then lands in terminal and CI logs. The status only.
+            raise StageError(
+                6, f"{req.full_url} answered {e.code}, a redirect. That is an Access login, "
+                   "not the page. It is a FAILURE and is not followed, because following it "
+                   "would send the credentials to the redirect target. The Location header "
+                   "is deliberately not shown: it is attacker-controlled and could carry a "
+                   "reflected credential."
+            ) from e
+        raise StageError(6, f"{req.full_url} answered HTTP {e.code}") from e
+    except (TimeoutError, OSError) as e:
+        raise StageError(6, f"{req.full_url} could not be fetched: {e}") from e
+
+
+def check_verify_response(resp, *, want: bytes, deployment_id: int, url_path: str) -> None:
+    """Per asset: 200, the echo naming THIS deployment, that asset's own derived content
+    type, and byte equality.
+
+    Finding A3: revision 1 put `text/html` in a condition it then repeated for every asset,
+    which would have rejected every valid CSS, JavaScript and image asset.
+    """
+    with resp as r:
+        status = getattr(r, "status", 200)
+        raw_headers = getattr(r, "headers", None)
+        # Finding S1: the control calls were bounded and this was not — the same defect,
+        # the other half. A trickling server evades a per-socket deadline for ever.
+        body = _read_bounded(r, stage=6)
+
+    def header(name: str):
+        """Case-INSENSITIVELY. Step 8a, inline pass.
+
+        `resp.headers` is an `email.message.Message`, whose `.get()` folds case. Wrapping
+        it in `dict()` produces a plain dict that does not — and every local test still
+        passed, because the harness sends these title-cased. **HTTP/2 lowercases all header
+        names and Cloudflare speaks HTTP/2**, so the plain-dict version would have failed
+        exactly the edge half nobody can exercise yet, reported as a byte mismatch rather
+        than as anything mentioning headers.
+        """
+        if raw_headers is None:
+            return None
+        get = getattr(raw_headers, "get", None)
+        if get is not None and not isinstance(raw_headers, dict):
+            return get(name)
+        for k, v in dict(raw_headers).items():
+            if k.lower() == name.lower():
+                return v
+        return None
+    if status != 200:
+        raise StageError(6, f"{url_path} answered HTTP {status}")
+    echo = header("X-Doc-Deployment")
+    if str(echo) != str(deployment_id):
+        raise StageError(
+            6, f"{url_path} carries X-Doc-Deployment {echo!r}, not {deployment_id}. The "
+               "page served is a different deployment from the one just published.")
+    want_type = content_type_for(url_path)
+    got_type = header("Content-Type")
+    if got_type != want_type:
+        raise StageError(6, f"{url_path} is served as {got_type!r}, not {want_type!r}")
+    if body != want:
+        raise StageError(
+            6, f"{url_path} does not serve the bytes that were rendered "
+               f"({len(body)} bytes served, {len(want)} expected).")
 
 
 # --- stage 1: render -----------------------------------------------------------------
@@ -321,14 +1235,62 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
     # The alias cap comes AFTER name validity so the two limits stay distinguishable: an
     # unusable name gets the message above; a usable one that cannot round-trip to its
     # own `.vercel.app` domain gets this one (#23).
+    # Finding S6: the note was COMPUTED and thrown away, so the CLI printed nothing while
+    # the acceptance mapping claimed a 40-character name warns and passes. Returned now,
+    # and stage 2 prints it.
+    return name, check_name_length(name)
+
+
+# The length at which a name is worth mentioning. Below the hard limit, above comfortable.
+_NAME_WARN_AT = 35
+
+
+def check_name_length(name: str) -> list[str]:
+    """Refuse past the DNS label limit; WARN between 36 and 63. #36 AC3.
+
+    Returns the notes worth printing, so the caller prints them rather than this deciding
+    what a warning looks like.
+    """
     if len(name) > MAX_ALIAS_LABEL:
-        raise StageError(2, f"the derived name {name!r} is {len(name)} characters, over "
-                            f"the {MAX_ALIAS_LABEL}-char cap Vercel puts on a "
-                            f".vercel.app label. A longer name deploys, but its domain "
-                            f"gets TRUNCATED and the conventional URL 404s forever "
-                            f"(#23, measured live). Shorten --ref by at least "
-                            f"{len(name) - MAX_ALIAS_LABEL} character(s).")
-    return name
+        raise StageError(
+            2, f"the derived name {name!r} is {len(name)} characters, over the "
+               f"{MAX_ALIAS_LABEL}-character DNS label limit. That is not a preference: "
+               "harness/routing.py:is_valid_label refuses it, so the deployment could "
+               f"never be addressed. Shorten --ref by at least "
+               f"{len(name) - MAX_ALIAS_LABEL} character(s).")
+    if len(name) > _NAME_WARN_AT:
+        return [f"note: the derived name is {len(name)} characters. That publishes fine on "
+                f"the harness, which truncates nothing — it would have been refused under "
+                f"the old {_NAME_WARN_AT}-character Vercel cap."]
+    return []
+
+
+def assert_manifest_covers(staged: list[str], url_paths: list[str]) -> None:
+    """Every staged resource is declared, and every declaration was staged. #36 AC3.
+
+    `stage_assets` already refuses a reference it cannot ship. This is the other half, and
+    it runs in both directions deliberately:
+
+    * staged but undeclared -> the harness never fetches it, and the page 404s a resource
+      on a deployment that otherwise activated cleanly;
+    * declared but unstaged -> the harness fetches a blob the render never produced.
+    """
+    # Compared DECODED on both sides. The manifest carries percent-encoded url_paths
+    # (the harness refuses anything else) while `staged` carries the real filenames, so a
+    # raw string comparison would report every asset with a space as both missing AND
+    # extra — which is how a correct manifest looked like a broken one for one commit.
+    want = {urllib.parse.unquote(p).lstrip("/") for p in url_paths}
+    have = {urllib.parse.unquote(s).lstrip("/") for s in staged}
+    missing = sorted(have - want)
+    if missing:
+        raise StageError(
+            3, "the page references resources that the manifest does not declare, so they "
+               f"would 404 on a live deployment: {', '.join(missing)}")
+    extra = sorted(want - have)
+    if extra:
+        raise StageError(
+            3, "the manifest declares resources the render did not produce, so the harness "
+               f"would fetch bytes nobody staged: {', '.join(extra)}")
 
 
 # --- stage 3: the lint gate ----------------------------------------------------------
@@ -401,27 +1363,6 @@ def gate(page: str, *, skip_component_checks: bool = False) -> None:
 _VERCEL_TIMEOUT = 300
 
 
-def _vercel(args: list[str], cwd: Path, scope: str) -> subprocess.CompletedProcess:
-    """Every call is given an explicit cwd, and every path used afterwards is absolute —
-    the CLI resets the shell's working directory.
-
-    `scope` is REQUIRED and is never conditionally omitted (#9). Dropping `--scope` when no
-    team is configured would silently target whichever account `vercel switch` last selected,
-    which is the failure the pin exists to prevent — so the caller refuses long before here.
-    """
-    try:
-        return subprocess.run(["vercel", *args, "--scope", scope], cwd=str(cwd),
-                              capture_output=True, text=True, check=False,
-                              timeout=_VERCEL_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        # Fail the stage rather than raise. Every caller already reads `returncode` and
-        # `stderr`, so a synthetic failure keeps them working and keeps the reason legible.
-        # 124 is the conventional exit code for a timed-out command.
-        return subprocess.CompletedProcess(
-            ["vercel", *args, "--scope", scope], 124, "",
-            "vercel did not answer within %d seconds, so this stage was stopped rather "
-            "than left hanging. Nothing about your account or permissions is implied."
-            % _VERCEL_TIMEOUT)
 
 
 #: Vercel's own wording for a permission refusal, matched loosely on purpose: this only
@@ -467,57 +1408,6 @@ def _says_no_such_project(proc, name: str) -> bool:
     return needle in (proc.stderr or "").lower()
 
 
-def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
-    """True if the project already exists (and is being reused).
-
-    **This asks about ONE project. It does not enumerate the account, and that is the point.**
-
-    It used to list every project in the team and test membership. Two failures came out of
-    that, one certain and one latent, and they pull in opposite directions:
-
-    * A brand-new account has NO projects, and the listing refused an empty result outright —
-      so a first publish died at stage 4 while setup reported the account ready (#9).
-    * Reading absence out of an empty LIST is unsound anyway. A truncated or erroneous CLI
-      response can carry the requested tenant, an empty `projects` array and a null cursor,
-      which is indistinguishable from a genuinely empty account. Stage 4 answers absence by
-      minting a duplicate project under a new URL — the #125 failure, which changes a
-      published document's URL.
-
-    Asking about the one project removes both. `vercel project inspect` gives an EXPLICIT
-    not-found, so absence is something the platform states rather than something inferred from
-    a listing whose completeness had to be proved. Probed live against Vercel CLI 56.5.0: exit
-    0 when the project exists, exit 1 with `Error: There is no project for "<name>"` when it
-    does not.
-
-    Anything else — a network error, a rate limit, a changed CLI — is a stage-4 error. It is
-    NEVER read as absence, because that is the reading that mints the duplicate.
-    """
-    try:
-        proc = _vercel(["project", "inspect", name], cwd=Path.cwd(), scope=scope)
-    except OSError as e:
-        # A missing or unrunnable binary RAISES rather than returning, so the promise that
-        # everything but an explicit not-found is a stage-4 error has to catch it here.
-        raise StageError(4, f"could not run the `vercel` CLI to check whether {name} exists "
-                            f"({e.__class__.__name__}: {e}). Install it, or check it is on "
-                            f"PATH.") from e
-    if proc.returncode == 0:
-        exists = True
-    elif _says_no_such_project(proc, name):
-        exists = False
-    else:
-        raise StageError(4, f"could not determine whether {name} exists (rc="
-                            f"{proc.returncode}). Refusing to guess: reading this as "
-                            f"'absent' would mint a duplicate project under a new URL.\n"
-                            f"{_log(proc)}")
-    if exists and new_project:
-        raise StageError(4, f"{name} already exists — drop --new-project and it is "
-                            f"reused, which is what keeps its URL stable. Otherwise the "
-                            f"flag becomes the thing people paste to clear the error.")
-    if not exists and not new_project:
-        raise StageError(4, f"no Vercel project named {name}. Reuse is the default; "
-                            f"re-run with --new-project once you are sure this doc has "
-                            f"never been published under another name.")
-    return exists
 
 
 # --- stage 5: the deploy -------------------------------------------------------------
@@ -532,75 +1422,8 @@ _ALIASED_LINE = re.compile(r"^[^A-Za-z0-9]*aliased\b", re.I)
 _URL_HOST = re.compile(r"https://([a-z0-9][a-z0-9.-]*\.vercel\.app)(?=[/\s]|$)", re.I)
 
 
-def deployed_hosts(log: str, name: str) -> list[str]:
-    """The hosts in a deploy log that belong to THIS project.
-
-    `vercel deploy` prints the deployment URL (`<name>-<hash>-<team>.vercel.app`) and
-    usually the alias. Accepting any vercel.app URL would accept a log that only ever
-    mentions somebody else's project — which is exactly what a deploy bound to ambient
-    link state looks like.
-    """
-    out = []
-    for host in _URL_HOST.findall(log):
-        h = host.lower()
-        if h == f"{name}.vercel.app" or h.startswith(f"{name}-"):
-            out.append(h)
-    return out
 
 
-def aliased_host(log: str, name: str, stage: int = 6) -> str:
-    """The host the deploy itself reported as THIS project's alias (#23).
-
-    Stage 6 used to fetch a URL CONSTRUCTED from the project name, and for any name over
-    `MAX_ALIAS_LABEL` that URL is permanently absent (Vercel truncates the label), so a
-    perfect deploy read as `HTTP 404 — not live`. The deploy's own `Aliased` line is the
-    truth, and it is already in the log stage 5 receives — zero extra CLI calls, and the
-    same trust boundary `deployed_hosts` uses for the stage-5 binding check.
-
-    Two host shapes are THIS project's alias, judged per host from the same `_URL_HOST`
-    scan `deployed_hosts` uses:
-    * the label equals the name — the intact alias, preferred;
-    * the label is a PREFIX of the name no shorter than `MAX_ALIAS_LABEL - 1` — the
-      cap-truncated alias (35, or 34 after Vercel strips a trailing hyphen the cut left).
-      The floor matters: without it, a stray short host like `design.vercel.app` would
-      read as "a prefix of the name" and point the verifier at somebody else's project.
-
-    The deployment URL (`<name>-<hash>-<team>`) matches neither: its label is LONGER
-    than the name, and a longer string is not a prefix. With the stage-2 cap in place the
-    truncated branch is defense-in-depth — no new over-cap name can be minted — but the
-    cap is a measured constant, not a contract, so the reader stays tolerant.
-
-    Refuses rather than constructing when the log names no alias: verifying a guessed
-    URL is exactly the defect this function replaces.
-    """
-    exact = truncated = None
-    suffix = ".vercel.app"
-    # Anchored to lines that START with the Aliased verdict (8a + Step 11 findings): a
-    # same-name URL in an error or diagnostic line — including one that merely contains
-    # the word, like `Error: project was not aliased to https://…` — is not an alias the
-    # deploy granted. Both observed success forms match: `Aliased to https://…` (56.5.0
-    # capture) and `▲ Aliased https://…` (live 2026-08-12); both START with the word
-    # after at most a marker glyph.
-    aliased_lines = "\n".join(
-        ln for ln in log.splitlines() if _ALIASED_LINE.match(ln))
-    # The truncation Vercel applies is DETERMINISTIC — cut at the cap, strip trailing
-    # hyphens — so the acceptable truncated label is THE truncation, never any prefix
-    # that merely resembles one (Step 11 finding). Empty when the name is at or under
-    # the cap: those names alias intact, so only the exact label can match.
-    expected_cut = name[:MAX_ALIAS_LABEL].rstrip("-") if len(name) > MAX_ALIAS_LABEL else ""
-    for host in _URL_HOST.findall(aliased_lines):
-        h = host.lower()
-        label = h[:-len(suffix)]
-        if label == name:
-            exact = h
-        elif expected_cut and label == expected_cut:
-            truncated = h
-    if exact or truncated:
-        return exact or truncated
-    raise StageError(stage, f"the deploy log reports no alias for {name!r} — refusing "
-                            f"to fetch a URL constructed from the name: for a truncated "
-                            f"domain that guess is permanently absent and a perfect "
-                            f"deploy reads as not-live (#23).")
 
 
 # A reference is only shippable if it names one of these. Step 11 found the real hole: with
@@ -706,41 +1529,6 @@ def stage_assets(page: str, base: Path, workdir: Path) -> list[str]:
     return staged
 
 
-def deploy(name: str, page: str, workdir: Path, scope: str) -> str:
-    """Deploy the LINTED page, bound to `name` (§2a).
-
-    The bytes written here are the string the gate passed — not a re-read of `--out`.
-    Re-reading reopened the gate: this workspace runs concurrent sessions, and anything
-    that rewrote that file between stage 3 and stage 5 would have shipped unlinted HTML
-    to a public URL.
-
-    `vercel link` runs in this same directory, which is what binds the deploy to the
-    derived project rather than to whatever was last linked.
-    """
-    (workdir / "index.html").write_text(page, encoding="utf-8")
-
-    link = _vercel(["link", "--yes", "--project", name], cwd=workdir, scope=scope)
-    if link.returncode != 0:
-        raise StageError(5, f"`vercel link --project {name}` failed:\n{_log(link)}")
-
-    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir, scope=scope)
-    log = _log(dep)
-    if dep.returncode != 0:
-        # Listing a team and DEPLOYING to it are different permissions, and setup can only
-        # prove the first — the only way to prove a deploy is permitted is to deploy (#9).
-        # So an authorization refusal surfaces here, named, rather than looking like a
-        # configuration mistake the user already fixed.
-        if _looks_like_denied(log):
-            raise StageError(5, f"the Vercel team {scope!r} refused this deploy on "
-                                f"permissions. Setup cannot detect this in advance: it can "
-                                f"prove you may LIST the team, not that you may deploy to "
-                                f"it. Ask an owner of {scope!r} for deploy access.\n{log}")
-        raise StageError(5, f"`vercel deploy --prod` failed (rc={dep.returncode}):\n{log}")
-    if not deployed_hosts(log, name):
-        raise StageError(5, f"the deploy log names no URL belonging to {name} — the "
-                            f"deploy did not go where the link said it would, and "
-                            f"verifying a guessed alias would paper over it:\n{log}")
-    return log
 
 
 # --- stage 6: verification -----------------------------------------------------------
@@ -753,37 +1541,6 @@ def _title_of(body: str) -> str:
     return html.unescape(m.group(1)).strip() if m else ""
 
 
-def _verify_once(url: str, want: bytes, stage: int, timeout: float) -> None:
-    """One cache-busted fetch. Raises StageError on anything short of byte identity."""
-
-    busted = f"{url}?cb={random.randrange(10 ** 9)}"
-    req = urllib.request.Request(
-        busted, headers={"User-Agent": "publish-doc-verifier", "Cache-Control": "no-cache"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            status = getattr(resp, "status", None) or resp.getcode()
-            final = resp.geturl()
-            body = resp.read(MAX_FETCH + 1)
-    except urllib.error.HTTPError as e:
-        raise StageError(stage, f"{busted} returned HTTP {e.code} — not live") from e
-    except OSError as e:
-        raise StageError(stage, f"{busted} could not be fetched: {e}") from e
-
-    if status != 200:
-        raise StageError(stage, f"{busted} returned HTTP {status} — not live")
-    if final != busted:
-        raise StageError(stage, f"{busted} redirected to {final}. The URL itself is not "
-                                f"serving the page — a login wall answers 200 too.")
-    if len(body) > MAX_FETCH:
-        raise StageError(stage, f"{busted} returned more than {MAX_FETCH} bytes")
-    if body != want:
-        got = _title_of(body.decode("utf-8", "replace"))
-        title_note = ("its <title> matches, so this is a DIFFERENT version of the same "
-                      "page — most likely a stale deployment"
-                      if got == _title_of(want.decode("utf-8", "replace"))
-                      else f"its <title> is {got!r}")
-        raise StageError(stage, f"{busted} returned 200 but not the bytes just published "
-                                f"({len(body)} bytes vs {len(want)}); {title_note}")
 
 
 # A fresh deploy is not instantly live at its alias. `vercel deploy` prints "Aliased" as
@@ -794,109 +1551,32 @@ VERIFY_ATTEMPTS = 6
 VERIFY_DELAY = 5.0
 
 
-def verify_live(url: str, expected: str, stage: int = 6, timeout: float = 20.0) -> None:
-    """The URL must serve EXACTLY the bytes just published (AC5).
-
-    A title match is not enough, and that was the gap two reviewers found independently.
-    An updated document normally keeps its title, so a stale prior deployment, or an
-    alias still pointing at the old one, answers 200 with the right title and reads as a
-    successful publish. `vercel project rename` not moving the `<name>.vercel.app` domain
-    is exactly that shape, and it has bitten this account before.
-
-    So the assertion is byte identity against what was deployed. A cache-buster defeats a
-    CDN copy; identity defeats everything else, including a page that merely looks right.
-    Redirects are refused rather than followed — `urlopen` follows them silently, and the
-    documented SSO wall is a 302 to a login page that answers 200.
-
-    The check is retried on a BOUNDED budget, because the alias swap is not instant. It
-    is bounded rather than patient because an alias that never updates is precisely the
-    failure this stage exists to catch — waiting forever would convert the check back
-    into the reassurance it replaced.
-
-    Raises rather than degrading to a plausible-looking value: that degradation is the
-    exact behaviour that makes `page_meta()` in build_index.py unusable for this.
-    """
-    want = expected.encode("utf-8")
-    last = None
-    for attempt in range(VERIFY_ATTEMPTS):
-        if attempt:
-            time.sleep(VERIFY_DELAY)
-        try:
-            _verify_once(url, want, stage, timeout)
-            return
-        except StageError as e:
-            last = e
-    waited = int((VERIFY_ATTEMPTS - 1) * VERIFY_DELAY)
-    raise StageError(stage, f"{url} still does not serve what was just published, after "
-                            f"{VERIFY_ATTEMPTS} attempts over ~{waited}s. "
-                            f"Last: {last.message if last else 'unknown'}")
 
 
 # --- stage 7: the docs index ---------------------------------------------------------
 
-def refresh_index(workdir: Path, workspace_file: Path, scope: str) -> None:
-    """Rebuild the index from `vercel project ls`, deploy it, and prove it went live.
 
-    The generated page is a build artifact: it is written into a temp directory and
-    never into the repository, whose ignore rules exist precisely to keep the shared
-    mutable file — and its lost-row race — from coming back.
 
-    The deploy's return code is not proof. Stage 6 learned that on the document; the
-    index earns the same treatment, so a publish that leaves the index stale — which is
-    the failure that made the index worth deriving at all — cannot report OK.
-    """
-    out = workdir / "index.html"
-    # Both resolved values are handed to the child EXPLICITLY (#9). Left to look them up
-    # again it would re-read the environment and the config file, so a single publish could
-    # render its page under one Vercel account and its index under another — with nothing in
-    # either output saying so.
-    build = subprocess.run(
-        [sys.executable, str(INDEX_SCRIPT), "--out", str(out),
-         "--workspace-file", str(workspace_file), "--vercel-scope", scope],
-        capture_output=True, text=True, check=False)
-    if build.returncode != 0:
-        raise StageError(7, f"could not rebuild the docs index:\n{_log(build)}")
-    try:
-        built = out.read_text(encoding="utf-8")
-    except OSError as e:
-        raise StageError(7, f"the index builder reported success but wrote no page: {e}") from e
-
-    link = _vercel(["link", "--yes", "--project", INDEX_PROJECT], cwd=workdir, scope=scope)
-    if link.returncode != 0:
-        raise StageError(7, f"could not link {INDEX_PROJECT}:\n{_log(link)}")
-    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir, scope=scope)
-    if dep.returncode != 0:
-        raise StageError(7, f"could not deploy {INDEX_PROJECT}:\n{_log(dep)}")
-    if not deployed_hosts(_log(dep), INDEX_PROJECT):
-        raise StageError(7, f"the index deploy log names no {INDEX_PROJECT} URL:\n{_log(dep)}")
-
-    # Same #23 rule as stage 6: the index's own deploy just reported its alias — use it.
-    verify_live(f"https://{aliased_host(_log(dep), INDEX_PROJECT, stage=7)}/",
-                built, stage=7)
-
-    # Byte identity proves the page we built is the page that is live. It does NOT prove
-    # the page is CURRENT: two publishers interleaving — A builds N rows, B publishes and
-    # refreshes to N+1, A deploys last — leaves A's stale N-row index passing its own
-    # byte check. The original prose rule was "the page's computed count equals
-    # `vercel project ls` minus one", and it is the only thing that catches that race.
-    try:
-        live_count = len(INDEX.vercel_projects(100, scope=scope))
-    except SystemExit as e:
-        raise StageError(7, f"could not re-list projects to check the index: {e}") from e
-    # An empty listing HERE cannot be an empty account: a deploy just succeeded, so at least
-    # that project exists. It used to pass vacuously (`shown < 0` is never true), which meant
-    # the one check that catches an interleaved publisher was silently disabled by exactly the
-    # untruthful-listing case that made `vercel_projects` stop refusing empties elsewhere.
-    if not live_count:
-        raise StageError(7, "the account lists no projects at all, moments after a deploy "
-                            "succeeded — so the listing cannot be believed, and the index "
-                            "cannot be checked against it. Nothing is lost; re-run.")
-    shown = built.count('<li><a href="https://')
-    if shown < live_count:
-        raise StageError(7, f"the index went live with {shown} pages but the account now "
-                            f"has {live_count} — another publish landed while this one was "
-                            f"building. Re-run to pick it up; nothing is lost.")
-
+# --- RETIRED by #36: the whole Vercel path ----------------------------------------------
+#
+# `_vercel`, `resolve_project`, `deploy`, `deployed_hosts`, `aliased_host`, `verify_live`,
+# `_verify_once` and `refresh_index` lived here. AC1 retires the deploy path, AC4 retires
+# the index refresh. Where each risk went:
+#
+# * `deploy` / `_vercel`          -> `publish()`, the control-API POST.
+# * `resolve_project`             -> nothing. The harness has no project to create or reuse;
+#                                    a name is a registry row, minted by publishing.
+# * `deployed_hosts`/`aliased_host` -> the risk LEFT with Vercel. It existed because Vercel
+#                                    TRUNCATED the domain, so the served host could differ
+#                                    from the name. The harness truncates nothing.
+# * `verify_live` / `_verify_once` -> `build_verify_request`, `fetch_for_verify` and
+#                                    `check_verify_response`, which additionally pin the
+#                                    deployment id and each asset's own content type.
+# * `refresh_index`               -> the harness server-renders the index from its registry
+#                                    snapshot (#34, spec D3). **`index/build_index.py`
+#                                    SURVIVES** as the harness's shared renderer (finding
+#                                    S5); only this invocation and the index's own Vercel
+#                                    deploy go.
 
 # --- the CLI -------------------------------------------------------------------------
 
@@ -925,9 +1605,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--subtitle", default="")
     ap.add_argument("--doc-id", dest="doc_id",
                     help="stable identity for a uat page (its localStorage namespace)")
-    ap.add_argument("--new-project", action="store_true",
-                    help="mint a new Vercel project. Reuse is the default; passing this "
-                         "when the project already exists is itself an error.")
     ap.add_argument("--dry-run", action="store_true",
                     help="render, name and lint, then stop — no network call at all")
     # #151. `--allow-prose` named ONE check honestly until #130 put a second behind it: "this
@@ -968,14 +1645,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the workspace file --project is checked against. Resolved from "
                          "your configuration when omitted; run setup if nothing is "
                          "configured, because stage 2 refuses rather than guessing.")
-    ap.add_argument("--vercel-scope", default=None,
-                    help="the Vercel team to deploy to. Resolved from your configuration "
-                         "when omitted. There is no built-in default: an unpinned deploy "
-                         "lands in whichever account `vercel switch` last selected.")
+    ap.add_argument("--publish-remote", default=None, dest="publish_remote",
+                    help="the git remote whose GitHub owner/name the manifest pins. Only "
+                         "needed when this branch has no upstream AND there are several "
+                         "GitHub remotes; otherwise it is derived.")
     ap.add_argument("--config", default=None,
                     help="read configuration from this file instead of the default location")
-    ap.add_argument("--limit", type=int, default=100,
-                    help="`vercel project ls` page size (it paginates at 20 without one)")
     return ap
 
 
@@ -991,9 +1666,6 @@ def main(argv=None) -> int:
     stage = 1   # so an UNEXPECTED failure is still attributed to the stage it happened in
 
     try:
-        # Resolved ONCE, before stage 1, and threaded through every stage that needs it —
-        # including the stage-7 CHILD PROCESS (#9). A helper that resolved for itself could
-        # answer for a different Vercel account than the page it is indexing.
         config_path = CONFIG.config_file(cli_value=args.config)
         workspace = CONFIG.workspace_file(cli_value=args.workspace_file,
                                           config_path=config_path)
@@ -1007,7 +1679,7 @@ def main(argv=None) -> int:
                       style=style, doc_id=args.doc_id, vdl=pack,
                       telemetry=load_telemetry(Path(args.telemetry) if args.telemetry else None),
                       section_chips=not args.no_section_chips)
-        print(f"publish_doc: 1/7 rendered {out_path} ({style} template, "
+        print(f"publish_doc: 1/6 rendered {out_path} ({style} template, "
               f"{pack['origin']} palette {pack['accent']['light']})")
 
         stage = 2
@@ -1016,8 +1688,10 @@ def main(argv=None) -> int:
         # rather than a traceback.
         workspace = CONFIG.require_workspace_file(cli_value=args.workspace_file,
                                                   config_path=config_path)
-        name = derive_name(args.project, args.purpose, args.ref, workspace)
-        print(f"publish_doc: 2/7 name {name}")
+        name, name_notes = derive_name(args.project, args.purpose, args.ref, workspace)
+        print(f"publish_doc: 2/6 name {name}")
+        for note in name_notes:
+            print(f"publish_doc: {note}")
 
         stage = 3
         for note in source_gate(Path(args.md),
@@ -1027,46 +1701,102 @@ def main(argv=None) -> int:
         gate(page, skip_component_checks=args.skip_component_checks)
         # Said out loud, every run. A skipped check that reports nothing is how a page with
         # no components reaches a public URL looking like it passed.
-        print("publish_doc: 3/7 lint gate passed"
+        print("publish_doc: 3/6 lint gate passed"
               + (" (--skip-component-checks: BOTH component checks were SKIPPED)"
                  if args.skip_component_checks else ""))
 
+        # Staging proves every referenced asset can ship. No network, no git.
+        with tempfile.TemporaryDirectory(prefix="publish-doc-") as tmp:
+            staged = stage_assets(page, Path(args.md).parent, Path(tmp))
+
         if args.dry_run:
-            print("publish_doc: --dry-run, stopping before the first network call")
+            # **AC5: `--dry-run` behavior is unchanged.** Nothing below this line runs.
+            #
+            # An earlier revision of this rewrite ran stage 4a provenance here, on the
+            # reasoning that it touches no network once the fetch is skipped. That was
+            # wrong, and an existing first-run test caught it: provenance needs a git
+            # REPOSITORY, so a dry run began failing on documents that render perfectly —
+            # a behavior change on the one flag whose criterion says it must not change.
+            #
+            # Provenance is about PUBLISHING. A dry run stops before publishing, so it has
+            # nothing to establish. This also settles finding N10 outright: a dry run
+            # performs no git at all, so there is no fetch to skip.
+            print(f"publish_doc: --dry-run, stopping before the first network call "
+                  f"({len(staged)} asset(s) would ship)")
             return 0
 
         stage = 4
-        # Deferred to here on purpose: rendering, naming and linting all work without a
-        # Vercel account, and `--dry-run` returns above. A team is required only once a
-        # network call is about to target one.
-        scope = CONFIG.require_vercel_scope(cli_value=args.vercel_scope,
-                                            config_path=config_path)
-        reused = resolve_project(name, new_project=args.new_project, scope=scope)
-        print(f"publish_doc: 4/7 {'reusing' if reused else 'creating'} {name}")
+        # #36 stage 4a. The harness fetches blobs from GITHUB, so the page must already be
+        # committed and pushed, and the publish pins that commit.
+        root = Path(assert_one_repository(Path(args.md), out_path))
+        remote, repo = select_remote(root, args.publish_remote)
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], root).stdout.strip()
+        assert_head_reachable(root, remote, branch, fetch=True)
+        commit_sha = _git(["rev-parse", "HEAD"], root).stdout.strip()
+        print(f"publish_doc: 4/6 provenance {repo}@{commit_sha[:12]} via {remote}")
 
         stage = 5
-        with tempfile.TemporaryDirectory(prefix="publish-doc-") as tmp:
-            # #121: assets go in BEFORE the deploy, because a deploy ships the directory. Any
-            # reference that cannot ship safely raises here, so nothing is published — a page
-            # with a hole in it is the defect, not the fallback.
-            assets = stage_assets(page, Path(args.md).parent, Path(tmp))
-            if assets:
-                print(f"publish_doc: 5/7 packaging {len(assets)} asset(s): "
-                      f"{', '.join(assets)}")
-            log = deploy(name, page, Path(tmp), scope)
-        print(f"publish_doc: 5/7 deployed\n{log.strip()}")
+        manifest = build_manifest(root=root, page_path=out_path, staged=staged,
+                                  asset_base=Path(args.md).parent, name=name,
+                                  repo=repo, commit_sha=commit_sha,
+                                  md_path=Path(args.md), rendered=page)
+        assert_manifest_covers(staged, [a["url_path"] for a in manifest["assets"]
+                                        if a["url_path"] != "/index.html"])
+        control = control_base(os.environ)
+        edge = public_base(os.environ)
+        access = assert_credentials(os.environ, edge=edge is not None)
+        token = os.environ["DOC_HARNESS_PUBLISH_TOKEN"].strip()
+
+        previous = read_active(control, name, token)
+        deployment_id = publish(control, manifest, previous, token)
+        print(f"publish_doc: 5/6 published deployment {deployment_id} "
+              f"({len(manifest['assets'])} asset(s), was {previous})")
 
         stage = 6
-        # The domain the deploy REPORTED, never one constructed from the name (#23).
-        url = f"https://{aliased_host(log, name)}/"
-        verify_live(url, page)
-        print(f"publish_doc: 6/7 verified live — {url} serves exactly what was linted")
+        # Finding S0, raised three times across two gates and DECLINED three times as
+        # scope: the POST activates before this verifies, so a failure here leaves the new
+        # deployment serving. A true rollback is not available publisher-side — it would
+        # need the PREVIOUS manifest, which this process never had, or a create-inactive
+        # protocol, which is harness code and out of this issue's scope.
+        #
+        # What IS available is refusing to be quiet about it. A stage-6 failure now says
+        # which deployment is live and unverified, which one it replaced, and the exact
+        # call that shows the current state.
+        want = {a["url_path"]: (root / a["repo_path"]).read_bytes()
+                for a in manifest["assets"]}
+        try:
+            for url_path, body in want.items():
+                req = build_verify_request(control, url_path, deployment_id,
+                                           name=name, access=None)
+                check_verify_response(fetch_for_verify(req), want=body,
+                                      deployment_id=deployment_id, url_path=url_path)
+        except StageError as e:
+            raise StageError(
+                6, f"{e.message}\n\nDeployment {deployment_id} IS ACTIVE AND UNVERIFIED. "
+                   f"It replaced {previous}. Nothing rolled it back: this publisher cannot, "
+                   f"because rollback needs the previous manifest it never held. Read the "
+                   f"current state with GET {control}/v1/deployments/{name}, and publish a "
+                   f"known-good commit to replace it.") from e
+        print(f"publish_doc: 6/6 origin verified — {len(want)} asset(s) serve exactly "
+              f"what was committed")
 
-        stage = 7
-        with tempfile.TemporaryDirectory(prefix="publish-index-") as tmp:
-            refresh_index(Path(tmp), workspace, scope)
-        print(f"publish_doc: 7/7 index refreshed and verified — "
-              f"https://{INDEX_PROJECT}.vercel.app")
+        if edge is None:
+            print("publish_doc: edge half SKIPPED — DOC_HARNESS_PUBLIC_BASE is not set, so "
+                  "nothing past the Cloudflare edge was checked. This is NOT a pass.")
+            return EXIT_EDGE_SKIPPED
+        edge_base = edge.replace("<name>", name)
+        for url_path, body in want.items():
+            req = build_verify_request(edge_base, url_path, deployment_id,
+                                       name=name, access=access)
+            check_verify_response(fetch_for_verify(req), want=body,
+                                  deployment_id=deployment_id, url_path=url_path)
+        url = f"{edge_base}/"
+        print(f"publish_doc: 6/6 edge verified — {url}")
+    except DeclaredStateError as e:
+        # Not a stage failure: a state the operator declared by leaving a variable unset.
+        # It carries its own code precisely so a caller can tell the two apart.
+        print(f"publish_doc: {e.message}", file=sys.stderr)
+        return e.code
     except CONFIG.ConfigError as e:
         # A configuration refusal is a stage failure with a legible sentence, never a
         # traceback (#9 AC5). The stage counter says WHERE it stopped, so the exit code

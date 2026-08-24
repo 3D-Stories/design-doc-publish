@@ -1,12 +1,11 @@
 ---
 name: design-doc-publish
-description: Use whenever a design document, architecture document, plan review, program dashboard, or heavy review report is produced or updated in any project in this workspace — the standing mandate is that every such doc ships as BOTH committed markdown+HTML in the repo AND a page deployed to Vercel. Also use when the user says "publish the design doc", "make the dashboard", "deploy the doc", or "artifact this". Use it for UPDATES too, not only first publication — "update the plan", "update the roadmap", "refresh the dashboard", "the doc is out of date", "mark that issue done in the plan" — updating one of these pages is a multi-site sweep with its own discipline and its own gates.
+description: Use whenever a design document, architecture document, plan review, program dashboard, or heavy review report is produced or updated in any project in this workspace — the standing mandate is that every such doc ships as BOTH committed markdown+HTML in the repo AND a page published to the doc harness. Also use when the user says "publish the design doc", "make the dashboard", "deploy the doc", or "artifact this". Use it for UPDATES too, not only first publication — "update the plan", "update the roadmap", "refresh the dashboard", "the doc is out of date", "mark that issue done in the plan" — updating one of these pages is a multi-site sweep with its own discipline and its own gates.
 ---
 
 # Design Doc Publish
 
-A design doc is done when its `.md` and `.html` are committed **and** the page is live.
-One command does all of that, and its exit code is the verdict:
+A design doc is done when its `.md` and `.html` are committed **and** the page is live; the exit code is the verdict. **Order matters: render with `--dry-run`, commit both files, push, then publish** — the harness serves the bytes in the commit and never receives the file.
 
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/publish_doc.py" \
@@ -14,10 +13,8 @@ One command does all of that, and its exit code is the verdict:
   --project <rawgentic-project> --type design --ref <issue>
 ```
 
-Absolute path — a skill runs from whatever project is bound. `--dry-run` lints without publishing. **Never published from this machine? `${CLAUDE_PLUGIN_ROOT}/scripts/setup.py --check` first** — silent and 0 means ready, otherwise it exits non-zero and prints the one thing to fix (`--json` for the same state as an object, `--set-scope`/`--init-workspace`/`--add-project` to record choices). It never runs `vercel login` and stores no credential; rendering needs no setup at all.
-`--new-project` only after checking the doc's own repo/issue links for a URL it already has: the tool
-catches a name collision, not the same doc under an older name. `--ref` is the issue number or a
-short slug; `--project` is a rawgentic project, or `workspace`. `--style` overrides the template a `--type` implies. Two styles have no `--type` at all and are reachable only this way: `--style dashboard` for the dashboard template, and `--style plain` for an unstyled document with no template CSS. `plain` is also the one style where a code fence stays a bare listing: everywhere else it renders as a box with a **Copy** button, labelled by the fence's info string — so name the language on any fence a reader is meant to run.
+Absolute path — a skill runs from whatever project is bound. `DOC_HARNESS_CONTROL_URL` (**required, no default**; unset exits **25**) and `DOC_HARNESS_PUBLISH_TOKEN` carry the publish; a plaintext bridge endpoint additionally needs `DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT=<host:port>` naming it exactly. Optional `DOC_HARNESS_PUBLIC_BASE`: unset skips edge verification and exits **26**, which is **not a pass** — it published and origin-verified, nothing past Cloudflare. 11-17 stay stage failures.
+`--ref` is the issue number or a short slug; `--project` is a rawgentic project, or `workspace`. `--style` overrides the template a `--type` implies. Two styles have no `--type` at all and are reachable only this way: `--style dashboard` for the dashboard template, and `--style plain` for an unstyled document with no template CSS. `plain` is also the one style where a code fence stays a bare listing: everywhere else it renders as a box with a **Copy** button, labelled by the fence's info string — so name the language on any fence a reader is meant to run.
 
 ## The one real decision: `--type`
 

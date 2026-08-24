@@ -258,4 +258,4 @@ class TestPublishingBeforeSetup:
                             "--project", "payments-api", "--type", "design", "--ref", "1",
                             "--title", "Payments rollout design", "--dry-run")
         assert proc.returncode == 0, proc.stderr
-        assert "2/7 name payments-api-design-1" in proc.stdout
+        assert "2/6 name payments-api-design-1" in proc.stdout
