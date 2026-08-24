@@ -443,6 +443,11 @@ def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
 # separate connect and read deadlines, and this repository has no `requests` dependency —
 # the gate is deliberately dependency-free. So the contract is what urllib can enforce,
 # stated honestly rather than tabulated as something it cannot.
+# Step 8a finding R0. A per-socket deadline does not bound an unqualified `read()`: a
+# server that trickles bytes keeps the call alive for ever, and a huge response exhausts
+# memory. Every response this tool reads is capped.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
 CONTROL_READ_TIMEOUT = 20      # a registry read
 PUBLISH_TIMEOUT = 120          # the harness fetches every blob from GitHub inside this call
 
@@ -518,7 +523,8 @@ def validate_manifest(manifest: dict) -> None:
 
 
 def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base: Path,
-                   name: str, repo: str, commit_sha: str) -> dict:
+                   name: str, repo: str, commit_sha: str, md_path: Path | None = None,
+                   rendered: str | None = None) -> dict:
     """Describe what is COMMITTED, never what is in hand.
 
     The harness fetches every blob from GitHub by `blob_id`, which is git's own object id
@@ -532,6 +538,7 @@ def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base
     root = root.resolve()
 
     def entry_for(path: Path, url_path: str) -> dict:
+
         path = path.resolve()
         if not path.is_relative_to(root):
             raise StageError(
@@ -549,6 +556,29 @@ def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base
 
     # The entry page is served at a real path and REACHED through `entry_path`; an asset
     # `url_path` of `/` is refused outright (`harness/manifest.py:113`).
+    # Finding R5. Every surface here says the `.md` and the `.html` ship together, and
+    # nothing checked the markdown — so committing only the HTML published happily, with
+    # the pinned commit carrying a source that never produced that page.
+    if md_path is not None:
+        md_path = md_path.resolve()
+        if not md_path.is_relative_to(root):
+            raise StageError(4, f"{md_path} is outside the repository at {root}.")
+        blob = _git(["hash-object", str(md_path)], root)
+        if blob.returncode != 0:
+            raise StageError(4, f"git could not hash {md_path}: {blob.stderr.strip()}")
+        assert_blob_committed(root, str(md_path.relative_to(root)), blob.stdout.strip())
+
+    # Partial mitigation for finding R3. The full remedy is to thread captured bytes from
+    # the render all the way through, which is a larger refactor than this child should
+    # carry. What is closed here is the exact danger named: between the lint gate and this
+    # point, the output path could be replaced by a DIFFERENT committed page, which would
+    # then be hashed, published and verified against — every check passing on a file the
+    # gate never saw. Comparing against the bytes the renderer returned catches that.
+    if rendered is not None and page_path.read_bytes() != rendered.encode("utf-8"):
+        raise StageError(
+            4, f"{page_path} changed after it was rendered and linted. Refusing: the "
+               "manifest would pin a page this run never checked.")
+
     # The url_path must be CANONICALLY PERCENT-ENCODED or the publish is a 422. This is
     # the #34 boundary learning, and it is easy to lose: `stage_assets` resolves a
     # percent-encoded reference back to the real filename, so `rel` here carries the
@@ -571,11 +601,29 @@ def _control_request(base: str, path: str, token: str, *, method: str, body: byt
     return req
 
 
+def _read_bounded(resp, *, stage: int) -> bytes:
+    """At most `MAX_RESPONSE_BYTES`, refusing rather than truncating. Finding R0."""
+    raw = resp.read(MAX_RESPONSE_BYTES + 1)
+    if len(raw) > MAX_RESPONSE_BYTES:
+        raise StageError(
+            stage, f"the response exceeded {MAX_RESPONSE_BYTES} bytes and was refused "
+                   "rather than truncated. A truncated body would parse as something "
+                   "other than what was sent.")
+    return raw
+
+
 def _control_call(req, timeout: int, *, opener=None):
-    """Returns (status, parsed-json-or-None). Raises the transport error unchanged."""
-    call = opener if opener is not None else urllib.request.urlopen
+    """Returns (status, parsed-json-or-None).
+
+    **The default opener does NOT follow redirects** (Step 8a finding R1). Both control
+    calls carry `Authorization: Bearer <publish token>`, and `urlopen` follows a 302
+    silently — so a redirect from an allowlisted control origin would have handed the
+    bearer to whatever host the redirect named, straight past `assert_bearer_destination`.
+    `NO_REDIRECTS` already existed for exactly this reason and was not used here.
+    """
+    call = opener if opener is not None else NO_REDIRECTS.open
     with call(req, timeout=timeout) as resp:
-        raw = resp.read()
+        raw = _read_bounded(resp, stage=5)
     try:
         return getattr(resp, "status", 200), json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -597,6 +645,11 @@ def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
     try:
         _, payload = _control_call(req, CONTROL_READ_TIMEOUT, opener=opener)
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise StageError(
+                5, f"the control API answered {e.code}, a redirect. It is NOT followed: "
+                   "the request carries the publish bearer, and following a redirect "
+                   "would send that token to a host the allowlist never approved.") from e
         raise StageError(5, f"reading back {name} failed with HTTP {e.code}. The publish "
                              "was not attempted.") from e
     except (urllib.error.URLError, TimeoutError, OSError) as e:
@@ -604,6 +657,14 @@ def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
                              "DOC_HARNESS_CONTROL_URL must name a reachable harness.") from e
     if not isinstance(payload, dict):
         raise StageError(5, f"the read-back for {name} was not a JSON object.")
+    # Finding R6: a MISSING field is indeterminate, not "nothing is published". Treating
+    # the two alike let a truncated or wrong-version response publish with
+    # `expected_active: null`, which is a compare-and-swap against a state never read.
+    if "active_deployment_id" not in payload:
+        raise StageError(
+            5, f"the read-back for {name} carries no active_deployment_id field at all, so "
+               "the current state is unknown. Refusing rather than publishing as if "
+               "nothing were live.")
     active = payload.get("active_deployment_id")
     if active is None:
         return None
@@ -664,10 +725,22 @@ def publish(base: str, manifest: dict, expected_active: int | None, token: str,
 
 
 def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
+    """Finding R4: the response body is NEVER rendered verbatim.
+
+    A server can reflect the `Authorization` header back inside its own JSON error, and
+    interpolating that into stderr writes the bearer into terminal and CI logs — which
+    contradicts the guarantee this design states outright. Only fields this function
+    itself selects, and only after a type check, reach a message.
+    """
     try:
-        payload = json.loads(e.read().decode("utf-8"))
+        raw = json.loads(e.read(MAX_RESPONSE_BYTES).decode("utf-8"))
+        payload = raw if isinstance(raw, dict) else {}
     except Exception:                                    # noqa: BLE001 - body is advisory
         payload = {}
+    if 300 <= e.code < 400:
+        return StageError(
+            5, f"the control API answered {e.code}, a redirect. It is NOT followed: the "
+               "request carries the publish bearer.")
     if e.code == 409:
         return StageError(
             5, "another publisher won the race: the active deployment moved while this "
@@ -682,7 +755,10 @@ def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
                "problem, not a network one: stage 4a proved YOUR credentials can see the "
                "repository, but the harness fetches with DOC_HARNESS_GITHUB_TOKEN, which "
                "is a different identity. Check that token's access to this repository.")
-    return StageError(5, f"the publish failed with HTTP {e.code}: {payload or e.reason}")
+    # The status only. No body, no `reason` — both are attacker-controlled strings.
+    return StageError(5, f"the publish failed with HTTP {e.code}. The response body is "
+                         "deliberately not shown: it is attacker-controlled and could "
+                         "carry a reflected credential.")
 
 
 # --- #36 stage 6: verify, and bind every credential to its destination -----------------
@@ -700,10 +776,13 @@ PINNED_ZONE = "3dstories.ca"
 # The committed allowlist for the PUBLISH BEARER. Loopback and the docker bridge ranges are
 # the operations path measured on the harness host; the one public origin is the control
 # hostname the tunnel will answer for. Everything else refuses.
+# Step 8a finding R2: this used to admit all of 10/8 and 192.168/16 as well, which is
+# every corporate LAN — an attacker-influenced control URL could send the bearer to any
+# reachable service on one. Only loopback and the docker BRIDGE space (172.16/12) have any
+# reason to host the harness endpoint the operations step uses, so only those remain.
 _BEARER_HOSTS_PLAINTEXT = re.compile(
     r"^(?:localhost|127\.\d+\.\d+\.\d+|::1|"
-    r"172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
-    r"192\.168\.\d+\.\d+)$")
+    r"172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)$")
 _BEARER_HOSTS_TLS = frozenset({f"docs-control.{PINNED_ZONE}"})
 
 # `urlopen` follows a 302 silently, which would send the Access service tokens to whatever
@@ -721,7 +800,9 @@ def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
     **No message here ever renders a value**, only a variable name.
     """
     if not (env.get("DOC_HARNESS_PUBLISH_TOKEN") or "").strip():
-        raise StageError(6, "DOC_HARNESS_PUBLISH_TOKEN is not set. The control API needs a "
+        # Finding R7: STAGE 5, not 6. The exit code is the verdict, so reporting 16 for a
+        # publish that never happened says stage 6 tried and failed. It did not run.
+        raise StageError(5, "DOC_HARNESS_PUBLISH_TOKEN is not set. The control API needs a "
                             "bearer, and refusing here is clearer than a 401 later.")
     if not edge:
         return None
@@ -1522,7 +1603,8 @@ def main(argv=None) -> int:
         stage = 5
         manifest = build_manifest(root=root, page_path=out_path, staged=staged,
                                   asset_base=Path(args.md).parent, name=name,
-                                  repo=repo, commit_sha=commit_sha)
+                                  repo=repo, commit_sha=commit_sha,
+                                  md_path=Path(args.md), rendered=page)
         assert_manifest_covers(staged, [a["url_path"] for a in manifest["assets"]
                                         if a["url_path"] != "/index.html"])
         control = control_base(os.environ)

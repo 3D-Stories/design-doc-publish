@@ -1073,3 +1073,174 @@ class TestTheSharedMimeImportCannotBreakTheWholeScript:
     def test_it_still_resolves_to_the_harness_function(self):
         from harness.manifest import content_type_for
         assert publish_doc.content_type_for("/a.css") == content_type_for("/a.css")
+
+
+# --------------------------------------------------------------------------- Step 8a, cross-model
+
+class TestTheBearerNeverFollowsARedirect:
+    """R1, High. The worst of the wave, and self-inflicted: `NO_REDIRECTS` exists exactly
+    so a credential cannot follow a 302, and the two calls that carry the bearer used the
+    default opener anyway. A redirect from an allowlisted control origin would have sent
+    the publish token to any host the redirect named, straight past the allowlist."""
+
+    def _redirector(self, calls):
+        import io as _io
+        import urllib.error as _ue
+
+        def opener(req, timeout=None, **kw):
+            calls.append((req.full_url, dict(req.header_items())))
+            raise _ue.HTTPError(req.full_url, 302, "Found",
+                                {"Location": "https://evil.example/"}, _io.BytesIO(b""))
+        return opener
+
+    def test_the_read_back_treats_a_redirect_as_a_failure(self):
+        calls = []
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.read_active(BASE, "n", "s3cret", opener=self._redirector(calls))
+        assert len(calls) == 1, "no request may be made to the redirect target"
+        assert "redirect" in e.value.message.lower()
+
+    def test_the_publish_treats_a_redirect_as_a_failure(self):
+        calls = []
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "s3cret",
+                                opener=self._redirector(calls))
+        assert len(calls) == 1
+        assert "redirect" in e.value.message.lower()
+
+    def test_the_default_opener_for_control_calls_does_not_follow_redirects(self):
+        import ast
+        src = (SCRIPTS / "publish_doc.py").read_text(encoding="utf-8")
+        fn = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.FunctionDef) and n.name == "_control_call")
+        body = ast.unparse(fn)
+        assert "urllib.request.urlopen" not in body, (
+            "the control calls carry the bearer; their default opener must be the "
+            "non-redirecting one")
+
+
+class TestAnErrorBodyIsNeverEchoedVerbatim:
+    """R4, High. A server can reflect the Authorization header into its own JSON error
+    body. Interpolating that body into stderr persists the bearer into terminal and CI
+    logs, which contradicts the credential guarantee this design states outright."""
+
+    def test_the_bearer_cannot_reach_the_message_through_the_error_body(self):
+        import io as _io
+        import json as _json
+        import urllib.error as _ue
+        leak = "s3cret-bearer-value"
+
+        def opener(req, timeout=None, **kw):
+            body = _json.dumps({"echo": f"Bearer {leak}"}).encode()
+            raise _ue.HTTPError(req.full_url, 500, "boom", {}, _io.BytesIO(body))
+
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, leak, opener=opener)
+        assert leak not in e.value.message
+
+    def test_the_status_is_still_reported(self):
+        import io as _io
+        import urllib.error as _ue
+
+        def opener(req, timeout=None, **kw):
+            raise _ue.HTTPError(req.full_url, 500, "boom", {}, _io.BytesIO(b"{}"))
+
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t", opener=opener)
+        assert "500" in e.value.message
+
+
+class TestTheAllowlistIsNarrowerThanEveryPrivateNetwork:
+    """R2, High. The committed allowlist admitted all of 10/8 and 192.168/16 over
+    plaintext, so an attacker-influenced control URL could send the bearer to any reachable
+    service on a corporate LAN. Only the docker bridge space has any reason to be here."""
+
+    @pytest.mark.parametrize("ok", ["http://127.0.0.1:8080", "http://localhost:8080",
+                                    "http://172.17.0.2:8080", "http://172.25.0.2:8080"])
+    def test_loopback_and_the_docker_bridge_space_still_pass(self, ok):
+        publish_doc.assert_bearer_destination(ok)
+
+    @pytest.mark.parametrize("bad", ["http://10.0.17.205:8080", "http://192.168.1.50:8080",
+                                     "http://10.1.2.3:9000"])
+    def test_the_wider_private_ranges_no_longer_pass(self, bad):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_bearer_destination(bad)
+
+
+class TestAnIndeterminateReadBackRefuses:
+    """R6, Medium. A missing field and an explicit null were treated identically, so a
+    truncated or wrong-version response published with `expected_active: null` instead of
+    refusing a state it could not determine."""
+
+    def test_a_missing_field_refuses_and_publishes_nothing(self):
+        http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"name": "n"})})
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.read_active(BASE, "n", "s3cret", opener=http)
+        assert "active_deployment_id" in e.value.message
+        assert len(http.calls) == 1
+
+    def test_an_explicit_null_is_still_a_first_publish(self):
+        http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"active_deployment_id": None})})
+        assert publish_doc.read_active(BASE, "n", "s3cret", opener=http) is None
+
+
+class TestACredentialRefusalNamesTheRightStage:
+    """R7, Medium. The exit code IS the verdict, so a publish that never happened must not
+    report exit 16, which says stage 6 tried and failed."""
+
+    def test_a_missing_publish_token_is_stage_five(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_credentials({}, edge=False)
+        assert e.value.stage == 5
+
+    def test_a_missing_access_pair_is_stage_six(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_credentials({**TOKEN_ENV, "CF_ACCESS_CLIENT_ID": "i"}, edge=True)
+        assert e.value.stage == 6
+
+
+class TestResponsesAreBounded:
+    """R0, High. A trickling server keeps an unqualified `read()` alive indefinitely, and a
+    huge response exhausts memory."""
+
+    def test_an_oversized_control_response_refuses(self):
+        import io as _io
+
+        class Huge(_io.BytesIO):
+            status = 200
+            headers = {"Content-Type": "application/json"}
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        payload = b'{"active_deployment_id": null, "pad": "' + b"x" * (publish_doc.MAX_RESPONSE_BYTES + 10) + b'"}'
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.read_active(BASE, "n", "s3cret",
+                                    opener=lambda req, timeout=None, **kw: Huge(payload))
+        assert "too large" in e.value.message.lower() or "bytes" in e.value.message.lower()
+
+    def test_the_cap_is_a_real_number(self):
+        assert isinstance(publish_doc.MAX_RESPONSE_BYTES, int)
+        assert publish_doc.MAX_RESPONSE_BYTES > 0
+
+
+class TestTheMarkdownSourceMustBeCommittedToo:
+    """R5, Medium. Every surface says the `.md` and `.html` ship together, and nothing
+    checked the markdown. Committing only the HTML published successfully."""
+
+    def test_a_dirty_markdown_source_refuses(self, tmp_path):
+        import subprocess
+        root = tmp_path / "r"
+        (root / "docs").mkdir(parents=True)
+        md = root / "docs" / "d.md"
+        md.write_text("# one\n", encoding="utf-8")
+        (root / "docs" / "d.html").write_text("<html>p</html>", encoding="utf-8")
+        for argv in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+        md.write_text("# one, edited after the commit\n", encoding="utf-8")
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.build_manifest(
+                root=root, page_path=root / "docs" / "d.html", staged=[],
+                asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40,
+                md_path=md)
+        assert "d.md" in e.value.message
