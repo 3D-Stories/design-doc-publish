@@ -347,6 +347,8 @@ class FakeHTTP:
 import urllib.parse  # noqa: E402  (used by FakeHTTP above)
 
 BASE = "http://172.25.0.2:8080"
+# Finding S3: a bridge address needs the explicit opt-in, so the tests that use one say so.
+BRIDGE_OK = {"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"}
 TOKEN_ENV = {"DOC_HARNESS_CONTROL_URL": BASE, "DOC_HARNESS_PUBLISH_TOKEN": "s3cret"}
 
 
@@ -592,11 +594,14 @@ class TestACredentialNeverReachesAnUnvalidatedDestination:
     establish server identity."""
 
     @pytest.mark.parametrize("ok", [
-        "http://127.0.0.1:8080", "http://localhost:8080", "http://172.25.0.2:8080",
+        "http://127.0.0.1:8080", "http://localhost:8080",
         "https://docs-control.3dstories.ca",
     ])
     def test_a_permitted_origin_passes(self, ok):
-        publish_doc.assert_bearer_destination(ok)
+        """A bridge address is no longer here: finding S3 made it require an explicit
+        opt-in, and that contract is asserted by
+        `TestPlaintextToANonLoopbackHostIsOptedIntoExplicitly` below."""
+        publish_doc.assert_bearer_destination(ok, env={})
 
     @pytest.mark.parametrize("bad", [
         "http://evil.example.com:8080",     # plaintext to a public host
@@ -653,7 +658,7 @@ class TestTheVerificationRequest:
         """Serving routes on Host (harness/app.py:49 calls resolve_host with HTTP_HOST).
         The origin URL's own host is a bridge address, which routes to nothing."""
         req = publish_doc.build_verify_request(
-            BASE, "/p.html", 42, name="example-design-12", access=None)
+            BASE, "/p.html", 42, name="example-design-12", access=None, env=BRIDGE_OK)
         assert req.get_header("Host") == "example-design-12.3dstories.ca"
         assert req.full_url == f"{BASE}/p.html?__deployment=42"
 
@@ -667,7 +672,7 @@ class TestTheVerificationRequest:
 
     def test_the_deployment_query_pins_the_new_id_not_the_previous_one(self):
         req = publish_doc.build_verify_request(
-            BASE, "/p.html", 42, name="n", access=None)
+            BASE, "/p.html", 42, name="n", access=None, env=BRIDGE_OK)
         assert "__deployment=42" in req.full_url
 
 
@@ -1155,10 +1160,14 @@ class TestTheAllowlistIsNarrowerThanEveryPrivateNetwork:
     plaintext, so an attacker-influenced control URL could send the bearer to any reachable
     service on a corporate LAN. Only the docker bridge space has any reason to be here."""
 
-    @pytest.mark.parametrize("ok", ["http://127.0.0.1:8080", "http://localhost:8080",
-                                    "http://172.17.0.2:8080", "http://172.25.0.2:8080"])
-    def test_loopback_and_the_docker_bridge_space_still_pass(self, ok):
-        publish_doc.assert_bearer_destination(ok)
+    @pytest.mark.parametrize("ok", ["http://127.0.0.1:8080", "http://localhost:8080"])
+    def test_loopback_still_passes_with_no_opt_in(self, ok):
+        publish_doc.assert_bearer_destination(ok, env={})
+
+    @pytest.mark.parametrize("ok", ["http://172.17.0.2:8080", "http://172.25.0.2:8080"])
+    def test_the_bridge_space_passes_only_with_the_opt_in(self, ok):
+        publish_doc.assert_bearer_destination(
+            ok, env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"})
 
     @pytest.mark.parametrize("bad", ["http://10.0.17.205:8080", "http://192.168.1.50:8080",
                                      "http://10.1.2.3:9000"])
@@ -1244,3 +1253,162 @@ class TestTheMarkdownSourceMustBeCommittedToo:
                 asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40,
                 md_path=md)
         assert "d.md" in e.value.message
+
+
+# --------------------------------------------------------------------------- Step 8a, wave 2
+
+class TestTheStatusIsPartOfTheSuccessContract:
+    """S2, High. `publish()` discarded the status and accepted any 2xx carrying an integer
+    deployment_id, though 201 is defined as the sole success. A wrong-version or no-op
+    endpoint answering 200 with an EXISTING id would pass — and if the committed bytes
+    happened to be unchanged, verification would pass too and the run would report success
+    without having created the deployment it asked for."""
+
+    def test_a_two_hundred_on_the_publish_is_refused(self):
+        http = FakeHTTP({("POST", "/v1/deployments"): (200, {"deployment_id": 7})})
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t", opener=http)
+        assert "201" in e.value.message
+
+    def test_a_two_oh_one_still_passes(self):
+        http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 7})})
+        assert publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t",
+                                   opener=http) == 7
+
+    def test_the_read_back_requires_exactly_two_hundred(self):
+        http = FakeHTTP({("GET", "/v1/deployments/n"): (204, {"active_deployment_id": None})})
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.read_active(BASE, "n", "t", opener=http)
+
+
+class TestVerificationResponsesAreBoundedToo:
+    """S1, High. The control calls were bounded and verification was not — the same defect,
+    the other half. A trickling server evades a per-socket deadline indefinitely."""
+
+    def test_an_oversized_asset_response_refuses(self):
+        import io as _io
+
+        class Huge(_io.BytesIO):
+            status = 200
+            headers = {"X-Doc-Deployment": "42", "Content-Type": "text/html; charset=utf-8"}
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        big = b"x" * (publish_doc.MAX_RESPONSE_BYTES + 10)
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.check_verify_response(Huge(big), want=b"x", deployment_id=42,
+                                              url_path="/index.html")
+        assert "bytes" in e.value.message.lower() or "too large" in e.value.message.lower()
+
+
+class TestARedirectLocationIsNeverEchoed:
+    """S4, High. The body echo was fixed and the HEADER echo was left. An edge server that
+    receives the Cloudflare Access credentials can reflect one into `Location`, which then
+    lands in terminal and CI logs."""
+
+    def test_neither_access_credential_can_reach_the_message(self):
+        import io as _io
+        import urllib.error as _ue
+        cid, secret = "cf-id-VALUE", "cf-secret-VALUE"
+
+        def opener(req, timeout=None, **kw):
+            raise _ue.HTTPError(req.full_url, 302, "Found",
+                                {"Location": f"https://x/?a={cid}&b={secret}"},
+                                _io.BytesIO(b""))
+
+        req = publish_doc.build_verify_request(
+            f"https://n.{publish_doc.PINNED_ZONE}", "/index.html", 42, name="n",
+            access=(cid, secret))
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.fetch_for_verify(req, opener=opener)
+        assert cid not in e.value.message
+        assert secret not in e.value.message
+        assert "302" in e.value.message
+
+
+class TestPlaintextToANonLoopbackHostIsOptedIntoExplicitly:
+    """S3, High. 172.16/12 is a whole range, not the one inspected container, so any
+    reachable service in it could capture the bearer. Attesting the exact container needs
+    docker access the publisher does not have, so the narrower honest control is to make a
+    non-loopback plaintext destination a DELIBERATE act rather than a default."""
+
+    def test_loopback_plaintext_needs_no_opt_in(self):
+        publish_doc.assert_bearer_destination("http://127.0.0.1:8080", env={})
+
+    def test_a_bridge_address_refuses_without_the_opt_in(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_bearer_destination("http://172.25.0.2:8080", env={})
+        assert "DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT" in e.value.message
+
+    def test_a_bridge_address_passes_with_the_opt_in(self):
+        publish_doc.assert_bearer_destination(
+            "http://172.25.0.2:8080", env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"})
+
+    def test_the_opt_in_does_not_widen_beyond_the_bridge_range(self):
+        for bad in ("http://10.0.17.205:8080", "http://192.168.1.5:8080",
+                    "http://evil.example.com:8080"):
+            with pytest.raises(publish_doc.StageError):
+                publish_doc.assert_bearer_destination(
+                    bad, env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"})
+
+
+class TestAnAssetCannotBecomeASymlinkAfterStaging:
+    """S5, High. `stage_assets` refuses a symlink, then manifest construction REOPENS the
+    original path with `resolve()` — so a swap between the two follows the link and
+    publishes unrelated committed bytes under an allowed asset URL."""
+
+    def test_a_symlinked_asset_is_refused_at_manifest_time(self, tmp_path):
+        import subprocess
+        root = tmp_path / "r"
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "d.html").write_text("<html>p</html>", encoding="utf-8")
+        (root / "docs" / "other.css").write_text("secret{}", encoding="utf-8")
+        (root / "docs" / "a.css").symlink_to(root / "docs" / "other.css")
+        for argv in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.build_manifest(
+                root=root, page_path=root / "docs" / "d.html", staged=["a.css"],
+                asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        assert "symlink" in e.value.message.lower()
+
+
+class TestTheNameWarningActuallyReachesTheOperator:
+    """S6, Medium. `check_name_length` returned the note and `derive_name` threw it away, so
+    the CLI printed nothing — while the acceptance mapping claims a 40-character name warns
+    and passes."""
+
+    def test_derive_name_surfaces_the_note(self, tmp_path):
+        import json as _json
+        ws = tmp_path / "w.json"
+        long_project = "p" * 30
+        ws.write_text(_json.dumps({"projects": [{"name": long_project}]}), encoding="utf-8")
+        name, notes = publish_doc.derive_name(long_project, "design", "12", ws)
+        assert len(name) > 35
+        assert notes and any(str(len(name)) in n for n in notes)
+
+    def test_a_short_name_returns_no_notes(self, tmp_path):
+        import json as _json
+        ws = tmp_path / "w.json"
+        ws.write_text(_json.dumps({"projects": [{"name": "example"}]}), encoding="utf-8")
+        name, notes = publish_doc.derive_name("example", "design", "12", ws)
+        assert name == "example-design-12" and notes == []
+
+
+class TestADetachedHeadRefuses:
+    """S7, Medium. `rev-parse --abbrev-ref HEAD` yields the literal string `HEAD` when
+    detached, and passing that through compares against `<remote>/HEAD` — a symbolic ref
+    that may well contain the commit, so provenance passed where the design says it must
+    refuse."""
+
+    def test_the_literal_head_is_rejected_as_a_branch(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_head_reachable(Path("."), "origin", "HEAD", fetch=False,
+                                              runner=FakeGit({}))
+        assert "detached" in e.value.message.lower()
+
+    def test_an_empty_branch_name_is_rejected(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_head_reachable(Path("."), "origin", "", fetch=False,
+                                              runner=FakeGit({}))

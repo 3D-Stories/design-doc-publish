@@ -415,6 +415,13 @@ def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
     and it mutates remote-tracking refs, so a flag whose whole point is touching nothing
     must not perform it.
     """
+    # Finding S7. `rev-parse --abbrev-ref HEAD` yields the literal string "HEAD" when
+    # detached, and passing it through compares against `<remote>/HEAD` — a symbolic ref
+    # that may well contain the commit, so provenance PASSED where the design says refuse.
+    if not branch or branch == "HEAD":
+        raise StageError(
+            4, "HEAD is detached, so there is no branch to check against the remote. "
+               "Check out the branch you intend to publish from.")
     if fetch:
         f = _git(["fetch", remote], root, runner=runner)
         if f.returncode != 0:
@@ -538,6 +545,15 @@ def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base
     root = root.resolve()
 
     def entry_for(path: Path, url_path: str) -> dict:
+        # Finding S5. `stage_assets` refuses a symlink, and this REOPENS the original path
+        # afterwards — so a swap in between would be followed here, publishing unrelated
+        # committed bytes under an allowed asset URL. The same rule, applied at the second
+        # place the path is touched.
+        if path.is_symlink():
+            raise StageError(
+                4, f"{path} is a symlink. An asset must be a real file: this runs after "
+                   "staging already checked, and following a link swapped in between is "
+                   "how other committed bytes reach a public URL.")
 
         path = path.resolve()
         if not path.is_relative_to(root):
@@ -643,7 +659,7 @@ def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
     """
     req = _control_request(base, f"/v1/deployments/{name}", token, method="GET", body=None)
     try:
-        _, payload = _control_call(req, CONTROL_READ_TIMEOUT, opener=opener)
+        status, payload = _control_call(req, CONTROL_READ_TIMEOUT, opener=opener)
     except urllib.error.HTTPError as e:
         if 300 <= e.code < 400:
             raise StageError(
@@ -655,6 +671,11 @@ def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise StageError(5, f"could not reach the control API at {base}: {e}. "
                              "DOC_HARNESS_CONTROL_URL must name a reachable harness.") from e
+    # Finding S2: the STATUS is part of the contract, not decoration. Accepting any 2xx
+    # lets a wrong-version or no-op endpoint answer for one that does not exist.
+    if status != 200:
+        raise StageError(5, f"the read-back for {name} answered HTTP {status}, and the "
+                            "contract is exactly 200.")
     if not isinstance(payload, dict):
         raise StageError(5, f"the read-back for {name} was not a JSON object.")
     # Finding R6: a MISSING field is indeterminate, not "nothing is published". Treating
@@ -703,7 +724,7 @@ def publish(base: str, manifest: dict, expected_active: int | None, token: str,
     body = json.dumps({**manifest, "expected_active": expected_active}).encode("utf-8")
     req = _control_request(base, "/v1/deployments", token, method="POST", body=body)
     try:
-        _, payload = _control_call(req, PUBLISH_TIMEOUT, opener=opener)
+        status, payload = _control_call(req, PUBLISH_TIMEOUT, opener=opener)
     except urllib.error.HTTPError as e:
         raise _publish_http_error(e) from e
     except (TimeoutError, OSError) as e:
@@ -716,6 +737,13 @@ def publish(base: str, manifest: dict, expected_active: int | None, token: str,
                f"succeeded. Read back GET {base}/v1/deployments/{manifest.get('name')} to "
                "see the real state before trying again.") from e
 
+    # Finding S2. 201 is the sole success status (harness/control.py:217). A 200 carrying
+    # an EXISTING deployment_id would otherwise read as success, and if the committed bytes
+    # happened to be unchanged, verification would pass too — reporting a publish that
+    # never happened.
+    if status != 201:
+        raise StageError(5, f"the publish answered HTTP {status}, and the success contract "
+                            "is exactly 201. Refusing to treat it as published.")
     deployment_id = (payload or {}).get("deployment_id")
     if not isinstance(deployment_id, int) or isinstance(deployment_id, bool):
         raise StageError(
@@ -820,14 +848,35 @@ def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
     return cid, secret
 
 
-def assert_bearer_destination(base: str) -> None:
-    """The publish bearer goes only where the committed allowlist permits. Finding N4."""
+_LOOPBACK = re.compile(r"^(?:localhost|127\.\d+\.\d+\.\d+|::1)$")
+
+
+def assert_bearer_destination(base: str, env=None) -> None:
+    """The publish bearer goes only where the committed allowlist permits (finding N4),
+    and a NON-LOOPBACK plaintext destination is a deliberate act (finding S3).
+
+    172.16/12 is a whole range, not the one container that was inspected, so any reachable
+    service in it could capture the token. Attesting the exact container would need docker
+    access this publisher does not have. So the honest narrower control is consent: the
+    bridge address the operations step uses requires
+    `DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT`, and setting it is a decision somebody makes
+    rather than a default they inherit.
+    """
+    env = os.environ if env is None else env
     parsed = urllib.parse.urlsplit(base)
     host = (parsed.hostname or "").lower()
     if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS:
         return
-    if parsed.scheme == "http" and _BEARER_HOSTS_PLAINTEXT.match(host):
+    if parsed.scheme == "http" and _LOOPBACK.match(host):
         return
+    if parsed.scheme == "http" and _BEARER_HOSTS_PLAINTEXT.match(host):
+        if (env.get("DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT") or "").strip():
+            return
+        raise StageError(
+            6, f"refusing to send the publish bearer over plaintext to {host}. That is the "
+               "docker bridge range, and the range is not the one container you inspected — "
+               "any reachable service in it could capture the token. Set "
+               "DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT=1 to accept that for the operations step.")
     raise StageError(
         6, f"refusing to send the publish bearer to {base!r}: it is not on the allowlist in "
            "publish_doc.py. Permitted are the loopback and private-range addresses the "
@@ -850,7 +899,8 @@ def assert_access_destination(url: str, name: str) -> None:
 
 
 def build_verify_request(base: str, url_path: str, deployment_id: int, *, name: str,
-                         access: tuple[str, str] | None) -> urllib.request.Request:
+                         access: tuple[str, str] | None,
+                         env=None) -> urllib.request.Request:
     """One verification request. Finding M3 — revision 2 defined no request at all, so
     plausible implementations verified the ACTIVE deployment rather than the pinned one,
     hit the control route, or asked for the wrong asset.
@@ -864,7 +914,7 @@ def build_verify_request(base: str, url_path: str, deployment_id: int, *, name: 
         # The origin half talks to a bridge address, and serving routes on the Host header
         # (`harness/app.py:49` -> `harness/routing.py:66`), so the address's own host
         # resolves to no deployment at all. The header is mandatory, not cosmetic.
-        assert_bearer_destination(base)
+        assert_bearer_destination(base, env=env)
         req.add_header("Host", f"{name}.{PINNED_ZONE}")
     else:
         assert_access_destination(url, name)
@@ -880,11 +930,15 @@ def fetch_for_verify(req, *, opener=None):
         return call(req, timeout=CONTROL_READ_TIMEOUT)
     except urllib.error.HTTPError as e:
         if 300 <= e.code < 400:
+            # Finding S4. The BODY echo was fixed and this HEADER echo was left. An edge
+            # server that receives the Access credentials can reflect one into `Location`,
+            # which then lands in terminal and CI logs. The status only.
             raise StageError(
-                6, f"{req.full_url} answered {e.code}, a redirect to "
-                   f"{e.headers.get('Location') if e.headers else 'elsewhere'}. That is an "
-                   "Access login, not the page. It is a FAILURE and is not followed, "
-                   "because following it would send the credentials to the login host."
+                6, f"{req.full_url} answered {e.code}, a redirect. That is an Access login, "
+                   "not the page. It is a FAILURE and is not followed, because following it "
+                   "would send the credentials to the redirect target. The Location header "
+                   "is deliberately not shown: it is attacker-controlled and could carry a "
+                   "reflected credential."
             ) from e
         raise StageError(6, f"{req.full_url} answered HTTP {e.code}") from e
     except (TimeoutError, OSError) as e:
@@ -901,7 +955,9 @@ def check_verify_response(resp, *, want: bytes, deployment_id: int, url_path: st
     with resp as r:
         status = getattr(r, "status", 200)
         raw_headers = getattr(r, "headers", None)
-        body = r.read()
+        # Finding S1: the control calls were bounded and this was not — the same defect,
+        # the other half. A trickling server evades a per-socket deadline for ever.
+        body = _read_bounded(r, stage=6)
 
     def header(name: str):
         """Case-INSENSITIVELY. Step 8a, inline pass.
@@ -1104,8 +1160,10 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
     # The alias cap comes AFTER name validity so the two limits stay distinguishable: an
     # unusable name gets the message above; a usable one that cannot round-trip to its
     # own `.vercel.app` domain gets this one (#23).
-    check_name_length(name)
-    return name
+    # Finding S6: the note was COMPUTED and thrown away, so the CLI printed nothing while
+    # the acceptance mapping claimed a 40-character name warns and passes. Returned now,
+    # and stage 2 prints it.
+    return name, check_name_length(name)
 
 
 # The length at which a name is worth mentioning. Below the hard limit, above comfortable.
@@ -1555,8 +1613,10 @@ def main(argv=None) -> int:
         # rather than a traceback.
         workspace = CONFIG.require_workspace_file(cli_value=args.workspace_file,
                                                   config_path=config_path)
-        name = derive_name(args.project, args.purpose, args.ref, workspace)
+        name, name_notes = derive_name(args.project, args.purpose, args.ref, workspace)
         print(f"publish_doc: 2/6 name {name}")
+        for note in name_notes:
+            print(f"publish_doc: {note}")
 
         stage = 3
         for note in source_gate(Path(args.md),
@@ -1619,13 +1679,30 @@ def main(argv=None) -> int:
               f"({len(manifest['assets'])} asset(s), was {previous})")
 
         stage = 6
+        # Finding S0, raised three times across two gates and DECLINED three times as
+        # scope: the POST activates before this verifies, so a failure here leaves the new
+        # deployment serving. A true rollback is not available publisher-side — it would
+        # need the PREVIOUS manifest, which this process never had, or a create-inactive
+        # protocol, which is harness code and out of this issue's scope.
+        #
+        # What IS available is refusing to be quiet about it. A stage-6 failure now says
+        # which deployment is live and unverified, which one it replaced, and the exact
+        # call that shows the current state.
         want = {a["url_path"]: (root / a["repo_path"]).read_bytes()
                 for a in manifest["assets"]}
-        for url_path, body in want.items():
-            req = build_verify_request(control, url_path, deployment_id,
-                                       name=name, access=None)
-            check_verify_response(fetch_for_verify(req), want=body,
-                                  deployment_id=deployment_id, url_path=url_path)
+        try:
+            for url_path, body in want.items():
+                req = build_verify_request(control, url_path, deployment_id,
+                                           name=name, access=None)
+                check_verify_response(fetch_for_verify(req), want=body,
+                                      deployment_id=deployment_id, url_path=url_path)
+        except StageError as e:
+            raise StageError(
+                6, f"{e.message}\n\nDeployment {deployment_id} IS ACTIVE AND UNVERIFIED. "
+                   f"It replaced {previous}. Nothing rolled it back: this publisher cannot, "
+                   f"because rollback needs the previous manifest it never held. Read the "
+                   f"current state with GET {control}/v1/deployments/{name}, and publish a "
+                   f"known-good commit to replace it.") from e
         print(f"publish_doc: 6/6 origin verified — {len(want)} asset(s) serve exactly "
               f"what was committed")
 

@@ -516,7 +516,7 @@ class TestTheNameIsDerivedFromValidatedComponents:
 
     def test_the_happy_name(self, workspace):
         assert publish_doc.derive_name(
-            "example", "design", "12", workspace) == "example-design-12"
+            "example", "design", "12", workspace)[0] == "example-design-12"
 
     @pytest.mark.parametrize("project", ["deploy", "site", "copy", "final-final", "vercel"])
     def test_a_project_that_does_not_exist_is_refused(self, project, workspace):
@@ -526,12 +526,12 @@ class TestTheNameIsDerivedFromValidatedComponents:
 
     def test_the_workspace_bucket_is_the_one_literal_exception(self, workspace):
         assert publish_doc.derive_name(
-            "workspace", "audit", "harness", workspace) == "workspace-audit-harness"
+            "workspace", "audit", "harness", workspace)[0] == "workspace-audit-harness"
 
     def test_case_is_folded_because_vercel_folds_it(self, workspace):
         """`Rawgentic` and `rawgentic` must not become two projects."""
         assert publish_doc.derive_name(
-            "Rawgentic", "design", "735", workspace) == "rawgentic-design-735"
+            "Rawgentic", "design", "735", workspace)[0] == "rawgentic-design-735"
 
     @pytest.mark.parametrize("ref", ["design", "plan", "spec"])
     def test_a_ref_that_is_itself_a_purpose_token_is_refused(self, ref, workspace):
@@ -546,12 +546,12 @@ class TestTheNameIsDerivedFromValidatedComponents:
 
     @pytest.mark.parametrize("ref", ["1", "12", "735", "network-topology", "aa"])
     def test_an_issue_number_or_a_real_slug_is_accepted(self, ref, workspace):
-        assert publish_doc.derive_name("example", "design", ref, workspace)
+        assert publish_doc.derive_name("example", "design", ref, workspace)[0]
 
     def test_issue_one_is_publishable(self, workspace):
         """Under a flat 2-char minimum it was not — issue #1 could not be published."""
         assert publish_doc.derive_name(
-            "example", "design", "1", workspace) == "example-design-1"
+            "example", "design", "1", workspace)[0] == "example-design-1"
 
     @pytest.mark.parametrize("ref", ["01", "007", "0"])
     def test_a_non_canonical_issue_number_is_refused(self, ref, workspace):
