@@ -669,7 +669,7 @@ class StageTests(unittest.TestCase):
         self.row = {
             "inventory": {"id": "prj_1", "name": "proj-plan-7",
                           "url": "https://proj-plan-7.vercel.app/"},
-            "harness_name": "proj-plan-7", "reason": None, "detail": "",
+            "harness_name": "proj-7-x", "reason": None, "detail": "",
             "provenance": {"project": "proj", "commit": self.tip,
                            "repo_path": "docs/planning/7-x.html", "blob_id": self.blob,
                            "sha256": _h.sha256(b"PAGE BYTES").hexdigest()},
@@ -719,7 +719,7 @@ class StageTests(unittest.TestCase):
 
     def test_a_passing_compare_stages_and_verifies(self):
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
-                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+                              served={bf.staging_label("r1", "proj-7-x", 1): b"PAGE BYTES"})
         out = self._stage(live=b"PAGE BYTES", control=control)
         self.assertIsNone(out[0]["reason"], out[0])
         self.assertEqual(5, out[0]["staged"]["deployment_id"])
@@ -728,7 +728,7 @@ class StageTests(unittest.TestCase):
 
     def test_the_manifest_carries_the_metadata_and_not_content_type(self):
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
-                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+                              served={bf.staging_label("r1", "proj-7-x", 1): b"PAGE BYTES"})
         self._stage(live=b"PAGE BYTES", control=control)
         manifest = [c for c in control.calls if c[0] == "publish"][0]
         stored = self.run.read_json("activation-plan.json")["rows"][0]["manifest"]
@@ -744,7 +744,7 @@ class StageTests(unittest.TestCase):
 
     def test_a_served_mismatch_is_final_verification_failed(self):
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
-                              served={bf.staging_label("r1", "proj-plan-7", 1): b"WRONG"})
+                              served={bf.staging_label("r1", "proj-7-x", 1): b"WRONG"})
         out = self._stage(live=b"PAGE BYTES", control=control)
         self.assertEqual("final_verification_failed", out[0]["reason"])
 
@@ -778,7 +778,7 @@ class StageTests(unittest.TestCase):
     def test_the_write_ahead_record_exists_BEFORE_the_publish(self):
         seen = {}
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
-                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+                              served={bf.staging_label("r1", "proj-7-x", 1): b"PAGE BYTES"})
         real_publish = control.publish
 
         def spy(manifest, expected_active):
@@ -838,7 +838,7 @@ class StageTests(unittest.TestCase):
         bad = dict(self.row)
         bad["target"] = dict(bad["target"], repo_path="docs/planning/absent.html")
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
-                             served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+                             served={bf.staging_label("r1", "proj-7-x", 1): b"PAGE BYTES"})
         out = self._stage(live=b"PAGE BYTES", control=control, rows=[bad, good])
         self.assertIsNotNone(out[0]["reason"])
         self.assertIsNone(out[1]["reason"], out[1])
@@ -855,7 +855,7 @@ class StageTests(unittest.TestCase):
 
     def test_the_bearer_never_reaches_the_journal(self):
         control = FakeControl(publish=[{"deployment_id": 5, "cache_warmed": True}],
-                              served={bf.staging_label("r1", "proj-plan-7", 1): b"PAGE BYTES"})
+                              served={bf.staging_label("r1", "proj-7-x", 1): b"PAGE BYTES"})
         self._stage(live=b"PAGE BYTES", control=control)
         text = (self.run.path / "journal.jsonl").read_text(encoding="utf-8")
         self.assertNotIn("Bearer", text)
@@ -874,24 +874,28 @@ class ActivateTests(unittest.TestCase):
         self.run = bf.RunDir(self.tmp / "run")
         self.repo = self.tmp / "proj"
         make_repo(self.repo, {"docs/planning/7-x.html": "PAGE BYTES",
-                              "docs/planning/7-x.md": "# page"})
+                              "docs/planning/7-x.md": "# page",
+                              # A second real document, so a test that needs two distinct harness
+                              # names gets them from real provenance instead of two hand-set
+                              # strings the derived-name check would rightly refuse.
+                              "docs/planning/8-x.html": "PAGE BYTES"})
         self.tip = git(self.repo, "rev-parse", "HEAD")
         self.blob = git(self.repo, "rev-parse", f"{self.tip}:docs/planning/7-x.html")
         self.live_sha = _h.sha256(b"PAGE BYTES").hexdigest()
-        self.label = bf.staging_label("r1", "proj-plan-7", 1)
+        self.label = bf.staging_label("r1", "proj-7-x", 1)
         self.manifest = {
             "name": self.label, "repo": "local/test", "commit_sha": self.tip,
             "entry_path": "/index.html",
             "assets": [{"url_path": "/index.html", "repo_path": "docs/planning/7-x.html",
                         "blob_id": self.blob, "size": 10, "sha256": self.live_sha}],
             "title": "proj-plan-7", "project": "proj", "purpose": "plan"}
-        self.plan_row = {"name": "proj-plan-7", "manifest": self.manifest,
+        self.plan_row = {"name": "proj-7-x", "manifest": self.manifest,
                          "staged": {"label": self.label, "deployment_id": 5},
                          "sealed_live_sha256": self.live_sha}
         self.row = {
             "inventory": {"id": "prj_1", "name": "proj-plan-7",
                           "url": "https://proj-plan-7.vercel.app/"},
-            "harness_name": "proj-plan-7", "reason": None, "detail": "",
+            "harness_name": "proj-7-x", "reason": None, "detail": "",
             "provenance": {"project": "proj", "commit": self.tip,
                            "repo_path": "docs/planning/7-x.html", "blob_id": self.blob,
                            "sha256": self.live_sha},
@@ -934,19 +938,19 @@ class ActivateTests(unittest.TestCase):
 
     def test_a_clean_activation_publishes_and_verifies(self):
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
-                              served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9",
+                              served={"proj-7-x": b"PAGE BYTES"},
+                              served_headers={"proj-7-x": {"X-Doc-Deployment": "9",
                                                               "Etag": f'"{self.live_sha}"'}})
         out = self._activate(control=control)
         self.assertEqual("live", out[0]["outcome"])
         published = [c for c in control.calls if c[0] == "publish"][0]
-        self.assertEqual("proj-plan-7", published[1])   # the PRODUCTION name, not the staging label
+        self.assertEqual("proj-7-x", published[1])   # the PRODUCTION name, not the staging label
 
     def test_the_production_manifest_differs_from_the_staged_one_in_NAME_ALONE(self):
         captured = {}
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
-                              served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {
+                              served={"proj-7-x": b"PAGE BYTES"},
+                              served_headers={"proj-7-x": {
                                   "X-Doc-Deployment": "9", "Etag": f'"{self.live_sha}"'}})
         real = control.publish
 
@@ -959,7 +963,7 @@ class ActivateTests(unittest.TestCase):
         produced = dict(captured["manifest"])
         produced.pop("expected_active", None)
         staged = dict(self.manifest)
-        self.assertEqual("proj-plan-7", produced.pop("name"))
+        self.assertEqual("proj-7-x", produced.pop("name"))
         self.assertEqual(self.label, staged.pop("name"))
         self.assertEqual(staged, produced)
 
@@ -1021,7 +1025,7 @@ class ActivateTests(unittest.TestCase):
         self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
 
     def test_a_name_owned_by_somebody_else_is_target_occupied(self):
-        control = FakeControl(active={"proj-plan-7": {"name": "proj-plan-7",
+        control = FakeControl(active={"proj-7-x": {"name": "proj-7-x",
                                                       "active_deployment_id": 777,
                                                       "commit_sha": "x", "published_at": ""}})
         out = self._activate(control=control)
@@ -1029,26 +1033,26 @@ class ActivateTests(unittest.TestCase):
         self.assertEqual([], [c for c in control.calls if c[0] == "publish"])
 
     def test_a_deployment_this_ROW_recorded_is_adoptable(self):
-        control = FakeControl(active={"proj-plan-7": {"name": "proj-plan-7",
+        control = FakeControl(active={"proj-7-x": {"name": "proj-7-x",
                                                       "active_deployment_id": 9,
                                                       "commit_sha": "x", "published_at": ""}},
                               publish=[{"deployment_id": 10, "cache_warmed": True}],
-                              served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {
+                              served={"proj-7-x": b"PAGE BYTES"},
+                              served_headers={"proj-7-x": {
                                   "X-Doc-Deployment": "10",
                                   "Etag": f'"{self.live_sha}"'}})
-        self.run.journal("proj-plan-7", {"phase": "activate", "state": "published",
-                                         "target": "proj-plan-7", "deployment_id": 9})
+        self.run.journal("proj-7-x", {"phase": "activate", "state": "published",
+                                      "target": "proj-7-x", "deployment_id": 9})
         out = self._activate(control=control)
         self.assertEqual("live", out[0]["outcome"], out[0])
 
     def test_an_unproven_pending_deployment_is_NEVER_adopted(self):
         """A lost POST response leaves ownership unprovable, so the row stops for an operator."""
-        control = FakeControl(active={"proj-plan-7": {"name": "proj-plan-7",
+        control = FakeControl(active={"proj-7-x": {"name": "proj-7-x",
                                                       "active_deployment_id": 42,
                                                       "commit_sha": "x", "published_at": ""}})
-        self.run.journal("proj-plan-7", {"phase": "activate", "state": "pending",
-                                         "target": "proj-plan-7", "expected_active": None})
+        self.run.journal("proj-7-x", {"phase": "activate", "state": "pending",
+                                      "target": "proj-7-x", "expected_active": None})
         out = self._activate(control=control)
         self.assertEqual("final_verification_failed", out[0]["reason"])
         self.assertIn("cannot prove", out[0]["detail"])
@@ -1062,8 +1066,8 @@ class ActivateTests(unittest.TestCase):
     def test_a_missing_or_wrong_etag_fails_the_verification(self):
         """The design advertises bytes, ETag and deployment. Accepting a wrong ETag weakens it."""
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
-                              served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9"}})
+                              served={"proj-7-x": b"PAGE BYTES"},
+                              served_headers={"proj-7-x": {"X-Doc-Deployment": "9"}})
         out = self._activate(control=control)
         self.assertEqual("final_verification_failed", out[0]["reason"])
         self.assertIn("ETag", out[0]["detail"])
@@ -1085,11 +1089,17 @@ class ActivateTests(unittest.TestCase):
         A non-200 from the serve check arrives after the production POST has already committed, so
         it is exactly as irreversible as a byte mismatch and must stop the run too.
         """
-        second = dict(self.plan_row, name="proj-plan-8")
+        second = dict(self.plan_row, name="proj-8-x")
         second["manifest"] = dict(self.manifest)
-        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
-                                             inventory=dict(self.row["inventory"],
-                                                            name="proj-plan-8"))]
+        # The second row is a real second document: its provenance names `8-x.html`, which is what
+        # derives the name `proj-8-x`. A hand-set name over the first row's provenance would be
+        # refused, and rightly so.
+        mapping_rows = [dict(self.row),
+                        dict(self.row, harness_name="proj-8-x",
+                             inventory=dict(self.row["inventory"], id="prj_2",
+                                            name="proj-plan-8"),
+                             provenance=dict(self.row["provenance"],
+                                             repo_path="docs/planning/8-x.html"))]
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}])
 
         def refuse(name):
@@ -1105,11 +1115,13 @@ class ActivateTests(unittest.TestCase):
         self.assertEqual(1, len([c for c in control.calls if c[0] == "publish"]))
 
     def test_a_cas_conflict_does_NOT_halt_because_nothing_was_written(self):
-        second = dict(self.plan_row, name="proj-plan-8")
+        second = dict(self.plan_row, name="proj-8-x")
         second["manifest"] = dict(self.manifest)
-        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
-                                             inventory=dict(self.row["inventory"],
-                                                            name="proj-plan-8"))]
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-8-x",
+                                             inventory=dict(self.row["inventory"], id="prj_2",
+                                                            name="proj-plan-8"),
+                                             provenance=dict(self.row["provenance"],
+                                                             repo_path="docs/planning/8-x.html"))]
         control = FakeControl(publish=[bf.ControlError(409, "stale publisher"),
                                        bf.ControlError(409, "stale publisher")])
         out = self._activate(control=control, rows=[self.plan_row, second],
@@ -1119,11 +1131,13 @@ class ActivateTests(unittest.TestCase):
         self.assertNotEqual("campaign_halted", out[1]["reason_class"])
 
     def test_activate_honours_limit_on_the_irreversible_command(self):
-        second = dict(self.plan_row, name="proj-plan-8")
+        second = dict(self.plan_row, name="proj-8-x")
         second["manifest"] = dict(self.manifest)
-        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
-                                             inventory=dict(self.row["inventory"],
-                                                            name="proj-plan-8"))]
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-8-x",
+                                             inventory=dict(self.row["inventory"], id="prj_2",
+                                                            name="proj-plan-8"),
+                                             provenance=dict(self.row["provenance"],
+                                                             repo_path="docs/planning/8-x.html"))]
         plan = self._plan([self.plan_row, second])
         plan["mapping_digest"] = bf.digest(mapping_rows)
         plan["digest"] = bf.plan_digest(plan)
@@ -1131,8 +1145,8 @@ class ActivateTests(unittest.TestCase):
         mapping = {"rows": mapping_rows, "digest": bf.digest(mapping_rows)}
         self.run.write_json("mapping.json", mapping)
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
-                              served={"proj-plan-7": b"PAGE BYTES"},
-                              served_headers={"proj-plan-7": {
+                              served={"proj-7-x": b"PAGE BYTES"},
+                              served_headers={"proj-7-x": {
                                   "X-Doc-Deployment": "9", "Etag": f'"{self.live_sha}"'}})
         out = bf.activate_rows(plan, mapping=mapping, run=self.run, control=control,
                                opener=FakeHttp({"https://proj-plan-7.vercel.app/":
@@ -1144,15 +1158,17 @@ class ActivateTests(unittest.TestCase):
 
     def test_a_post_publish_verification_failure_HALTS_the_campaign(self):
         """Per-row isolation stops at the campaign boundary: bad bytes are live under a real name."""
-        second = dict(self.plan_row, name="proj-plan-8")
+        second = dict(self.plan_row, name="proj-8-x")
         second["manifest"] = dict(self.manifest)
         control = FakeControl(publish=[{"deployment_id": 9, "cache_warmed": True}],
-                              served={"proj-plan-7": b"NOT THE PAGE"},
-                              served_headers={"proj-plan-7": {"X-Doc-Deployment": "9",
+                              served={"proj-7-x": b"NOT THE PAGE"},
+                              served_headers={"proj-7-x": {"X-Doc-Deployment": "9",
                                                               "Etag": '"whatever"'}})
-        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-plan-8",
-                                             inventory=dict(self.row["inventory"],
-                                                            name="proj-plan-8"))]
+        mapping_rows = [dict(self.row), dict(self.row, harness_name="proj-8-x",
+                                             inventory=dict(self.row["inventory"], id="prj_2",
+                                                            name="proj-plan-8"),
+                                             provenance=dict(self.row["provenance"],
+                                                             repo_path="docs/planning/8-x.html"))]
         out = self._activate(control=control, rows=[self.plan_row, second],
                              mapping_rows=mapping_rows)
         self.assertEqual("final_verification_failed", out[0]["reason"])
@@ -1301,3 +1317,46 @@ class ReportTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(unittest.main())
+
+
+class TestHarnessLabel(unittest.TestCase):
+    """The hostname a document is served at, decided by the owner on 2026-08-24.
+
+    `{date}-{repo}-{html name}`, where the date is the filename's own prefix, the repo is the
+    GitHub repository name, and the html name is what is left of the filename after that prefix
+    and the extension. Hyphens inside the html name are KEPT. The owner gave the rule and a worked
+    example that disagreed on the order of the middle two parts, and settled it on the example.
+    """
+
+    def test_the_owners_worked_example(self):
+        self.assertEqual(
+            "2026-08-19-rawgentic-unified-roadmap",
+            bf.harness_label({"project": "rawgentic",
+                              "repo_path": "docs/planning/2026-08-19-unified-roadmap.html"}))
+
+    def test_a_filename_with_no_date_prefix_drops_the_date(self):
+        # Two of the 90 mapped documents are like this. Inventing a date would put a value in a
+        # hostname that no file supports, so the part is omitted rather than guessed.
+        self.assertEqual(
+            "rawgentic-campaign-log",
+            bf.harness_label({"project": "rawgentic", "repo_path": "docs/campaign-log.html"}))
+
+    def test_a_label_over_the_dns_limit_is_trimmed_at_the_tail(self):
+        # One DNS label is 63 characters. The tail is what gets cut: the date and the repository
+        # are what make the name identifiable, so neither is ever trimmed.
+        label = bf.harness_label(
+            {"project": "thewanderinginn",
+             "repo_path": "docs/2026-08-17-166-manifest-overwrite-discards-spans.html"})
+        self.assertEqual(63, len(label))
+        self.assertEqual("2026-08-17-thewanderinginn-166-manifest-overwrite-discards-span", label)
+
+    def test_a_trimmed_label_never_ends_in_a_hyphen(self):
+        # A trailing hyphen is not a legal DNS label, so the cut must not create one.
+        label = bf.harness_label({"project": "p" * 30, "repo_path": "2026-01-01-" + "a-" * 30 + "b.html"})
+        self.assertFalse(label.endswith("-"), label)
+        self.assertTrue(bf.re.match(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$", label), label)
+
+    def test_the_label_is_lowercased(self):
+        self.assertEqual(
+            "2026-08-19-myrepo-my-doc",
+            bf.harness_label({"project": "MyRepo", "repo_path": "d/2026-08-19-My-Doc.HTML"}))
