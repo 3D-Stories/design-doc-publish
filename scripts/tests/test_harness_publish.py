@@ -529,3 +529,219 @@ class TestTheManifestIsRefusedLocallyBeforeTheHarnessRefusesIt:
             publish_doc.publish(BASE, {**self.GOOD, "commit_sha": "HEAD"}, None,
                                 "s3cret", opener=http)
         assert http.calls == [], "a manifest the harness would refuse must not be sent"
+
+
+# --------------------------------------------------------------------------- T4, AC2
+
+class TestCredentialsArePresentBeforeAnyRequestIsBuilt:
+    """Finding N6. A missing or half-present credential must fail as a LOCAL refusal, not
+    indirectly as a 401 or an Access login redirect — those look like server problems."""
+
+    def test_a_missing_publish_token_refuses_and_names_the_variable(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_credentials({"DOC_HARNESS_CONTROL_URL": BASE}, edge=False)
+        assert "DOC_HARNESS_PUBLISH_TOKEN" in e.value.message
+
+    def test_an_empty_publish_token_is_missing_not_present(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_credentials({"DOC_HARNESS_PUBLISH_TOKEN": "  "}, edge=False)
+
+    def test_the_publish_token_alone_is_enough_when_the_edge_half_is_skipped(self):
+        publish_doc.assert_credentials(TOKEN_ENV, edge=False)
+
+    @pytest.mark.parametrize("present", ["CF-Access-Client-Id", "CF-Access-Client-Secret"])
+    def test_one_access_value_without_the_other_refuses(self, present):
+        env = {**TOKEN_ENV, present.upper().replace("-", "_"): "x"}
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_credentials(env, edge=True)
+        assert "pair" in e.value.message.lower() or "both" in e.value.message.lower()
+
+    def test_both_access_values_pass(self):
+        publish_doc.assert_credentials(
+            {**TOKEN_ENV, "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"},
+            edge=True)
+
+    def test_no_refusal_ever_prints_a_credential_value(self):
+        env = {"DOC_HARNESS_PUBLISH_TOKEN": "", "CF_ACCESS_CLIENT_ID": "SUPERSECRETVALUE"}
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_credentials(env, edge=True)
+        assert "SUPERSECRETVALUE" not in e.value.message
+
+
+class TestACredentialNeverReachesAnUnvalidatedDestination:
+    """Findings M7 and N4, M7 found by both review passes. Redaction protects the LOG. It
+    does nothing about the wire or the wrong server, and transport syntax does not
+    establish server identity."""
+
+    @pytest.mark.parametrize("ok", [
+        "http://127.0.0.1:8080", "http://localhost:8080", "http://172.25.0.2:8080",
+        "https://docs-control.3dstories.ca",
+    ])
+    def test_a_permitted_origin_passes(self, ok):
+        publish_doc.assert_bearer_destination(ok)
+
+    @pytest.mark.parametrize("bad", [
+        "http://evil.example.com:8080",     # plaintext to a public host
+        "http://harness.evil.com:8080",     # a dotted host is not the bridge form
+        "https://evil.example.com",         # https is NOT sufficient on its own
+    ])
+    def test_an_unlisted_origin_refuses(self, bad):
+        """Revision 3 permitted ANY https host, which exfiltrates the bearer to whatever a
+        mistaken or hostile environment names."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_bearer_destination(bad)
+        assert "allow" in e.value.message.lower()
+
+    def test_the_access_headers_go_only_to_the_pinned_zone(self):
+        publish_doc.assert_access_destination(
+            "https://example-design-12.3dstories.ca/p.html", "example-design-12")
+
+    @pytest.mark.parametrize("url", [
+        "https://example-design-12.evil.com/p.html",
+        "https://other-name.3dstories.ca/p.html",
+        "http://example-design-12.3dstories.ca/p.html",
+    ])
+    def test_a_wrong_host_or_scheme_refuses_the_access_headers(self, url):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_access_destination(url, "example-design-12")
+
+    def test_the_zone_is_pinned_in_source_not_read_from_the_environment(self):
+        """Finding N11. Revision 3 validated against DOC_HARNESS_ZONE, which is supplied by
+        the same mutable environment as the destination — so an attacker who can set the
+        destination can set the anchor to match it."""
+        assert publish_doc.PINNED_ZONE == "3dstories.ca"
+        # Checked against the CODE, not the file text: a comment naming the variable in
+        # order to explain why it is NOT read is exactly what should be there.
+        import ast
+        tree = ast.parse((SCRIPTS / "publish_doc.py").read_text(encoding="utf-8"))
+        reads = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Constant) and n.value == "DOC_HARNESS_ZONE"]
+        assert reads == [], (
+            "the trust anchor must not come from the same environment as the destination")
+
+    def test_the_pinned_zone_is_what_both_destination_checks_use(self):
+        """A pinned constant that some other path bypasses would be decoration."""
+        publish_doc.assert_access_destination(
+            f"https://n.{publish_doc.PINNED_ZONE}/p.html", "n")
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_access_destination("https://n.elsewhere.test/p.html", "n")
+        publish_doc.assert_bearer_destination(
+            f"https://docs-control.{publish_doc.PINNED_ZONE}")
+
+
+class TestTheVerificationRequest:
+
+    def test_the_origin_half_sets_the_host_header_explicitly(self):
+        """Serving routes on Host (harness/app.py:49 calls resolve_host with HTTP_HOST).
+        The origin URL's own host is a bridge address, which routes to nothing."""
+        req = publish_doc.build_verify_request(
+            BASE, "/p.html", 42, name="example-design-12", access=None)
+        assert req.get_header("Host") == "example-design-12.3dstories.ca"
+        assert req.full_url == f"{BASE}/p.html?__deployment=42"
+
+    def test_the_edge_half_carries_access_headers_and_no_host_override(self):
+        req = publish_doc.build_verify_request(
+            "https://example-design-12.3dstories.ca", "/p.html", 42,
+            name="example-design-12", access=("i", "s"))
+        assert req.get_header("Cf-access-client-id") == "i"
+        assert req.get_header("Cf-access-client-secret") == "s"
+        assert req.full_url.startswith("https://example-design-12.3dstories.ca/p.html")
+
+    def test_the_deployment_query_pins_the_new_id_not_the_previous_one(self):
+        req = publish_doc.build_verify_request(
+            BASE, "/p.html", 42, name="n", access=None)
+        assert "__deployment=42" in req.full_url
+
+
+class TestThePerAssetPassContract:
+
+    def _resp(self, body=b"page", dep=42, ctype="text/html; charset=utf-8"):
+        import io as _io
+        r = _io.BytesIO(body)
+        r.status = 200
+        r.headers = {"X-Doc-Deployment": str(dep), "Content-Type": ctype}
+        r.__enter__ = lambda s=r: s
+        r.__exit__ = lambda *a: False
+        return r
+
+    def test_a_matching_asset_passes(self):
+        publish_doc.check_verify_response(
+            self._resp(), want=b"page", deployment_id=42, url_path="/p.html")
+
+    def test_a_byte_difference_fails(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.check_verify_response(
+                self._resp(body=b"other"), want=b"page", deployment_id=42,
+                url_path="/p.html")
+        assert "byte" in e.value.message.lower()
+
+    def test_the_echo_must_name_the_deployment_just_published(self):
+        """Without this the check passes against whatever was already active."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.check_verify_response(
+                self._resp(dep=41), want=b"page", deployment_id=42, url_path="/p.html")
+        assert "X-Doc-Deployment" in e.value.message
+
+    def test_each_asset_is_checked_against_its_own_derived_type(self):
+        """Finding A3. Revision 1 put text/html in a condition it repeated per asset, which
+        would have rejected every valid CSS, JavaScript and image asset."""
+        publish_doc.check_verify_response(
+            self._resp(body=b"a{}", ctype="text/css; charset=utf-8"),
+            want=b"a{}", deployment_id=42, url_path="/s.css")
+
+    def test_a_wrong_content_type_fails(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.check_verify_response(
+                self._resp(body=b"a{}", ctype="text/html; charset=utf-8"),
+                want=b"a{}", deployment_id=42, url_path="/s.css")
+
+
+class TestTheMimeDerivationIsSharedNotCopied:
+    """Finding N7. The manifest deliberately carries no content_type — the harness derives
+    it — so a publisher that re-implements the mapping drifts, and drift here produces both
+    false failures and false passes."""
+
+    @pytest.mark.parametrize("url_path", [
+        "/p.html", "/s.css", "/a.js", "/i.png", "/v.svg", "/f.woff2", "/d.json",
+        "/r.txt", "/x.unknown", "/no-extension",
+    ])
+    def test_the_publisher_and_the_harness_agree_on_every_kind(self, url_path):
+        from harness.manifest import content_type_for
+        assert publish_doc.content_type_for(url_path) == content_type_for(url_path)
+
+    def test_it_is_the_harness_function_itself_rather_than_a_copy(self):
+        from harness.manifest import content_type_for
+        assert publish_doc.content_type_for is content_type_for
+
+
+class TestTheRedirectContract:
+    """Finding N10. Revision 3's redirect test demanded the FIRST request carry no
+    credentials, which would simply return 401 and prove nothing."""
+
+    def test_the_initial_request_does_carry_its_credentials(self):
+        req = publish_doc.build_verify_request(
+            "https://n.3dstories.ca", "/p.html", 42, name="n", access=("i", "s"))
+        assert req.get_header("Cf-access-client-id") == "i"
+
+    def test_a_three_xx_is_a_failure_and_nothing_follows_it(self):
+        import io as _io
+        import urllib.error as _ue
+        calls = []
+
+        def opener(req, timeout=None, **kw):
+            calls.append(req.full_url)
+            raise _ue.HTTPError(req.full_url, 302, "Found",
+                                {"Location": "https://login.example/"}, _io.BytesIO(b""))
+
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.fetch_for_verify(
+                publish_doc.build_verify_request(
+                    "https://n.3dstories.ca", "/p.html", 42, name="n", access=("i", "s")),
+                opener=opener)
+        assert len(calls) == 1, "no follow-up request may be made to the redirect target"
+        assert "redirect" in e.value.message.lower()
+
+    def test_the_opener_never_follows_redirects_on_its_own(self):
+        """urlopen follows a 302 silently, which would send Access credentials to the
+        login host. The build must install a non-following handler."""
+        assert publish_doc.NO_REDIRECTS is not None

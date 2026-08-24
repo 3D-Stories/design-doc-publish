@@ -94,6 +94,14 @@ CHECK_STYLE_DEVICES = _LINT.check_style_devices
 CHECK_TEMPLATE_CLASSIFICATION = _LINT.check_template_classification
 INDEX = _load(INDEX_SCRIPT, "_publish_doc_index")
 VDL = _load(HERE / "vdl_packs.py", "_publish_doc_vdl")
+
+# Finding N7. The manifest carries no content_type — the harness DERIVES it — so a second
+# copy of the extension mapping here would drift, and drift produces both false failures
+# and false passes. This is the harness's own function, imported, not a reimplementation.
+# `harness.manifest` is stdlib-only (the container's waitress lives in `harness.__main__`),
+# so importing it keeps the gate dependency-free.
+sys.path.insert(0, str(HERE.parent))
+from harness.manifest import content_type_for  # noqa: E402
 CONFIG = _load(HERE / "user_config.py", "_publish_doc_user_config")
 
 # Offset past argparse's own exit code 2, so a usage error is never mistaken for a
@@ -610,6 +618,159 @@ def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
                "repository, but the harness fetches with DOC_HARNESS_GITHUB_TOKEN, which "
                "is a different identity. Check that token's access to this repository.")
     return StageError(5, f"the publish failed with HTTP {e.code}: {payload or e.reason}")
+
+
+# --- #36 stage 6: verify, and bind every credential to its destination -----------------
+#
+# Findings M7 and N4, M7 found independently by both review passes. Redaction protects the
+# LOG. It does nothing about the wire or about the wrong server, and transport syntax does
+# not establish server identity: "https" alone permits ANY https host.
+
+# Finding N11. The trust anchor is PINNED HERE, in committed source, and deliberately not
+# read from `DOC_HARNESS_ZONE`. Validating the destination against a value drawn from the
+# same mutable environment as the destination is not validation: whoever can set
+# `DOC_HARNESS_PUBLIC_BASE` can set the zone to match it and pass.
+PINNED_ZONE = "3dstories.ca"
+
+# The committed allowlist for the PUBLISH BEARER. Loopback and the docker bridge ranges are
+# the operations path measured on the harness host; the one public origin is the control
+# hostname the tunnel will answer for. Everything else refuses.
+_BEARER_HOSTS_PLAINTEXT = re.compile(
+    r"^(?:localhost|127\.\d+\.\d+\.\d+|::1|"
+    r"172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|10\.\d+\.\d+\.\d+|"
+    r"192\.168\.\d+\.\d+)$")
+_BEARER_HOSTS_TLS = frozenset({f"docs-control.{PINNED_ZONE}"})
+
+# `urlopen` follows a 302 silently, which would send the Access service tokens to whatever
+# login host the redirect names. An opener with no redirect handler cannot.
+NO_REDIRECTS = urllib.request.build_opener(_NoRedirect := type(
+    "_NoRedirect", (urllib.request.HTTPRedirectHandler,),
+    {"redirect_request": lambda self, *a, **kw: None})())
+
+
+def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
+    """Refuse locally before a request is built. Finding N6.
+
+    A missing or half-present credential otherwise fails indirectly as a 401 or an Access
+    login redirect, both of which read as a server problem rather than a local one.
+    **No message here ever renders a value**, only a variable name.
+    """
+    if not (env.get("DOC_HARNESS_PUBLISH_TOKEN") or "").strip():
+        raise StageError(6, "DOC_HARNESS_PUBLISH_TOKEN is not set. The control API needs a "
+                            "bearer, and refusing here is clearer than a 401 later.")
+    if not edge:
+        return None
+    cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
+    secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
+    if bool(cid) != bool(secret):
+        missing = "CF_ACCESS_CLIENT_SECRET" if cid else "CF_ACCESS_CLIENT_ID"
+        raise StageError(
+            6, f"the Cloudflare Access service token is a PAIR and {missing} is not set. "
+               "One half alone produces a login redirect that looks like a server fault.")
+    if not cid:
+        raise StageError(
+            6, "the edge half needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, and "
+               "neither is set. Unset DOC_HARNESS_PUBLIC_BASE to skip the edge half instead.")
+    return cid, secret
+
+
+def assert_bearer_destination(base: str) -> None:
+    """The publish bearer goes only where the committed allowlist permits. Finding N4."""
+    parsed = urllib.parse.urlsplit(base)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS:
+        return
+    if parsed.scheme == "http" and _BEARER_HOSTS_PLAINTEXT.match(host):
+        return
+    raise StageError(
+        6, f"refusing to send the publish bearer to {base!r}: it is not on the allowlist in "
+           "publish_doc.py. Permitted are the loopback and private-range addresses the "
+           f"operations path uses over http, and https://docs-control.{PINNED_ZONE}. "
+           "An https URL is NOT sufficient on its own — that would send the token to any "
+           "host the environment happens to name.")
+
+
+def assert_access_destination(url: str, name: str) -> None:
+    """The Access service tokens go only to this deployment's own host, over TLS."""
+    parsed = urllib.parse.urlsplit(url)
+    expected = f"{name}.{PINNED_ZONE}"
+    if parsed.scheme != "https":
+        raise StageError(6, f"refusing to send Cloudflare Access credentials over "
+                            f"{parsed.scheme!r}: they would cross the network in the clear.")
+    if (parsed.hostname or "").lower() != expected:
+        raise StageError(
+            6, f"refusing to send Cloudflare Access credentials to {parsed.hostname!r}; "
+               f"this deployment's host is {expected}.")
+
+
+def build_verify_request(base: str, url_path: str, deployment_id: int, *, name: str,
+                         access: tuple[str, str] | None) -> urllib.request.Request:
+    """One verification request. Finding M3 — revision 2 defined no request at all, so
+    plausible implementations verified the ACTIVE deployment rather than the pinned one,
+    hit the control route, or asked for the wrong asset.
+
+    `deployment_id` is the integer from the stage-5 **201**, never the id read back before
+    it: that one is the PREVIOUS deployment.
+    """
+    url = f"{base}{url_path}?__deployment={deployment_id}"
+    req = urllib.request.Request(url, method="GET")
+    if access is None:
+        # The origin half talks to a bridge address, and serving routes on the Host header
+        # (`harness/app.py:49` -> `harness/routing.py:66`), so the address's own host
+        # resolves to no deployment at all. The header is mandatory, not cosmetic.
+        assert_bearer_destination(base)
+        req.add_header("Host", f"{name}.{PINNED_ZONE}")
+    else:
+        assert_access_destination(url, name)
+        req.add_header("CF-Access-Client-Id", access[0])
+        req.add_header("CF-Access-Client-Secret", access[1])
+    return req
+
+
+def fetch_for_verify(req, *, opener=None):
+    """Fetch with redirects REFUSED, never followed."""
+    call = opener if opener is not None else NO_REDIRECTS.open
+    try:
+        return call(req, timeout=CONTROL_READ_TIMEOUT)
+    except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise StageError(
+                6, f"{req.full_url} answered {e.code}, a redirect to "
+                   f"{e.headers.get('Location') if e.headers else 'elsewhere'}. That is an "
+                   "Access login, not the page. It is a FAILURE and is not followed, "
+                   "because following it would send the credentials to the login host."
+            ) from e
+        raise StageError(6, f"{req.full_url} answered HTTP {e.code}") from e
+    except (TimeoutError, OSError) as e:
+        raise StageError(6, f"{req.full_url} could not be fetched: {e}") from e
+
+
+def check_verify_response(resp, *, want: bytes, deployment_id: int, url_path: str) -> None:
+    """Per asset: 200, the echo naming THIS deployment, that asset's own derived content
+    type, and byte equality.
+
+    Finding A3: revision 1 put `text/html` in a condition it then repeated for every asset,
+    which would have rejected every valid CSS, JavaScript and image asset.
+    """
+    with resp as r:
+        status = getattr(r, "status", 200)
+        headers = dict(getattr(r, "headers", {}) or {})
+        body = r.read()
+    if status != 200:
+        raise StageError(6, f"{url_path} answered HTTP {status}")
+    echo = headers.get("X-Doc-Deployment")
+    if str(echo) != str(deployment_id):
+        raise StageError(
+            6, f"{url_path} carries X-Doc-Deployment {echo!r}, not {deployment_id}. The "
+               "page served is a different deployment from the one just published.")
+    want_type = content_type_for(url_path)
+    got_type = headers.get("Content-Type")
+    if got_type != want_type:
+        raise StageError(6, f"{url_path} is served as {got_type!r}, not {want_type!r}")
+    if body != want:
+        raise StageError(
+            6, f"{url_path} does not serve the bytes that were rendered "
+               f"({len(body)} bytes served, {len(want)} expected).")
 
 
 # --- stage 1: render -----------------------------------------------------------------
