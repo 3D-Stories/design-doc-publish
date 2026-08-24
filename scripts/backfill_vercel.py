@@ -62,8 +62,15 @@ REASONS = (
     "target_occupied",
     "cas_conflict",
     "final_verification_failed",
+    "plan_expired",
+    "harness_fetch_denied",
     "skipped_by_reviewer",
 )
+
+# NOT a flag reason: a row the run never attempted has no outcome at all. Forcing a sampled-out
+# row into a reason that does not describe it would be a lie in the report, so the report counts
+# these separately and the completeness assertion is scoped to what was PROCESSED.
+NOT_ATTEMPTED = "not_attempted"
 
 # Campaign-level, NOT a row outcome: a truncated or invalid listing is not a property of any one
 # project, and reporting a partial walk as a complete campaign would be a lie.
@@ -255,6 +262,322 @@ def _cmd_inventory(args, run) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------------------------
+# T3 — provenance. The name NARROWS; the bytes DECIDE.
+# --------------------------------------------------------------------------------------------
+
+
+def viable_splits(name: str, known_projects) -> list:
+    """EVERY `{project}-{purpose}-{ref}` split whose project exists. Not the first one.
+
+    Taking the first purpose-looking token was a confirmed review finding: a project name can
+    contain a purpose word (`rawgentic-plan-roadmap-v2`) and a ref can BE a purpose token, so the
+    first plausible split can name a real but WRONG project and exclude the true source from the
+    search entirely. Returning all of them, and searching their union, is what makes the hash the
+    evidence rather than the name.
+    """
+    if not isinstance(name, str) or not name:
+        return []
+    known = set(known_projects or ())
+    tokens = name.split("-")
+    out = []
+    for index, token in enumerate(tokens):
+        if token not in PURPOSES or index == 0 or index == len(tokens) - 1:
+            continue
+        project = "-".join(tokens[:index])
+        ref = "-".join(tokens[index + 1:])
+        if project in known and ref:
+            out.append((project, token, ref))
+    return out
+
+
+def _header(headers, name: str):
+    """Case-insensitive header lookup. HTTP/2 lowercases names, which already bit #36 once."""
+    for key, value in (headers or {}).items():
+        if str(key).lower() == name.lower():
+            return value
+    return None
+
+
+def fetch_live(url: str, *, opener, timeout: int = 30) -> bytes:
+    """The live page's bytes, or `source_unavailable`.
+
+    Requesting `Accept-Encoding: identity` is a PREFERENCE; an origin or an intermediary may ignore
+    it. So the response is checked too — hashing a gzip stream would produce a confident, wrong
+    mapping and a confident, wrong drift verdict. Every transport failure lands on
+    `source_unavailable` and never on a content verdict: "I could not read it" is not "it differs".
+    """
+    try:
+        status, headers, body = opener(
+            url, headers={"Accept-Encoding": "identity", "User-Agent": "backfill-vercel/1"},
+            method="GET", timeout=timeout)
+    except Exception as exc:                                   # noqa: BLE001 - see docstring
+        raise RowError("source_unavailable",
+                       f"{type(exc).__name__} fetching {url}: {exc}") from None
+    if status != 200:
+        raise RowError("source_unavailable", f"HTTP {status} fetching {url}")
+    encoding = (_header(headers, "Content-Encoding") or "").strip().lower()
+    if encoding not in ("", "identity"):
+        raise RowError("source_unavailable",
+                       f"{url} answered with Content-Encoding {encoding!r} despite an identity "
+                       "request, so these bytes are not the page's bytes and hashing them would "
+                       "produce a confident wrong answer")
+    return body
+
+
+def _git_out(repo, argv, *, runner=None):
+    runner = runner or _default_cli
+    code, out, err = runner(["git", "-C", str(repo), *argv])
+    if code != 0:
+        raise RowError("uncommitted_or_unreachable",
+                       f"git {' '.join(argv)} failed in {repo}: {(err or '').strip()}")
+    return out
+
+
+def _git_bytes(repo, argv):
+    proc = subprocess.run(["git", "-C", str(repo), *argv], capture_output=True)
+    if proc.returncode != 0:
+        raise RowError("uncommitted_or_unreachable",
+                       f"git {' '.join(argv)} failed in {repo}: "
+                       f"{proc.stderr.decode('utf-8', 'replace').strip()}")
+    return proc.stdout
+
+
+def candidate_paths(repo, ref: str, *, runner=None) -> list:
+    """Paths ever present in history whose name carries the ref. A NARROWING, nothing more.
+
+    `--all` and `--name-only` over history, because most of these pages were published from a
+    commit that is now old and a search of `HEAD` would miss them entirely.
+    """
+    out = _git_out(repo, ["log", "--all", "--pretty=format:", "--name-only"], runner=runner)
+    seen, paths = set(), []
+    needle = str(ref).lower()
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or line in seen or not line.endswith(".html"):
+            continue
+        seen.add(line)
+        parts = line.lower().split("/")
+        if needle in parts[-1] or any(needle in part for part in parts[:-1]):
+            paths.append(line)
+    return paths
+
+
+def history_candidates(repo, *, ref: str, target: bytes, cap: int = 2000,
+                       report_cap: bool = False, runner=None):
+    """Every committed blob under a ref-bearing path whose bytes hash to the target.
+
+    Bounded by `cap` commits per path, and whether the cap was HIT is returned rather than
+    swallowed: a capped search reported as exhaustive is how a `mapping_not_found` becomes a lie.
+    """
+    want = hashlib.sha256(target).hexdigest()
+    found, capped = [], False
+    seen_blobs = set()
+    for path in candidate_paths(repo, ref, runner=runner):
+        commits = _git_out(repo, ["log", "--all", "--format=%H", "--", path],
+                           runner=runner).split()
+        if len(commits) > cap:
+            capped = True
+            commits = commits[:cap]
+        for commit in commits:
+            try:
+                blob_id = _git_out(repo, ["rev-parse", f"{commit}:{path}"], runner=runner).strip()
+            except RowError:
+                continue                      # the path did not exist at that commit
+            if not blob_id or blob_id in seen_blobs:
+                continue
+            seen_blobs.add(blob_id)
+            body = _git_bytes(repo, ["cat-file", "blob", blob_id])
+            if hashlib.sha256(body).hexdigest() == want:
+                found.append({"commit": commit, "repo_path": path, "blob_id": blob_id,
+                              "sha256": want, "size": len(body)})
+    return (found, capped) if report_cap else found
+
+
+def load_projects(workspace_file) -> dict:
+    """`{name: absolute path}` from the rawgentic workspace file.
+
+    Relative paths resolve against the workspace file's own directory, which is what the workspace
+    format means by them — resolving against the cwd would silently point at nothing.
+    """
+    path = pathlib.Path(workspace_file).resolve()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    out = {}
+    for entry in data.get("projects") or []:
+        name, where = entry.get("name"), entry.get("path")
+        if not name or not where:
+            continue
+        target = pathlib.Path(where)
+        out[name] = str(target if target.is_absolute() else (path.parent / target).resolve())
+    return out
+
+
+def _target_at_tip(repo, repo_path: str, *, fetch_remote: bool, runner=None) -> dict:
+    """The document's CURRENT committed page, which is what a migration should serve.
+
+    A local remote-tracking ref is not evidence about the remote, so the default fetches first.
+    Passing `fetch_remote=False` is for tests over a repository with no remote at all — never a
+    way to skip the freshness proof on a real run.
+    """
+    if fetch_remote:
+        _git_out(repo, ["fetch", "--quiet", "origin"], runner=runner)
+        tip = _git_out(repo, ["rev-parse", "origin/HEAD"], runner=runner).strip()
+    else:
+        tip = _git_out(repo, ["rev-parse", "HEAD"], runner=runner).strip()
+    blob_id = _git_out(repo, ["rev-parse", f"{tip}:{repo_path}"], runner=runner).strip()
+    body = _git_bytes(repo, ["cat-file", "blob", blob_id])
+    md_path = repo_path[: -len(".html")] + ".md"
+    try:
+        md_blob = _git_out(repo, ["rev-parse", f"{tip}:{md_path}"], runner=runner).strip()
+    except RowError:
+        raise RowError("uncommitted_or_unreachable",
+                       f"{md_path} is not committed at {tip[:7]}; every surface in this project "
+                       "says the .md and the .html ship together") from None
+    return {"commit": tip, "repo_path": repo_path, "blob_id": blob_id,
+            "sha256": hashlib.sha256(body).hexdigest(), "size": len(body),
+            "md_path": md_path, "md_blob_id": md_blob,
+            "preview": body.decode("utf-8", "replace")[:64]}
+
+
+def enforce_name_uniqueness(rows: list) -> list:
+    """Two rows resolving to ONE harness name are BOTH flagged, before anything is staged.
+
+    Not "the second one loses": whichever went second would replace the first under a name people
+    trust, and the API cannot deactivate, so there would be no way back. Refusing both makes a
+    human choose.
+    """
+    counts = {}
+    for row in rows:
+        name = row.get("harness_name")
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+    for row in rows:
+        if row.get("reason"):
+            continue
+        if counts.get(row.get("harness_name"), 0) > 1:
+            row["reason"] = "target_name_collision"
+            row["detail"] = (f"{counts[row['harness_name']]} rows resolve to the harness name "
+                             f"{row['harness_name']!r}; neither is staged until a human picks one")
+    return rows
+
+
+def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap: int = 2000,
+             fetch_remote: bool = True) -> list:
+    """One mapping row per inventory row. Provenance from the bytes; target from the tip.
+
+    Every row carries its IMMUTABLE inventory binding — the project id, the name and the
+    snapshotted URL — because a later phase re-reads this file after a human has edited it, and
+    without that binding an edit could keep a perfectly valid blob while pointing it at a different
+    source or a different trusted name.
+    """
+    projects = load_projects(workspace_file)
+    rows = []
+    for entry in snapshot.get("rows") or []:
+        row = {"inventory": {"id": entry.get("id"), "name": entry.get("name"),
+                             "url": entry.get("latestProductionUrl")},
+               "harness_name": entry.get("name"),
+               "splits": [list(s) for s in viable_splits(entry.get("name"), projects)],
+               "reason": None, "detail": ""}
+        try:
+            url = entry.get("latestProductionUrl")
+            if not url:
+                raise RowError("source_unavailable",
+                               "the listing carries no latestProductionUrl for this project, so "
+                               "there is nothing to compare against")
+            live = fetch_live(url, opener=opener)
+            # EVERY project is searched, always. The name only narrows which PATHS are worth
+            # looking at inside each repository (the ref), because the workspace-wide collision
+            # check is what makes a unique match trustworthy — searching only the narrowed project
+            # would let the same bytes sit unnoticed in another repository and report a confident
+            # unique answer. That was a confirmed review finding, not a hypothetical.
+            refs = [r for _, _, r in row["splits"]] or [str(entry.get("name") or "")]
+            candidates, capped = [], False
+            for project in dict.fromkeys(list(projects)):
+                repo = projects[project]
+                for ref in dict.fromkeys(refs):
+                    found, hit = history_candidates(repo, ref=ref, target=live,
+                                                    cap=history_cap, report_cap=True)
+                    capped = capped or hit
+                    for item in found:
+                        candidates.append(dict(item, project=project))
+            row["history_capped"] = capped
+            # Dedup by (project, path, blob): the same blob reached through two refs is one answer.
+            unique = {(c["project"], c["repo_path"], c["blob_id"]): c for c in candidates}
+            candidates = list(unique.values())
+            if not candidates:
+                raise RowError("mapping_not_found",
+                               "no committed blob in the workspace hashes to the live bytes"
+                               + (" (the history search hit its cap, so this is not exhaustive)"
+                                  if capped else ""))
+            if len({(c["project"], c["repo_path"]) for c in candidates}) > 1:
+                row["candidates"] = candidates
+                raise RowError("mapping_ambiguous",
+                               f"{len(candidates)} committed blobs hash to the live bytes")
+            match = candidates[0]
+            row["provenance"] = {k: match[k] for k in
+                                 ("project", "commit", "repo_path", "blob_id", "sha256")}
+            row["target"] = _target_at_tip(projects[match["project"]], match["repo_path"],
+                                           fetch_remote=fetch_remote)
+            row["target"]["project"] = match["project"]
+        except RowError as exc:
+            row["reason"] = exc.reason
+            row["detail"] = exc.detail
+        rows.append(row)
+        run.journal(str(row["inventory"]["name"]),
+                    {"phase": "map", "reason": row["reason"], "detail": row["detail"][:400]})
+    rows = enforce_name_uniqueness(rows)
+    mapping = {"rows": rows, "inventory_digest": snapshot.get("digest")}
+    mapping["digest"] = digest(rows)
+    run.write_json("mapping.json", mapping)
+    return rows
+
+
+def _cmd_map(args, run) -> int:
+    snapshot = run.read_json("inventory.json")
+    workspace = args.workspace_file or str(
+        pathlib.Path(__file__).resolve().parents[2] / ".rawgentic_workspace.json")
+    rows = map_rows(snapshot, workspace_file=workspace, opener=_http, run=run,
+                    history_cap=args.history_cap)
+    mapped = sum(1 for r in rows if not r.get("reason"))
+    print(f"map: {mapped} mapped, {len(rows) - mapped} flagged, of {len(rows)} rows")
+    for reason in REASONS:
+        count = sum(1 for r in rows if r.get("reason") == reason)
+        if count:
+            print(f"  {reason}: {count}")
+    print(f"mapping digest: {run.read_json('mapping.json')['digest']}")
+    print("REVIEW claude_docs mapping.json by hand before staging — that is the point of it.")
+    return 0
+
+
+def _http(url, *, headers=None, method="GET", body=None, timeout=30):
+    """The real HTTP seam. Returns (status, headers, body) and never follows a redirect.
+
+    No redirect handler at all, deliberately: a 302 would send whatever headers this carries to
+    whatever host the redirect names, and one of those headers can be a bearer token.
+    """
+    import urllib.error
+    import urllib.request
+    opener = urllib.request.build_opener(_NoRedirect)
+    request = urllib.request.Request(url, method=method, data=body)
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers or {}), exc.read()
+
+
+class _NoRedirect(__import__("urllib.request", fromlist=["HTTPRedirectHandler"])
+                  .HTTPRedirectHandler):
+    """Refuses every redirect. `urlopen` follows a 302 silently, which is how a token leaves."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        raise RowError("source_unavailable",
+                       f"refusing to follow a {code} redirect to {newurl}: a redirect can move a "
+                       "request to a host this run never authorized")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="backfill_vercel.py",
@@ -308,7 +631,7 @@ def _not_yet(args, run):  # pragma: no cover - replaced per task
 
 COMMANDS = {
     "inventory": _cmd_inventory,
-    "map": _not_yet,
+    "map": _cmd_map,
     "stage": _not_yet,
     "activate": _not_yet,
     "report": _not_yet,

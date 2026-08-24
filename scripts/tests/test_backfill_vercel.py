@@ -201,5 +201,262 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(bf.digest(stored["rows"]), stored["digest"])
 
 
+class FakeHttp:
+    """The HTTP seam. Maps a URL to (status, headers, body) and records what was asked for."""
+
+    def __init__(self, responses):
+        self.responses = dict(responses)
+        self.asked = []
+
+    def __call__(self, url, *, headers=None, method="GET", body=None, timeout=None):
+        self.asked.append({"url": url, "headers": dict(headers or {}), "method": method})
+        if url not in self.responses:
+            raise AssertionError(f"the fake HTTP seam was asked for an unexpected url: {url}")
+        item = self.responses[url]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class NameSplitTests(unittest.TestCase):
+    """T3 — the name NARROWS the search. It never decides the answer."""
+
+    def test_the_purposes_copy_has_not_drifted(self):
+        """The copy's own comment promises this test. An unbacked promise is worse than none."""
+        spec = importlib.util.spec_from_file_location(
+            "publish_doc_for_drift", ROOT / "scripts" / "publish_doc.py")
+        pd = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pd)
+        self.assertEqual(tuple(pd.PURPOSES), tuple(bf.PURPOSES))
+
+    def test_every_viable_split_is_returned_not_the_first(self):
+        """`a-plan-design-x` splits at BOTH purpose tokens when both projects exist."""
+        splits = bf.viable_splits("a-plan-design-x", {"a", "a-plan"})
+        self.assertIn(("a", "plan", "design-x"), splits)
+        self.assertIn(("a-plan", "design", "x"), splits)
+
+    def test_a_project_name_containing_a_purpose_word_does_not_hide_the_real_split(self):
+        splits = bf.viable_splits("design-doc-publish-plan-campaign", {"design-doc-publish"})
+        self.assertEqual([("design-doc-publish", "plan", "campaign")], splits)
+
+    def test_a_ref_that_is_itself_a_purpose_token_still_splits(self):
+        splits = bf.viable_splits("proj-plan-design", {"proj"})
+        self.assertIn(("proj", "plan", "design"), splits)
+
+    def test_a_name_with_no_purpose_token_yields_no_split(self):
+        self.assertEqual([], bf.viable_splits("docs-index", {"docs"}))
+
+    def test_a_split_whose_project_is_unknown_is_not_viable(self):
+        self.assertEqual([], bf.viable_splits("ghost-plan-x", {"real"}))
+
+
+class LiveFetchTests(unittest.TestCase):
+    """T3 — the response is CHECKED, because a request header is only a preference."""
+
+    def test_identity_is_requested(self):
+        http = FakeHttp({"https://x/": (200, {"Content-Type": "text/html"}, b"<html>")})
+        body = bf.fetch_live("https://x/", opener=http)
+        self.assertEqual(b"<html>", body)
+        self.assertEqual("identity", http.asked[0]["headers"]["Accept-Encoding"])
+
+    def test_a_gzip_response_is_refused_even_though_identity_was_requested(self):
+        http = FakeHttp({"https://x/": (200, {"Content-Encoding": "gzip"}, b"\x1f\x8b")})
+        with self.assertRaises(bf.RowError) as caught:
+            bf.fetch_live("https://x/", opener=http)
+        self.assertEqual("source_unavailable", caught.exception.reason)
+        self.assertIn("gzip", str(caught.exception))
+
+    def test_identity_content_encoding_is_accepted(self):
+        http = FakeHttp({"https://x/": (200, {"Content-Encoding": "identity"}, b"ok")})
+        self.assertEqual(b"ok", bf.fetch_live("https://x/", opener=http))
+
+    def test_a_non_200_is_source_unavailable_and_keeps_the_status(self):
+        http = FakeHttp({"https://x/": (429, {}, b"slow down")})
+        with self.assertRaises(bf.RowError) as caught:
+            bf.fetch_live("https://x/", opener=http)
+        self.assertEqual("source_unavailable", caught.exception.reason)
+        self.assertIn("429", str(caught.exception))
+
+    def test_a_transport_exception_is_source_unavailable_not_a_crash(self):
+        http = FakeHttp({"https://x/": OSError("connection reset")})
+        with self.assertRaises(bf.RowError) as caught:
+            bf.fetch_live("https://x/", opener=http)
+        self.assertEqual("source_unavailable", caught.exception.reason)
+
+
+class HistorySearchTests(unittest.TestCase):
+    """T3 — provenance comes from the BYTES, in real git history, not from HEAD."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+
+    def test_a_blob_in_an_OLD_commit_is_found(self):
+        repo = self.tmp / "repo"
+        make_repo(repo, {"docs/planning/2026-01-01-9-thing.html": "OLD BYTES"})
+        # HEAD moves on, so the old bytes exist only in history.
+        (repo / "docs/planning/2026-01-01-9-thing.html").write_text("NEW BYTES")
+        git(repo, "add", "--", "docs/planning/2026-01-01-9-thing.html")
+        git(repo, "commit", "-q", "-m", "second")
+        found = bf.history_candidates(repo, ref="9", target=b"OLD BYTES", cap=100)
+        self.assertEqual(1, len(found), found)
+        self.assertEqual("docs/planning/2026-01-01-9-thing.html", found[0]["repo_path"])
+        # And the commit it names is NOT the tip.
+        self.assertNotEqual(git(repo, "rev-parse", "HEAD"), found[0]["commit"])
+
+    def test_bytes_that_are_nowhere_return_nothing(self):
+        repo = self.tmp / "repo"
+        make_repo(repo, {"docs/planning/2026-01-01-9-thing.html": "OLD"})
+        self.assertEqual([], bf.history_candidates(repo, ref="9", target=b"absent", cap=100))
+
+    def test_hitting_the_cap_is_reported_rather_than_silently_truncating(self):
+        repo = self.tmp / "repo"
+        make_repo(repo, {"docs/planning/2026-01-01-9-thing.html": "v0"})
+        for i in range(1, 4):
+            (repo / "docs/planning/2026-01-01-9-thing.html").write_text(f"v{i}")
+            git(repo, "add", "--", "docs/planning/2026-01-01-9-thing.html")
+            git(repo, "commit", "-q", "-m", f"v{i}")
+        found, capped = bf.history_candidates(repo, ref="9", target=b"v0", cap=2, report_cap=True)
+        self.assertTrue(capped)
+        self.assertEqual([], found)  # v0 is older than the cap allows, and that is SAID, not hidden
+
+
+class MapTests(unittest.TestCase):
+    """T3 — the mapping: provenance and target are SEPARATE, and every row binds to inventory."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.run = bf.RunDir(self.tmp / "run")
+
+    def _workspace(self, projects):
+        path = self.tmp / "workspace.json"
+        path.write_text(json.dumps({
+            "projects": [{"name": n, "path": str(p)} for n, p in projects.items()]}))
+        return path
+
+    def _snapshot(self, rows):
+        return {"rows": rows, "digest": bf.digest(rows), "converged": True, "cutoff": False,
+                "walks": 2, "started_at": 1, "completed_at": 2}
+
+    def test_a_mapped_row_records_provenance_and_target_separately(self):
+        """The live bytes are OLD. The target must be the tip, or the migration ships the stale page."""
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/2026-01-01-7-x.html": "OLD BYTES",
+                         "docs/planning/2026-01-01-7-x.md": "# old"})
+        old_commit = git(repo, "rev-parse", "HEAD")
+        (repo / "docs/planning/2026-01-01-7-x.html").write_text("NEW BYTES")
+        git(repo, "add", "--", "docs/planning/2026-01-01-7-x.html")
+        git(repo, "commit", "-q", "-m", "second")
+        tip = git(repo, "rev-parse", "HEAD")
+
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"OLD BYTES")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": repo}), opener=http, run=self.run,
+            fetch_remote=False)
+        row = rows[0]
+        self.assertIsNone(row.get("reason"), row)
+        self.assertEqual(old_commit, row["provenance"]["commit"])
+        self.assertEqual(tip, row["target"]["commit"])
+        self.assertNotEqual(row["provenance"]["commit"], row["target"]["commit"])
+        # And the target's bytes are the CURRENT ones, which is what a migration should serve.
+        self.assertEqual("NEW BYTES", row["target"]["preview"])
+
+    def test_the_row_is_bound_to_its_immutable_inventory_entry(self):
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/7-x.html": "B", "docs/planning/7-x.md": "# b"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"B")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": repo}), opener=http, run=self.run,
+            fetch_remote=False)
+        self.assertEqual("prj_1", rows[0]["inventory"]["id"])
+        self.assertEqual("proj-plan-7", rows[0]["inventory"]["name"])
+        self.assertEqual("https://proj-plan-7.vercel.app/", rows[0]["inventory"]["url"])
+
+    def test_identical_bytes_in_two_repositories_are_ambiguous_even_when_the_name_narrows(self):
+        one, two = self.tmp / "proj", self.tmp / "other"
+        make_repo(one, {"docs/planning/7-x.html": "SAME", "docs/planning/7-x.md": "# s"})
+        make_repo(two, {"docs/planning/7-x.html": "SAME", "docs/planning/7-x.md": "# s"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"SAME")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": one, "other": two}), opener=http,
+            run=self.run, fetch_remote=False)
+        self.assertEqual("mapping_ambiguous", rows[0]["reason"])
+        self.assertEqual(2, len(rows[0]["candidates"]))
+
+    def test_bytes_nowhere_in_the_workspace_are_mapping_not_found_with_the_naming_evidence(self):
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/7-x.html": "B"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"NOT IN GIT")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": repo}), opener=http, run=self.run,
+            fetch_remote=False)
+        self.assertEqual("mapping_not_found", rows[0]["reason"])
+        self.assertEqual([["proj", "plan", "7"]], rows[0]["splits"])
+
+    def test_a_row_whose_source_cannot_be_read_is_source_unavailable(self):
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/7-x.html": "B"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (503, {}, b"down")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": repo}), opener=http, run=self.run,
+            fetch_remote=False)
+        self.assertEqual("source_unavailable", rows[0]["reason"])
+
+    def test_a_row_with_no_production_url_is_source_unavailable_not_a_crash(self):
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": None, "updatedAt": 1}]),
+            workspace_file=self._workspace({}), opener=FakeHttp({}), run=self.run,
+            fetch_remote=False)
+        self.assertEqual("source_unavailable", rows[0]["reason"])
+
+    def test_two_rows_resolving_to_one_harness_name_are_both_flagged(self):
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/7-x.html": "A", "docs/planning/7-x.md": "# a"})
+        rows = [
+            {"inventory": {"id": "prj_1", "name": "proj-plan-7", "url": "u1"},
+             "harness_name": "shared", "target": {}, "provenance": {}},
+            {"inventory": {"id": "prj_2", "name": "proj-plan-8", "url": "u2"},
+             "harness_name": "shared", "target": {}, "provenance": {}},
+        ]
+        checked = bf.enforce_name_uniqueness(rows)
+        self.assertEqual(["target_name_collision", "target_name_collision"],
+                         [r["reason"] for r in checked])
+
+    def test_the_mapping_is_persisted_with_its_digest(self):
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/7-x.html": "B", "docs/planning/7-x.md": "# b"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"B")})
+        bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": repo}), opener=http, run=self.run,
+            fetch_remote=False)
+        stored = self.run.read_json("mapping.json")
+        self.assertEqual(bf.digest(stored["rows"]), stored["digest"])
+        self.assertEqual(1, len(stored["rows"]))
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(unittest.main())
