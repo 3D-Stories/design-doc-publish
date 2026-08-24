@@ -443,6 +443,21 @@ class MapTests(unittest.TestCase):
         self.assertEqual(["target_name_collision", "target_name_collision"],
                          [r["reason"] for r in checked])
 
+    def test_limit_is_the_sample_selection_rule_and_takes_the_recorded_order(self):
+        repo = self.tmp / "proj"
+        make_repo(repo, {"docs/planning/7-x.html": "B", "docs/planning/7-x.md": "# b"})
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"B")})
+        rows = bf.map_rows(
+            self._snapshot([
+                {"id": "prj_1", "name": "proj-plan-7",
+                 "latestProductionUrl": "https://proj-plan-7.vercel.app/", "updatedAt": 1},
+                {"id": "prj_2", "name": "proj-plan-8",
+                 "latestProductionUrl": "https://proj-plan-8.vercel.app/", "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": repo}), opener=http, run=self.run,
+            fetch_remote=False, limit=1)
+        self.assertEqual(1, len(rows))
+        self.assertEqual("proj-plan-7", rows[0]["inventory"]["name"])
+
     def test_the_mapping_is_persisted_with_its_digest(self):
         repo = self.tmp / "proj"
         make_repo(repo, {"docs/planning/7-x.html": "B", "docs/planning/7-x.md": "# b"})

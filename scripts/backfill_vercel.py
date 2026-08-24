@@ -462,7 +462,7 @@ def enforce_name_uniqueness(rows: list) -> list:
 
 
 def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap: int = 2000,
-             fetch_remote: bool = True) -> list:
+             fetch_remote: bool = True, limit=None) -> list:
     """One mapping row per inventory row. Provenance from the bytes; target from the tip.
 
     Every row carries its IMMUTABLE inventory binding — the project id, the name and the
@@ -472,7 +472,12 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
     """
     projects = load_projects(workspace_file)
     rows = []
-    for entry in snapshot.get("rows") or []:
+    # `--limit` IS the sample selection rule: the first N of the snapshot in its recorded order, so
+    # which rows ran is reproducible from the artifacts rather than remembered.
+    entries = snapshot.get("rows") or []
+    if limit is not None:
+        entries = entries[:int(limit)]
+    for entry in entries:
         row = {"inventory": {"id": entry.get("id"), "name": entry.get("name"),
                              "url": entry.get("latestProductionUrl")},
                "harness_name": entry.get("name"),
@@ -537,7 +542,7 @@ def _cmd_map(args, run) -> int:
     workspace = args.workspace_file or str(
         pathlib.Path(__file__).resolve().parents[2] / ".rawgentic_workspace.json")
     rows = map_rows(snapshot, workspace_file=workspace, opener=_http, run=run,
-                    history_cap=args.history_cap)
+                    history_cap=args.history_cap, limit=args.limit)
     mapped = sum(1 for r in rows if not r.get("reason"))
     print(f"map: {mapped} mapped, {len(rows) - mapped} flagged, of {len(rows)} rows")
     for reason in REASONS:
@@ -1147,6 +1152,9 @@ def build_parser() -> argparse.ArgumentParser:
     mp.add_argument("--history-cap", type=int, default=2000,
                     help="commits examined per candidate path; hitting it is RECORDED on the row")
     mp.add_argument("--workspace-file", default=None, help="the rawgentic workspace file")
+    mp.add_argument("--limit", type=int, default=None,
+                    help="map only the first N snapshot rows, in the snapshot's recorded order — "
+                         "this IS the sample selection rule, and it is reproducible")
 
     st = sub.add_parser("stage", help="compare, then publish under a staging label and verify")
     st.add_argument("--execute", default=None, help="the mapping digest, required to write")
