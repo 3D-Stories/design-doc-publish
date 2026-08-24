@@ -24,6 +24,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Callable, Iterable, Protocol
 
@@ -111,6 +112,20 @@ class TreeEntry:
     size: int | None
 
 
+def _commit_date(entry) -> str | None:
+    """The committer date of one commit object, or `None`. Author date is the fallback."""
+    if not isinstance(entry, dict):
+        return None
+    commit = entry.get("commit")
+    if not isinstance(commit, dict):
+        return None
+    for who in ("committer", "author"):
+        block = commit.get(who)
+        if isinstance(block, dict) and isinstance(block.get("date"), str) and block["date"]:
+            return block["date"]
+    return None
+
+
 def _validated_tree(payload) -> tuple[list[TreeEntry], bool]:
     """A tree response, or `Unavailable`. Absence upstream is never a publisher's fault.
 
@@ -163,6 +178,14 @@ class GitHubSource(Protocol):
 
     def repos(self, owner: str, budget: Budget, http_timeout: float = 20.0) -> list[str]:
         """Every repository name under `owner` this credential can see."""
+
+    def file_dates(self, repo: str, path: str, budget: Budget,
+                   http_timeout: float = 20.0) -> tuple[str | None, str | None]:
+        """`(added, updated)` for `path`, or `(None, None)`."""
+
+    def last_commit_date(self, repo: str, path: str, budget: Budget,
+                         http_timeout: float = 20.0) -> str | None:
+        """When `path` was last changed, as GitHub reports it, or `None`."""
 
     def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
              max_bytes: int | None = None) -> bytes:
@@ -291,6 +314,71 @@ class HttpGitHub:
             page += 1
         return names
 
+    def last_commit_date(self, repo: str, path: str, budget: Budget,
+                         http_timeout: float = 20.0) -> str | None:
+        """When `path` was last changed, as GitHub reports it, or `None`.
+
+        The index sorts on this. A filename date is NOT the same thing — a document named
+        2026-07-04 that was edited yesterday was updated yesterday — and 130 of the 460 listed
+        documents carry no date in their name at all.
+
+        `per_page=1` because only the newest commit matters, and the path is percent-encoded
+        rather than interpolated raw: a space or an ampersand in a path would otherwise change
+        the query it lands in.
+        """
+        url = (f"{self._api}/repos/{repo}/commits"
+               f"?path={urllib.parse.quote(path)}&per_page=1")
+        with self._request(url, "application/vnd.github+json", budget, http_timeout) as resp:
+            raw = self._read(resp, budget, MAX_TREE_BYTES)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise Unavailable(f"GitHub returned a commit listing this client cannot parse: {exc}") \
+                from None
+        if not isinstance(payload, list):
+            # An unreadable listing is not an empty one. Reporting "no commits" from an error
+            # body would date the document as unknown and sink it to the bottom of the index.
+            raise Unavailable("GitHub returned a commit listing that is not a list")
+        if not payload or not isinstance(payload[0], dict):
+            return None
+        commit = payload[0].get("commit")
+        if not isinstance(commit, dict):
+            return None
+        for who in ("committer", "author"):
+            block = commit.get(who)
+            if isinstance(block, dict) and isinstance(block.get("date"), str) and block["date"]:
+                return block["date"]
+        return None
+
+    def file_dates(self, repo: str, path: str, budget: Budget,
+                   http_timeout: float = 20.0) -> tuple[str | None, str | None]:
+        """`(added, updated)` for `path`, from ONE listing, or `(None, None)`.
+
+        The URL uses ADDED so a shared link never moves; the index orders by UPDATED so the
+        newest work is on top. Owner decision 2026-08-24, taken over dating a URL by its last
+        change, which would have moved every URL each time somebody edited its file.
+
+        `per_page=100` because GitHub returns newest first, so one page gives both ends. A file
+        with more than 100 commits would page, and its `added` is then the oldest on this page
+        rather than the true first — a document with 100 revisions does not exist here, and an
+        approximate date is better than a second call for every file on the site.
+        """
+        url = (f"{self._api}/repos/{repo}/commits"
+               f"?path={urllib.parse.quote(path)}&per_page=100")
+        with self._request(url, "application/vnd.github+json", budget, http_timeout) as resp:
+            raw = self._read(resp, budget, MAX_TREE_BYTES)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise Unavailable(f"GitHub returned a commit listing this client cannot parse: {exc}") \
+                from None
+        if not isinstance(payload, list):
+            raise Unavailable("GitHub returned a commit listing that is not a list")
+        dates = [d for d in (_commit_date(c) for c in payload) if d]
+        if not dates:
+            return (None, None)
+        return (dates[-1], dates[0])
+
     def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
              max_bytes: int | None = None) -> bytes:
         url = f"{self._api}/repos/{repo}/git/blobs/{blob_id}"
@@ -332,7 +420,7 @@ class FakeGitHub:
 
     def __init__(self, trees: dict | None = None, blobs: dict | None = None,
                  truncated: set | None = None, errors: dict | None = None,
-                 commits: dict | None = None, repos=None):
+                 commits: dict | None = None, repos=None, dates: dict | None = None):
         self._trees = {k: _entries(v) for k, v in (trees or {}).items()}
         self._blobs = dict(blobs or {})
         self._truncated = set(truncated or ())
@@ -343,6 +431,8 @@ class FakeGitHub:
         self.commit_calls = 0
         self._repos = list(repos or [])
         self.repos_calls = 0
+        self._dates = dict(dates or {})
+        self.date_calls = 0
 
     def tree(self, repo, sha, budget, http_timeout: float = 20.0, max_bytes=None,
              recursive: bool = False):
@@ -353,6 +443,20 @@ class FakeGitHub:
         if (repo, sha) not in self._trees:
             raise NotFound(f"no tree {sha}")
         return self._trees[(repo, sha)], (repo, sha) in self._truncated
+
+    def file_dates(self, repo, path, budget, http_timeout: float = 20.0):
+        budget.spend_call()
+        self.date_calls += 1
+        value = self._dates.get((repo, path))
+        if value is None:
+            return (None, None)
+        return value if isinstance(value, tuple) else (value, value)
+
+    def last_commit_date(self, repo, path, budget, http_timeout: float = 20.0):
+        budget.spend_call()
+        self.date_calls += 1
+        value = self._dates.get((repo, path))
+        return value[1] if isinstance(value, tuple) else value
 
     def repos(self, owner, budget, http_timeout: float = 20.0, page_cap: int = 10):
         budget.spend_call()

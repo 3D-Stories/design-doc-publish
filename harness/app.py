@@ -54,6 +54,27 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
         if log is not None:
             log(message)
 
+
+    def _index_budget() -> Budget:
+        """The index walk is two calls per repository plus one per document whose blob it has
+        not dated yet. On this account that is roughly 540 calls the first time and a few dozen
+        afterwards, so it gets its own budget rather than a serving request's."""
+        return Budget(cfg.http_timeout * 30, cfg.max_github_calls * 10)
+
+    def _warm_index() -> None:
+        """Build the listing once at boot, in the background.
+
+        Without this the FIRST reader pays for the whole cold walk — measured at 60 seconds
+        before dates and several minutes with them. A daemon thread means a slow start delays
+        nobody: until it finishes, an index request simply builds it itself.
+        """
+        try:
+            index.snapshot(_index_budget(), http_timeout=cfg.http_timeout)
+            _log("index warmed")
+        except Exception as exc:                      # noqa: BLE001 - a warm-up must never kill boot
+            _log(f"index warm-up failed, will build on demand: {exc!r}")
+
+    threading.Thread(target=_warm_index, name="index-warm", daemon=True).start()
     def _dispatch(environ) -> Response:
         try:
             label = resolve_host(environ.get("HTTP_HOST"), cfg.zone)
@@ -86,9 +107,8 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
 
         if label == INDEX_LABEL:
             try:
-                snapshot = index.snapshot(
-                    Budget(cfg.http_timeout * 4, cfg.max_github_calls * 4),
-                    http_timeout=cfg.http_timeout)
+                snapshot = index.snapshot(_index_budget(),
+                                          http_timeout=cfg.http_timeout)
             except GitHubError:
                 # The listing could not be built. A blank index would read as "no documents
                 # exist", which is a lie, so this says the truth instead.

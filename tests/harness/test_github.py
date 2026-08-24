@@ -393,3 +393,87 @@ def test_both_sources_implement_every_method_the_protocol_declares():
     for name in declared:
         assert callable(getattr(HttpGitHub, name, None)), f"HttpGitHub is missing {name}()"
         assert callable(getattr(FakeGitHub, name, None)), f"FakeGitHub is missing {name}()"
+
+
+class TestFileDates:
+    """Two dates per file, from ONE call. The URL uses when the file was ADDED, so a shared link
+    never moves; the index orders by when it was last CHANGED, so newest work is on top.
+
+    Owner decision 2026-08-24, taken over the alternative of dating a URL by last change, which
+    would have moved every URL each time its file was edited."""
+
+    def make(self, body=b"[]"):
+        seen = {}
+
+        def opener(request, timeout=None):
+            seen["url"] = request.full_url
+            return _Resp(200, body, {})
+        return HttpGitHub(token="ghp_supersecret", api="https://api.github.test",
+                          opener=opener), seen
+
+    def test_the_newest_and_the_oldest_come_from_one_listing(self):
+        body = (b'[{"commit": {"committer": {"date": "2026-08-19T10:00:00Z"}}},'
+                b' {"commit": {"committer": {"date": "2026-03-01T09:00:00Z"}}}]')
+        gh, seen = self.make(body=body)
+        added, updated = gh.file_dates("owner/repo", "docs/a.html",
+                                       Budget(60.0, 10, lambda: 0.0))
+        # GitHub returns newest first, so the LAST element is the commit that added the file.
+        assert updated == "2026-08-19T10:00:00Z"
+        assert added == "2026-03-01T09:00:00Z"
+        assert "per_page=100" in seen["url"]
+
+    def test_a_single_commit_is_both_dates(self):
+        gh, _ = self.make(body=b'[{"commit": {"committer": {"date": "2026-08-19T10:00:00Z"}}}]')
+        added, updated = gh.file_dates("owner/repo", "docs/a.html",
+                                       Budget(60.0, 10, lambda: 0.0))
+        assert added == updated == "2026-08-19T10:00:00Z"
+
+    def test_a_file_with_no_commits_is_two_Nones(self):
+        gh, _ = self.make(body=b"[]")
+        assert gh.file_dates("owner/repo", "docs/a.html",
+                             Budget(60.0, 10, lambda: 0.0)) == (None, None)
+
+    def test_a_body_that_is_not_a_list_is_refused(self):
+        gh, _ = self.make(body=b'{"message": "nope"}')
+        with pytest.raises(Unavailable):
+            gh.file_dates("owner/repo", "docs/a.html", Budget(60.0, 10, lambda: 0.0))
+
+
+class TestLastCommitDate:
+    """When a document's file was last changed. The index sorts on it, and a filename date is
+    not the same thing: a document named 2026-07-04 that was edited yesterday was updated
+    yesterday. 130 of the 460 listed documents carry no date in their name at all."""
+
+    def make(self, status=200, body=b"[]"):
+        seen = {}
+
+        def opener(request, timeout=None):
+            seen["url"] = request.full_url
+            return _Resp(status, body, {})
+        return HttpGitHub(token="ghp_supersecret", api="https://api.github.test",
+                          opener=opener), seen
+
+    def test_it_returns_the_committer_date_of_the_newest_commit(self):
+        body = b'[{"commit": {"committer": {"date": "2026-08-19T10:11:12Z"}}}]'
+        gh, seen = self.make(body=body)
+        got = gh.last_commit_date("owner/repo", "docs/a b.html", Budget(60.0, 10, lambda: 0.0))
+        assert got == "2026-08-19T10:11:12Z"
+        # One commit is all that is read, and the path is percent-encoded rather than
+        # interpolated raw: a path with a space or an ampersand would otherwise change the query.
+        assert "per_page=1" in seen["url"]
+        assert "docs/a%20b.html" in seen["url"] or "docs%2Fa%20b.html" in seen["url"]
+
+    def test_a_file_with_no_commits_returns_None(self):
+        gh, _ = self.make(body=b"[]")
+        assert gh.last_commit_date("owner/repo", "docs/a.html",
+                                   Budget(60.0, 10, lambda: 0.0)) is None
+
+    def test_a_body_that_is_not_a_list_is_refused(self):
+        gh, _ = self.make(body=b'{"message": "nope"}')
+        with pytest.raises(Unavailable):
+            gh.last_commit_date("owner/repo", "docs/a.html", Budget(60.0, 10, lambda: 0.0))
+
+    def test_a_commit_with_no_usable_date_returns_None(self):
+        gh, _ = self.make(body=b'[{"commit": {}}]')
+        assert gh.last_commit_date("owner/repo", "docs/a.html",
+                                   Budget(60.0, 10, lambda: 0.0)) is None

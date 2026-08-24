@@ -59,7 +59,22 @@ def _rows_for(snapshot: dict, bi, zone: str) -> list[dict]:
     rows = []
     for r in snapshot["rows"]:
         name = r["name"]
-        group, chip = bi.classify(name, projects)
+        # A row that KNOWS its repository says so. `classify` finds a project by PREFIX, and a
+        # convention hostname starts with a date, so it matched nothing and every document
+        # landed in one group called "other" — measured live on 428 of them. The chip is still
+        # a purpose token, looked for in what is left after the date and the repository.
+        if r.get("group"):
+            group = r["group"]
+            rest = name
+            if rest.startswith(group + "-"):
+                rest = rest[len(group) + 1:]
+            else:
+                head, _, tail = rest.partition("-" + group + "-")
+                rest = tail or rest
+            chip = next((tok for tok in rest.split("-") if tok in bi.PURPOSES),
+                        bi.DEFAULT_PURPOSE)
+        else:
+            group, chip = bi.classify(name, projects)
         updated = None
         stamp = r.get("published_at") or ""
         if stamp:

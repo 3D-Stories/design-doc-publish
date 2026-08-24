@@ -158,7 +158,7 @@ class ConventionResolver:
 _MAX_DNS_LABEL = 63
 
 
-def label_for(repo: str, repo_path: str) -> str:
+def label_for(repo: str, repo_path: str, *, fallback_date: str | None = None) -> str:
     """The hostname label a document is served at. The INVERSE of `split_label`.
 
     The index generates its links with this, so the two must agree: a link the index prints and
@@ -175,7 +175,20 @@ def label_for(repo: str, repo_path: str) -> str:
             datetime.date.fromisoformat(match.group(1))
         except ValueError:
             match = None
-    parts = [match.group(1), repo, match.group(2)] if match else [repo, stem]
+    if match:
+        parts = [match.group(1), repo, match.group(2)]
+    else:
+        # Owner request: every URL carries a date. With none in the filename, the date GitHub
+        # reports for the file's LAST CHANGE is used instead. Only the day is taken, and only
+        # when it parses — the value arrives from an API response, so a junk one must never
+        # become part of a hostname.
+        day = ""
+        if isinstance(fallback_date, str) and len(fallback_date) >= 10:
+            try:
+                day = datetime.date.fromisoformat(fallback_date[:10]).isoformat()
+            except ValueError:
+                day = ""
+        parts = ([day] if day else []) + [repo, stem]
     label = "-".join(p for p in parts if p).lower()
     # One DNS label is 63 characters. The TAIL is cut, never the date and never the repository,
     # and the cut must not leave a trailing hyphen, which is not a legal label.
@@ -204,6 +217,29 @@ class ConventionIndex:
         self._now = now
         self._snapshot = None
         self._at = 0.0
+        # Dates are keyed on the BLOB, not the path. 460 documents is 460 extra calls on a cold
+        # walk; keying on content means a refresh only pays for the files that actually changed.
+        self._dates: dict[tuple, str] = {}
+
+    def _dates_for(self, full_repo: str, entry, budget, http_timeout: float) -> tuple:
+        """`(added, updated)` for this file, each "" when GitHub would not say.
+
+        ADDED dates the URL, so a link never moves when somebody edits the file. UPDATED orders
+        the page, so the newest work is on top. Owner decision 2026-08-24.
+
+        A file whose dates cannot be read is still LISTED. Dropping it would hide a real
+        document because of one API hiccup, and the renderer already sinks a row with no time
+        to the bottom of the page.
+        """
+        key = (full_repo, entry.path, entry.blob_id)
+        if key not in self._dates:
+            try:
+                added, updated = self._source.file_dates(
+                    full_repo, entry.path, budget, http_timeout)
+            except GitHubError:
+                return ("", "")
+            self._dates[key] = (added or "", updated or "")
+        return self._dates[key]
 
     def snapshot(self, budget, *, http_timeout: float = 20.0) -> dict:
         if self._snapshot is not None and (self._now() - self._at) <= self._ttl:
@@ -237,13 +273,17 @@ class ConventionIndex:
                 if len(group) > 1:
                     continue
                 entry = group[0]
+                added, updated = self._dates_for(full, entry, budget, http_timeout)
                 rows.append({
-                    "name": label_for(repo, entry.path),
+                    "name": label_for(repo, entry.path, fallback_date=added),
                     "title": re.sub(r"\.html?$", "", basename, flags=re.IGNORECASE),
                     "project": repo,
+                    # The walk knows the repository, so the page does not have to guess it from
+                    # a hostname that now begins with a date.
+                    "group": repo,
                     "purpose": None,
                     "commit_sha": commit,
-                    "published_at": "",
+                    "published_at": updated,
                 })
                 listed = True
             if listed:

@@ -130,3 +130,21 @@ def test_an_empty_listing_renders_instead_of_crashing():
     pinned = datetime(2026, 8, 24, tzinfo=timezone.utc)
     out = bi.render([], pinned.strftime("%Y-%m-%d"), pinned, bi.signature([]), eyebrow="x")
     assert isinstance(out, str) and len(out) > 0
+
+
+def test_a_row_that_names_its_own_project_is_grouped_by_it():
+    """Found live 2026-08-24: all 428 documents landed in one group called "other".
+
+    `classify` finds a project by PREFIX, and a convention hostname starts with a DATE, so no
+    project ever matched. The walk already knows which repository each file came from, so the
+    row carries it instead of the page re-deriving it from a string.
+    """
+    from harness.indexpage import _rows_for, build_index_module
+    snapshot = {"generation": "g", "generated_at": 0, "projects": ["rawgentic"],
+                "rows": [{"name": "2026-08-19-rawgentic-unified-roadmap-design",
+                          "title": "t", "project": "rawgentic", "group": "rawgentic",
+                          "purpose": None, "commit_sha": "c", "published_at": ""}]}
+    row = _rows_for(snapshot, build_index_module(), "3dstories.ca")[0]
+    assert row["group"] == "rawgentic"
+    # The chip still comes from the document part, with the date and repository removed.
+    assert row["chip"] == "design"
