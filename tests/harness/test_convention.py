@@ -292,3 +292,89 @@ class TestConventionIndex:
             split = split_label(row["name"], repos)
             assert split is not None, row["name"]
             assert split[1] == row["project"]
+
+
+class TestIndexOrdering:
+    """Owner request 2026-08-24: the index is ordered by LAST UPDATED. The renderer already
+    sorts newest-first; it had no dates to sort by, because every row carried an empty one."""
+
+    def test_a_row_carries_the_files_last_commit_date(self):
+        src = index_source(rawgentic=["docs/a.html"])
+        src._dates[("3D-Stories/rawgentic", "docs/a.html")] = "2026-08-19T10:11:12Z"
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert snap["rows"][0]["published_at"] == "2026-08-19T10:11:12Z"
+
+    def test_a_date_is_cached_by_blob_so_an_unchanged_file_is_asked_once(self):
+        # 460 documents is 460 extra calls on a cold walk. Keying the cache on the BLOB means a
+        # refresh only pays for the files that actually changed.
+        src = index_source(rawgentic=["docs/a.html"])
+        src._dates[("3D-Stories/rawgentic", "docs/a.html")] = "2026-08-19T10:11:12Z"
+        idx = ConventionIndex("3D-Stories", src, ttl=0.0)
+        idx.snapshot(budget())
+        idx.snapshot(budget())
+        assert src.date_calls == 1
+
+    def test_a_file_whose_date_cannot_be_read_is_still_listed(self):
+        # Dropping it would hide a real document because of an API hiccup. The renderer already
+        # sinks a row with no time to the bottom.
+        from harness.github import Unavailable
+        src = index_source(rawgentic=["docs/a.html"])
+
+        def boom(*a, **k):
+            raise Unavailable("no")
+        src.last_commit_date = boom
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["rawgentic-a"]
+        assert snap["rows"][0]["published_at"] == ""
+
+
+class TestLabelDateFallback:
+    """Owner request 2026-08-24: every document URL carries a date. The filename's own date is
+    used when it has one; otherwise the date GitHub reports for the file's last change.
+
+    97 of 428 listed documents had no date in the name, so their URLs had none either."""
+
+    def test_the_filename_date_still_wins(self):
+        assert label_for("rawgentic", "docs/2026-08-19-unified-roadmap.html",
+                         fallback_date="2020-01-01T00:00:00Z") == \
+            "2026-08-19-rawgentic-unified-roadmap"
+
+    def test_a_dateless_filename_takes_the_github_date(self):
+        assert label_for("rawgentic", "docs/campaign-log.html",
+                         fallback_date="2026-08-24T09:10:11Z") == \
+            "2026-08-24-rawgentic-campaign-log"
+
+    def test_no_fallback_still_gives_a_dateless_label(self):
+        assert label_for("rawgentic", "docs/campaign-log.html") == "rawgentic-campaign-log"
+
+    def test_a_fallback_that_is_not_a_date_is_ignored_rather_than_pasted_in(self):
+        # The value comes from an API response, so a junk one must not become a hostname.
+        assert label_for("rawgentic", "docs/x.html", fallback_date="not-a-date") == "rawgentic-x"
+
+    def test_a_label_built_from_the_fallback_still_resolves(self):
+        # The URL says 2026-08-24 and the FILE is `campaign-log.html`. `find_document` tries the
+        # dated filename first and the undated one second, which is what makes this work.
+        label = label_for("rawgentic", "docs/campaign-log.html",
+                          fallback_date="2026-08-24T09:10:11Z")
+        date, repo, doc = split_label(label, ["rawgentic"])
+        assert (date, repo, doc) == ("2026-08-24", "rawgentic", "campaign-log")
+        assert find_document([entry("docs/campaign-log.html")], date, doc) is not None
+
+
+def test_every_index_row_url_carries_a_date_when_github_supplies_one():
+    src = index_source(rawgentic=["docs/campaign-log.html"])
+    src._dates[("3D-Stories/rawgentic", "docs/campaign-log.html")] = "2026-08-24T09:10:11Z"
+    snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+    assert snap["rows"][0]["name"] == "2026-08-24-rawgentic-campaign-log"
+
+
+def test_the_url_uses_when_the_file_was_added_and_the_order_uses_when_it_changed():
+    """Owner decision 2026-08-24. A URL dated by LAST change moves every time somebody edits
+    the file, so a link shared yesterday 404s. Dating it by when the file was ADDED keeps the
+    link stable forever, and the index still sorts on the last change."""
+    src = index_source(rawgentic=["docs/campaign-log.html"])
+    src._dates[("3D-Stories/rawgentic", "docs/campaign-log.html")] = (
+        "2026-03-01T09:00:00Z", "2026-08-24T09:10:11Z")
+    row = ConventionIndex("3D-Stories", src).snapshot(budget())["rows"][0]
+    assert row["name"] == "2026-03-01-rawgentic-campaign-log"
+    assert row["published_at"] == "2026-08-24T09:10:11Z"
