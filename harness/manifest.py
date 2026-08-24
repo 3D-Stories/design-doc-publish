@@ -22,7 +22,7 @@ import dataclasses
 import re
 
 from .config import HarnessConfig
-from .routing import RESERVED_LABELS, PathError, canonical_path, is_valid_label
+from .routing import RESERVED_LABELS, PathError, canonical_url_path, is_valid_label
 
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -107,7 +107,7 @@ def _asset(raw, cfg: HarnessConfig, index: int) -> Asset:
         raise ManifestError(f"assets[{index}] must be an object, got {type(raw).__name__}")
     url_path = _text(raw, "url_path")
     try:
-        url_path = canonical_path(url_path)
+        url_path = canonical_url_path(url_path)
     except PathError as exc:
         raise ManifestError(f"assets[{index}].url_path is not canonical: {exc}") from None
     if url_path == "/":
@@ -157,8 +157,14 @@ def parse_manifest(body, cfg: HarnessConfig) -> Manifest:
             f"name {name!r} is reserved for the harness itself; a deployment published under "
             f"it would activate and then never be reachable")
     repo = _text(body, "repo")
-    if not _REPO.match(repo):
-        raise ManifestError(f"repo must be 'owner/name', got {repo!r}")
+    # Step 11 finding F13. `_REPO` admits a dot, which a real repository name may carry, so it
+    # also admitted '.' and '..' as a whole segment — and `repo` is interpolated straight into
+    # the API URL in `github.py`. The request still goes to the one configured host, so no
+    # credential could leak elsewhere, but a dot segment reaching an interpolated URL is the
+    # kind of thing that is only safe by accident. GitHub has no such owner or repository
+    # anyway, so refusing it costs nothing real.
+    if not _REPO.match(repo) or any(part in (".", "..") for part in repo.split("/")):
+        raise ManifestError(f"repo must be 'owner/name' with no '.' or '..' segment, got {repo!r}")
     commit_sha = _text(body, "commit_sha").lower()
     if not _HEX40.match(commit_sha):
         raise ManifestError("commit_sha must be a full 40-hex commit id, not a ref")
@@ -185,7 +191,7 @@ def parse_manifest(body, cfg: HarnessConfig) -> Manifest:
 
     entry_path = _text(body, "entry_path")
     try:
-        entry_path = canonical_path(entry_path)
+        entry_path = canonical_url_path(entry_path)
     except PathError as exc:
         raise ManifestError(f"entry_path is not canonical: {exc}") from None
     if entry_path not in seen:

@@ -8,7 +8,7 @@ an allowlist and it is checked BEFORE anything else looks at the request.
 import pytest
 
 from harness.routing import (CONTROL_LABEL, INDEX_LABEL, PathError, RouteError,
-                             canonical_path, resolve_host)
+                             canonical_url_path, resolve_host)
 
 ZONE = "3dstories.ca"
 
@@ -56,13 +56,13 @@ class TestHostAllowlist:
 
 class TestPathCanonicalization:
     def test_a_simple_path_passes_through(self):
-        assert canonical_path("/assets/app.css") == "/assets/app.css"
+        assert canonical_url_path("/assets/app.css") == "/assets/app.css"
 
     def test_root_is_preserved_for_the_caller_to_map_to_entry_path(self):
-        assert canonical_path("/") == "/"
+        assert canonical_url_path("/") == "/"
 
     def test_percent_encoding_is_decoded_once(self):
-        assert canonical_path("/a%20b.html") == "/a b.html"
+        assert canonical_url_path("/a%20b.html") == "/a b.html"
 
     @pytest.mark.parametrize("path", [
         "/a/../b", "/a/./b", "/../etc/passwd", "/a//b", "a/b", "",
@@ -70,7 +70,7 @@ class TestPathCanonicalization:
     ])
     def test_a_non_canonical_or_traversing_path_is_refused(self, path):
         with pytest.raises(PathError):
-            canonical_path(path)
+            canonical_url_path(path)
 
     def test_a_doubly_encoded_sequence_decodes_to_a_literal_segment(self):
         """This test's ASSERTION was inverted during the Step 8a review. Read the reason.
@@ -88,13 +88,13 @@ class TestPathCanonicalization:
         strictly stronger where it matters: `%2f` and a singly-encoded `%2e` used to be
         ACCEPTED and are now refused.
         """
-        assert canonical_path("/%252e%252e/b") == "/%2e%2e/b"
+        assert canonical_url_path("/%252e%252e/b") == "/%2e%2e/b"
 
 
 class TestEncodedSeparatorsAndDuplicateSpellings:
     """Step 8a inline review, finding I1.
 
-    The design's stated rule is that `canonical_path` REFUSES a non-canonical path rather
+    The design's stated rule is that `canonical_url_path` REFUSES a non-canonical path rather
     than normalizing it, because two spellings of one resource are two ETags for the same
     bytes. `%2f` broke that rule: `/a%2fb` was accepted and decoded to `/a/b`, so the same
     asset had two accepted spellings. Not a traversal — the manifest is an exact-match
@@ -111,14 +111,67 @@ class TestEncodedSeparatorsAndDuplicateSpellings:
     ])
     def test_a_redundantly_encoded_path_is_refused(self, path):
         with pytest.raises(PathError):
-            canonical_path(path)
+            canonical_url_path(path)
 
     def test_encoding_that_is_genuinely_required_still_works(self):
         # A space MUST be encoded in a URL, so this spelling is the canonical one.
-        assert canonical_path("/a%20b.html") == "/a b.html"
+        assert canonical_url_path("/a%20b.html") == "/a b.html"
 
     def test_a_non_ascii_name_survives_its_required_encoding(self):
-        assert canonical_path("/caf%C3%A9.html") == "/café.html"
+        assert canonical_url_path("/caf%C3%A9.html") == "/café.html"
 
     def test_the_plain_spelling_is_unaffected(self):
-        assert canonical_path("/a/b.html") == "/a/b.html"
+        assert canonical_url_path("/a/b.html") == "/a/b.html"
+
+class TestStep11PathBoundary:
+    """Step 11 F3: a manifest url_path and a WSGI PATH_INFO are not the same string.
+
+    WSGI hands the application an ALREADY percent-decoded `PATH_INFO`. Applying the raw-URL
+    round-trip rule to it rejected every asset whose canonical name needs encoding — a space, a
+    parenthesis, a plus — so a deployment activated cleanly and then 404ed for ever. The manifest
+    side keeps the round-trip rule, because there the value really is a URL path and one resource
+    must still get exactly one spelling; the request side validates the decoded segments instead,
+    and the decoded form is the single lookup key both sides agree on.
+    """
+
+    def test_a_decoded_space_is_accepted_on_the_request_side(self):
+        from harness.routing import canonical_request_path
+        assert canonical_request_path("/a b.html") == "/a b.html"
+
+    def test_decoded_punctuation_browsers_send_literally_is_accepted(self):
+        from harness.routing import canonical_request_path
+        for path in ("/a+b.png", "/Screenshot (1).png", "/a,b.html", "/a&b.html", "/a'b.html"):
+            assert canonical_request_path(path) == path
+
+    def test_a_decoded_non_ascii_name_is_accepted(self):
+        from harness.routing import canonical_request_path
+        assert canonical_request_path("/café.html") == "/café.html"
+
+    def test_the_request_side_still_refuses_dot_and_empty_segments(self):
+        from harness.routing import canonical_request_path
+        for path in ("/a/../b", "/a//b", "/./a", "/a/"):
+            with pytest.raises(PathError):
+                canonical_request_path(path)
+
+    def test_the_request_side_still_refuses_a_backslash_or_a_nul(self):
+        from harness.routing import canonical_request_path
+        with pytest.raises(PathError):
+            canonical_request_path("/a\\b")
+        with pytest.raises(PathError):
+            canonical_request_path("/a\x00b")
+
+    def test_the_request_side_still_requires_a_leading_slash(self):
+        from harness.routing import canonical_request_path
+        with pytest.raises(PathError):
+            canonical_request_path("a.html")
+
+    def test_the_manifest_side_keeps_the_round_trip_rule(self):
+        from harness.routing import canonical_url_path
+        with pytest.raises(PathError):
+            canonical_url_path("/a%2fb.html")
+        assert canonical_url_path("/a%20b.html") == "/a b.html"
+        assert canonical_url_path("/plain.html") == "/plain.html"
+
+    def test_both_spellings_of_one_resource_collapse_to_one_key(self):
+        from harness.routing import canonical_request_path, canonical_url_path
+        assert canonical_url_path("/a%20b.html") == canonical_request_path("/a b.html")

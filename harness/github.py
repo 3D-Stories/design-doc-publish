@@ -103,6 +103,42 @@ class TreeEntry:
     size: int | None
 
 
+def _validated_tree(payload) -> tuple[list[TreeEntry], bool]:
+    """A tree response, or `Unavailable`. Absence upstream is never a publisher's fault.
+
+    Step 11 finding F5: `payload.get("tree") or []` turned a response with no `tree` key into a
+    perfectly valid EMPTY tree, and `bool(payload.get("truncated"))` turned a missing truncation
+    flag into a confident "not truncated". The caller then reported the publisher's path as
+    absent — a 422 blaming the publisher for an upstream response this client could not read.
+    """
+    if not isinstance(payload, dict):
+        raise Unavailable(
+            f"GitHub returned a tree body that is not an object, got {type(payload).__name__}")
+    raw = payload.get("tree")
+    if not isinstance(raw, list):
+        raise Unavailable("GitHub returned a tree body with no list-valued 'tree'; an absent "
+                          "tree is not an empty one, and refusing beats reporting the "
+                          "publisher's path as missing")
+    truncated = payload.get("truncated")
+    if not isinstance(truncated, bool):
+        raise Unavailable("GitHub returned a tree body whose 'truncated' flag is absent or not a "
+                          "boolean; without it a partial tree cannot be told from a whole one")
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise Unavailable(f"tree entry {index} is not an object")
+        for field in ("path", "type", "sha"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value:
+                raise Unavailable(
+                    f"tree entry {index} carries no usable {field!r}; the entry cannot be "
+                    f"matched against a declared asset")
+        if entry.get("mode") is None:
+            raise Unavailable(
+                f"tree entry {index} carries no 'mode'; a symlink or a submodule is refused BY "
+                f"its mode, so an absent mode would silently disable that refusal")
+    return _entries(raw), truncated
+
+
 class GitHubSource(Protocol):
     """The seam every caller depends on. Two methods, so both halves are fakeable."""
 
@@ -174,8 +210,13 @@ class HttpGitHub:
         url = f"{self._api}/repos/{repo}/git/trees/{sha}"
         cap = MAX_TREE_BYTES if max_bytes is None else max_bytes
         with self._request(url, "application/vnd.github+json", budget, http_timeout) as resp:
-            payload = json.loads(self._read(resp, budget, cap).decode("utf-8"))
-        return _entries(payload.get("tree") or []), bool(payload.get("truncated"))
+            raw = self._read(resp, budget, cap)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise Unavailable(f"GitHub returned a tree body this client cannot parse: {exc}") \
+                from None
+        return _validated_tree(payload)
 
     def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
              max_bytes: int | None = None) -> bytes:
@@ -195,7 +236,15 @@ class HttpGitHub:
         out = bytearray()
         while True:
             budget.check()
-            chunk = resp.read(_CHUNK)
+            try:
+                chunk = resp.read(_CHUNK)
+            except TimeoutError:
+                # Step 11 finding F7. A connection that dies mid-body raises HERE, not at
+                # `urlopen`, and the taxonomy is what the caller's failure split reads. An
+                # untyped escape became a 500 where the promise was a 503 plus an alert.
+                raise Unavailable("the GitHub response timed out while streaming") from None
+            except OSError as exc:
+                raise Unavailable(f"the GitHub response failed while streaming: {exc}") from None
             if not chunk:
                 return bytes(out)
             if max_bytes is not None and len(out) + len(chunk) > max_bytes:

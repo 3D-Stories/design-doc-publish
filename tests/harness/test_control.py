@@ -278,3 +278,34 @@ class TestActualByteAccounting:
         r = post(env, body(), cfg=cfg)
         assert r.status in (413, 422), r.body
         assert "MAX_PUBLISH_BYTES" in r.body.decode()
+
+class TestStep11BearerAndGrammar:
+    """Step 11 F10 and F11: the bearer must answer 401 for every unauthorized request."""
+
+    def test_a_non_ascii_authorization_header_is_401_not_a_crash(self, tmp_path):
+        reg = Registry(str(tmp_path / "r.db")); reg.initialize()
+        cache = BlobCache(str(tmp_path / "c"), max_bytes=10000); cache.initialize()
+        try:
+            r = handle_control("GET", "/v1/deployments/proj-design-1",
+                               headers={"Authorization": "Bearer s3cr3t\u00e9"}, body=None,
+                               registry=reg, cache=cache, source=FakeGitHub(), cfg=CFG)
+            assert r.status == 401
+        finally:
+            reg.close(); cache.close()
+
+    def test_the_correct_bearer_still_authorizes(self, tmp_path):
+        reg = Registry(str(tmp_path / "r.db")); reg.initialize()
+        cache = BlobCache(str(tmp_path / "c"), max_bytes=10000); cache.initialize()
+        try:
+            r = handle_control("GET", "/v1/deployments/proj-design-1",
+                               headers={"Authorization": "Bearer s3cr3t"}, body=None,
+                               registry=reg, cache=cache, source=FakeGitHub(), cfg=CFG)
+            assert r.status == 200
+        finally:
+            reg.close(); cache.close()
+
+    def test_control_does_not_carry_its_own_copy_of_the_label_grammar(self):
+        from harness import control
+        assert not hasattr(control, "_NAME"), (
+            "the DNS-label grammar lives in harness.routing.is_valid_label; a second copy here "
+            "is the drift Step 8a finding R2 closed")

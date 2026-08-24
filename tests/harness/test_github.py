@@ -266,3 +266,75 @@ class TestResponseByteBound:
         gh = HttpGitHub(token="t", api="https://api.github.test", opener=opener)
         with pytest.raises(GitHubError):
             gh.tree(REPO, COMMIT, Budget(60.0, 10, lambda: 0.0), max_bytes=2000)
+
+class TestStep11UpstreamValidation:
+    """Step 11 F5 and F7: a malformed or dying upstream is an outage, never a publisher error."""
+
+    class _Resp:
+        def __init__(self, payload=None, raiser=None):
+            self._payload = payload
+            self._raiser = raiser
+            self._done = False
+
+        def read(self, _n=None):
+            if self._raiser is not None:
+                raise self._raiser
+            if self._done:
+                return b""
+            self._done = True
+            return self._payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def _client(self, resp):
+        from harness.github import HttpGitHub
+        return HttpGitHub("tok", "https://api.example", opener=lambda *_a, **_k: resp)
+
+    def test_a_tree_response_with_no_tree_key_is_an_outage(self, budget):
+        import json as _json
+        from harness.github import Unavailable
+        client = self._client(self._Resp(_json.dumps({"truncated": False}).encode()))
+        with pytest.raises(Unavailable):
+            client.tree(REPO, COMMIT, budget)
+
+    def test_a_tree_response_with_a_non_list_tree_is_an_outage(self, budget):
+        import json as _json
+        from harness.github import Unavailable
+        client = self._client(self._Resp(_json.dumps({"tree": {}, "truncated": False}).encode()))
+        with pytest.raises(Unavailable):
+            client.tree(REPO, COMMIT, budget)
+
+    def test_a_tree_entry_missing_its_path_is_an_outage(self, budget):
+        import json as _json
+        from harness.github import Unavailable
+        payload = {"tree": [{"type": "blob", "mode": "100644", "sha": "a" * 40, "size": 1}],
+                   "truncated": False}
+        client = self._client(self._Resp(_json.dumps(payload).encode()))
+        with pytest.raises(Unavailable):
+            client.tree(REPO, COMMIT, budget)
+
+    def test_a_well_formed_tree_response_still_parses(self, budget):
+        import json as _json
+        payload = {"tree": [{"path": "i.html", "type": "blob", "mode": "100644",
+                             "sha": "a" * 40, "size": 3}],
+                   "truncated": False}
+        client = self._client(self._Resp(_json.dumps(payload).encode()))
+        entries, truncated = client.tree(REPO, COMMIT, budget)
+        assert truncated is False
+        assert [e.path for e in entries] == ["i.html"]
+
+    def test_a_timeout_while_streaming_the_body_is_an_outage(self, budget):
+        from harness.github import Unavailable
+        client = self._client(self._Resp(raiser=TimeoutError("read timed out")))
+        with pytest.raises(Unavailable):
+            client.blob(REPO, "a" * 40, budget)
+
+    def test_an_oserror_while_streaming_the_body_is_an_outage(self, budget):
+        from harness.github import Unavailable
+        client = self._client(self._Resp(raiser=OSError(104, "Connection reset by peer")))
+        with pytest.raises(Unavailable):
+            client.blob(REPO, "a" * 40, budget)

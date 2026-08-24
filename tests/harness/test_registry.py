@@ -206,3 +206,75 @@ class TestReads:
         rid = c.execute("SELECT id FROM deployment WHERE name='nullproj-design-1'").fetchone()[0]
         c.execute("INSERT INTO active(name,deployment_id) VALUES('nullproj-design-1',?)", (rid,))
         assert reg.index_projects() == sorted(["proj"], key=len, reverse=True)
+
+class TestStep11MetaIntegrity:
+    """Step 11 F1: the meta guard has to be able to fire.
+
+    `_SCHEMA` used to carry an `INSERT OR IGNORE` for the two singleton rows, so every start-up
+    recreated them one statement before `assert_intact()` looked for them. The guard could
+    therefore never fail, and a registry whose rows had been lost came back silently with
+    `generation` reset to 0 — which makes an ETag go backwards and hands a client a 304 for
+    content it has never seen.
+    """
+
+    def test_a_missing_meta_row_on_an_existing_registry_refuses_rather_than_reseeding(self, tmp_path):
+        from harness.registry import RegistryError
+        path = str(tmp_path / "r.db")
+        first = Registry(path)
+        first.initialize()
+        first.publish(manifest())
+        assert first.generation() == 1
+        first._conn().execute("DELETE FROM registry_meta WHERE k='generation'")
+        first.close()
+
+        second = Registry(path)
+        with pytest.raises(RegistryError):
+            second.initialize()
+        second.close()
+
+    def test_a_second_initialize_does_not_reset_a_live_generation(self, tmp_path):
+        path = str(tmp_path / "r.db")
+        first = Registry(path)
+        first.initialize()
+        first.publish(manifest())
+        first.close()
+
+        second = Registry(path)
+        second.initialize()
+        assert second.generation() == 1, "re-initializing must not reseed the counter to 0"
+        second.close()
+
+    def test_generation_raises_when_its_row_is_absent(self, reg):
+        from harness.registry import RegistryError
+        reg._conn().execute("DELETE FROM registry_meta WHERE k='generation'")
+        with pytest.raises(RegistryError):
+            reg.generation()
+
+    def test_generated_at_raises_when_its_row_is_absent(self, reg):
+        from harness.registry import RegistryError
+        reg._conn().execute("DELETE FROM registry_meta WHERE k='generated_at'")
+        with pytest.raises(RegistryError):
+            reg.generated_at()
+
+
+class TestStep11IndexSnapshot:
+    """Step 11 F4: the index body and its ETag must come from ONE registry snapshot."""
+
+    def test_index_snapshot_carries_every_field_the_index_needs(self, reg):
+        reg.publish(manifest())
+        snap = reg.index_snapshot()
+        assert snap["generation"] == reg.generation()
+        assert snap["generated_at"] == reg.generated_at()
+        assert [r["name"] for r in snap["rows"]] == ["proj-design-12"]
+        assert snap["projects"] == ["proj"]
+
+    def test_index_snapshot_of_an_empty_registry_is_generation_zero_and_no_rows(self, reg):
+        snap = reg.index_snapshot()
+        assert snap["generation"] == 0
+        assert snap["rows"] == []
+        assert snap["projects"] == []
+
+    def test_index_snapshot_leaves_no_transaction_open(self, reg):
+        reg.index_snapshot()
+        assert not reg._conn().in_transaction
+        reg.publish(manifest())

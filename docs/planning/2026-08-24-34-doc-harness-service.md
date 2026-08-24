@@ -589,7 +589,7 @@ coverage from this document alone.)*
 | 3 | The server resolves the commit tree itself and refuses activation on a blob or hash mismatch | Publish-time verification | `test_github.py`, `test_control.py` |
 | 4 | `docs-index` renders server-side from the registry, reusing `index/build_index.py` presentation code; ETag from a registry generation counter | The import seam; Index host | `test_indexpage.py` |
 | 5 | Failure split — blob 404 versus outage; unknown host 404; dot segments and undeclared paths rejected | Routing and serving, failure table | `test_routing.py`, `test_serving.py` |
-| 6 | Compose file with the harness container and two volumes; pytest covers CAS, serving and verification; the whole gate is green | Configuration; Testability | `test_entrypoint.py`, `test_production_server.py`, and the full gate |
+| 6 | Compose file with the harness container and two volumes; pytest covers CAS, serving and verification; the whole gate is green | Configuration; Testability | `test_entrypoint.py`, `test_production_server.py`, and the full gate. **Evidence, not assertion:** `pytest scripts/tests/ tests/ -q` was recorded at 2815 passed, 8 skipped, exit 0 against the Step-2 baseline of 2513 passed, 7 skipped. This repository has no CI, so that local run IS the regression evidence and the PR body cites it. A reader of the diff alone cannot confirm the claim — Step 11 finding F8 — so the run is named here rather than asserted. |
 | 7 | The confirmed spec, markdown plus rendered HTML, committed in this PR under `docs/planning/` | File changes | verified by inspection at Step 9 |
 
 ## File changes

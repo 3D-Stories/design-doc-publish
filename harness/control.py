@@ -20,7 +20,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import re
 import uuid
 
 from .cache import BlobCache
@@ -29,9 +28,9 @@ from .github import (Budget, BudgetExhausted, DeadlineExceeded, GitHubError, Not
                      ResponseTooLarge, Unauthorized, Unavailable, resolve_path)
 from .manifest import ManifestError, parse_manifest
 from .registry import Registry, StalePublisher
+from .routing import is_valid_label
 from .serving import Response
 
-_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _DEPLOYMENTS = "/v1/deployments"
 
 
@@ -49,8 +48,19 @@ def _plain(status: int, message: str, alert: str | None = None) -> Response:
 
 
 def _authorized(headers: dict, cfg: HarnessConfig) -> bool:
+    """Constant-time, and it answers for EVERY header value a client can send.
+
+    Step 11 finding F10: `hmac.compare_digest` refuses two `str` arguments when either carries a
+    non-ASCII character, and it refuses by raising `TypeError`. One accented byte in the
+    `Authorization` header therefore turned a 401 into a 500 with a logged traceback. Comparing
+    bytes has no such restriction, so an unauthorized request is rejected as unauthorized
+    whatever it carries. `surrogateescape` is what makes that total: a header that is not valid
+    UTF-8 still encodes to bytes rather than raising here.
+    """
     presented = headers.get("Authorization") or ""
-    return hmac.compare_digest(presented, f"Bearer {cfg.publish_token}")
+    expected = f"Bearer {cfg.publish_token}"
+    return hmac.compare_digest(presented.encode("utf-8", "surrogateescape"),
+                               expected.encode("utf-8", "surrogateescape"))
 
 
 def git_blob_id(data: bytes) -> str:
@@ -75,7 +85,10 @@ def handle_control(method: str, path: str, *, headers: dict, body: bytes | None,
 
 def _read_back(name: str, registry: Registry) -> Response:
     """The contract #36 parses against. Every branch here is pinned by a test."""
-    if not _NAME.match(name):
+    # Step 11 finding F11: this used to re-declare the DNS-label regex. `is_valid_label` exists
+    # precisely so publish, routing and read-back cannot drift apart (Step 8a finding R2), and a
+    # second copy here re-opened that door.
+    if not is_valid_label(name):
         # 400, never 404: a caller must be able to tell a malformed request from an absent
         # deployment.
         return _plain(400, "that is not a valid deployment name")

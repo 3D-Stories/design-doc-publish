@@ -13,6 +13,10 @@ caller can already read.
 
 **No filesystem path is derived from request input.** The asset table is the allowlist and the
 cache is addressed by blob id, so 404 for an undeclared path is a dictionary miss, not a probe.
+
+**The request path goes through `canonical_request_path`, never the manifest validator.** Step 11
+finding F3: WSGI hands this layer an already-decoded path, and validating it as though it were a
+raw URL made every asset needing encoding unreachable.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from .config import HarnessConfig
 from .github import (Budget, GitHubError, NotFound, Unauthorized, Unavailable)
 from .manifest import Asset
 from .registry import ActiveDeployment
-from .routing import PathError, canonical_path
+from .routing import PathError, canonical_request_path
 
 _SAFE_METHODS = ("GET", "HEAD")
 
@@ -70,7 +74,7 @@ def serve(deployment: ActiveDeployment, path: str, *, method: str, headers: dict
                               f"{deployment.deployment_id}, not {wanted}")
 
     try:
-        clean = canonical_path(path)
+        clean = canonical_request_path(path)
     except PathError:
         return _text(404, "not found")
     if clean == "/":

@@ -17,6 +17,10 @@ the displayed ages ticking in the browser.
 **The project list comes from the registry** (findings S10 and C3), because the container has no
 workspace file and `known_projects()` would return an empty list there, dropping every row into
 the `other` bucket.
+
+**Every registry value comes from ONE `index_snapshot()` call.** Step 11 finding F4: four separate
+reads let a publish land between them, so the "agree by construction" claim above was not true of
+the code. One read transaction makes it true.
 """
 from __future__ import annotations
 
@@ -50,10 +54,10 @@ def build_index_module():
         return _MODULE
 
 
-def _rows_for(registry: Registry, bi, zone: str) -> list[dict]:
-    projects = registry.index_projects()
+def _rows_for(snapshot: dict, bi, zone: str) -> list[dict]:
+    projects = snapshot["projects"]
     rows = []
-    for r in registry.index_rows():
+    for r in snapshot["rows"]:
         name = r["name"]
         group, chip = bi.classify(name, projects)
         updated = None
@@ -77,15 +81,17 @@ def _rows_for(registry: Registry, bi, zone: str) -> list[dict]:
 
 def render_index(registry: Registry, *, zone: str = "3dstories.ca",
                  if_none_match: str | None = None) -> Response:
-    generation = registry.generation()
-    etag = f'"gen-{generation}"'
+    # ONE snapshot, so the ETag and the body cannot describe different generations
+    # (Step 11 finding F4). The 304 decision is made from the same read as the body.
+    snapshot = registry.index_snapshot()
+    etag = f'"gen-{snapshot["generation"]}"'
     if if_none_match == etag:
         return Response(304, {"ETag": etag}, b"")
 
     bi = build_index_module()
-    rows = _rows_for(registry, bi, zone)
+    rows = _rows_for(snapshot, bi, zone)
     # Pinned, not `datetime.now()`. See the module docstring.
-    pinned = datetime.fromtimestamp(registry.generated_at() or 0, tz=timezone.utc)
+    pinned = datetime.fromtimestamp(snapshot["generated_at"], tz=timezone.utc)
     body = bi.render(rows, pinned.strftime("%Y-%m-%d"), pinned, bi.signature(rows),
                      eyebrow=EYEBROW).encode("utf-8")
     return Response(200, {

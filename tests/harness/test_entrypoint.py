@@ -1,4 +1,5 @@
 """The container surface: the entry point, the cache lock, and the compose declarations."""
+import pathlib
 import os
 import subprocess
 import sys
@@ -104,8 +105,30 @@ class TestBuildWiring:
             "DOC_HARNESS_CACHE_DIR": str(tmp_path / "cache"),
         })
         assert callable(app)
-        assert "waitress" not in sys.modules or True   # build() must not require it
         lock.close()
+
+    def test_build_does_not_require_a_server(self, tmp_path):
+        """Step 11 F9. The old assertion was `... or True`, so it could never fail.
+
+        The invariant is about what `build()` IMPORTS, and this process may already carry
+        waitress for other reasons, so the check runs in a clean interpreter where the only
+        import that can have happened is one `build()` made itself.
+        """
+        program = (
+            "import sys\n"
+            "from harness.__main__ import build\n"
+            "cfg, app, lock = build({\n"
+            "    'DOC_HARNESS_GITHUB_TOKEN': 'g', 'DOC_HARNESS_PUBLISH_TOKEN': 'p',\n"
+            "    'DOC_HARNESS_REGISTRY_PATH': %r,\n"
+            "    'DOC_HARNESS_CACHE_DIR': %r,\n"
+            "})\n"
+            "lock.close()\n"
+            "assert 'waitress' not in sys.modules, 'build() imported a server'\n"
+        ) % (str(tmp_path / "sub.db"), str(tmp_path / "subcache"))
+        proc = subprocess.run([sys.executable, "-c", program],
+                              cwd=str(pathlib.Path(__file__).resolve().parents[2]),
+                              capture_output=True, text=True)
+        assert proc.returncode == 0, proc.stderr
 
     def test_build_refuses_without_a_token(self, tmp_path):
         from harness.__main__ import build

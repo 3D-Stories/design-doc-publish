@@ -51,7 +51,7 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
             return _not_found()
 
         method = environ.get("REQUEST_METHOD", "GET").upper()
-        path = environ.get("PATH_INFO", "/") or "/"
+        path = _decoded_path(environ)
 
         if label == CONTROL_LABEL:
             body = None
@@ -112,6 +112,23 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
         return [response.body]
 
     return app
+
+
+def _decoded_path(environ) -> str:
+    """`PATH_INFO`, with the UTF-8 that WSGI flattened into latin-1 put back.
+
+    PEP 3333 requires a server to hand the application a `str` whose code points are the raw
+    request BYTES, so a UTF-8 asset name arrives as mojibake. Step 11 finding F3 is about this
+    boundary: without the round trip below, a document called `café.html` publishes and then
+    cannot be requested. A value that is not latin-1-encodable, or not UTF-8 once encoded, is
+    returned untouched — it is already the best string available, and guessing further would
+    invent a second spelling of one resource.
+    """
+    raw = environ.get("PATH_INFO", "/") or "/"
+    try:
+        return raw.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return raw
 
 
 def _headers(environ) -> dict:

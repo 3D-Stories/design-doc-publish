@@ -78,6 +78,9 @@ class BlobCache:
         # an eviction test that removed the wrong entry. A counter cannot tie.
         self._tick = 0
         self._inflight: dict[str, "_Flight"] = {}
+        #: Blobs that verified but could not be stored. Serving continues from the in-hand
+        #: bytes; this list is what makes that visible rather than silent.
+        self._admission_failures: list[str] = []
         self.blob_dir = os.path.join(root, "blobs")
         self.tmp_dir = os.path.join(root, "tmp")
         self.staging_root = os.path.join(root, "staging")
@@ -127,17 +130,17 @@ class BlobCache:
         """Repair every crash window, then evict down to the bound. Runs before serving."""
         conn = self._conn()
         for name in os.listdir(self.tmp_dir):
-            self._remove(os.path.join(self.tmp_dir, name))
+            self._remove_strict(os.path.join(self.tmp_dir, name))
         # Finding C1: staged bytes are outside LRU accounting, so an abandoned publish is
         # invisible to the bound and accumulates until the volume fills.
         for name in os.listdir(self.staging_root):
-            self._remove(os.path.join(self.staging_root, name))
+            self._remove_strict(os.path.join(self.staging_root, name))
 
         on_disk: dict[str, int] = {}
         for shard in os.listdir(self.blob_dir):
             shard_path = os.path.join(self.blob_dir, shard)
             if not os.path.isdir(shard_path):
-                self._remove(shard_path)
+                self._remove_strict(shard_path)
                 continue
             for name in os.listdir(shard_path):
                 on_disk[name] = os.path.getsize(os.path.join(shard_path, name))
@@ -146,7 +149,7 @@ class BlobCache:
         for blob_id in set(known) - set(on_disk):
             conn.execute("DELETE FROM blob WHERE blob_id=?", (blob_id,))
         for blob_id in set(on_disk) - set(known):
-            self._remove(self.path_for(blob_id))
+            self._remove_strict(self.path_for(blob_id))
         for blob_id, size in on_disk.items():
             if blob_id in known and known[blob_id] != size:
                 conn.execute("UPDATE blob SET size=? WHERE blob_id=?", (size, blob_id))
@@ -154,6 +157,11 @@ class BlobCache:
 
     @staticmethod
     def _remove(path: str) -> None:
+        """Best-effort removal, for eviction, purging and discarding a publish's staging.
+
+        Every caller of this one is on a path where a leftover file is harmless: reconcile
+        deletes it at the next start, and the accounting is rebuilt from disk there.
+        """
         if os.path.isdir(path):
             shutil.rmtree(path, ignore_errors=True)
         else:
@@ -161,6 +169,29 @@ class BlobCache:
                 os.unlink(path)
             except FileNotFoundError:
                 pass
+
+    @staticmethod
+    def _remove_strict(path: str) -> None:
+        """Removal that REFUSES to be ignored, for reconciliation only.
+
+        Step 11 finding F6: reconcile used the best-effort remover, so a removal it could not
+        perform passed silently. Reconciliation is the one place where that is not harmless —
+        its whole job is to make the accounting match the volume, and a file it failed to
+        delete is a byte the bound will never see again. A start-up that cannot reconcile
+        refuses instead of serving with accounting it knows is wrong.
+        """
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path)
+            else:
+                os.unlink(path)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise CacheError(
+                f"could not remove {path} while reconciling the cache volume: {exc}. Refusing "
+                f"to serve: the LRU bound cannot be enforced over bytes this process failed to "
+                f"account for.") from None
 
     def _next_tick(self) -> int:
         with self._lock:
@@ -173,13 +204,22 @@ class BlobCache:
         row = self._conn().execute("SELECT COALESCE(SUM(size),0) AS s FROM blob").fetchone()
         return int(row["s"])
 
-    def _evict_to_bound(self) -> None:
+    def _evict_for(self, incoming: int) -> None:
+        """Make room for `incoming` bytes BEFORE they are written (Step 11 finding F2)."""
+        self._evict_to_bound(headroom=incoming)
+
+    def _evict_to_bound(self, *, headroom: int = 0) -> None:
         conn = self._conn()
+        budget = self.max_bytes - headroom
         total = self.total_bytes()
-        if total <= self.max_bytes:
+        if total <= budget:
             return
-        for row in conn.execute("SELECT blob_id,size FROM blob ORDER BY last_access ASC"):
-            if total <= self.max_bytes:
+        # The rows are materialized by the sort before any DELETE runs, so mutating the table
+        # while iterating is safe here. Fetching the list explicitly says so rather than
+        # relying on it: an index on `last_access` would turn this into a live index scan.
+        for row in conn.execute(
+                "SELECT blob_id,size FROM blob ORDER BY last_access ASC").fetchall():
+            if total <= budget:
                 break
             # Row first, then the file. A crash between them leaves an orphan file, which
             # reconcile deletes — never a row pointing at nothing.
@@ -209,11 +249,15 @@ class BlobCache:
             # than serving this one straight through.
             return
         with self._lock:
+            # Step 11 finding F2: this used to write first and evict afterwards, so the bytes on
+            # the volume passed the configured bound for the length of the write. On a volume
+            # that was already near full, the write itself then failed with ENOSPC while the
+            # entries that would have made room were still sitting there, evictable.
+            self._evict_for(len(data))
             self._write_bytes(self.path_for(blob_id), data)
             self._conn().execute(
                 "INSERT OR REPLACE INTO blob(blob_id,sha256,size,last_access) VALUES(?,?,?,?)",
                 (blob_id, sha256, len(data), self._next_tick()))
-            self._evict_to_bound()
 
     # ---- read ------------------------------------------------------------------------
 
@@ -269,6 +313,21 @@ class BlobCache:
             with fh:
                 return fh.read()
         with self._lock:
+            # Step 11 finding F15: the check above is OUTSIDE the lock, so a leader could
+            # complete its whole fetch — store the blob AND drop its in-flight entry — in the
+            # window between that miss and this line. The next caller then found no flight,
+            # elected ITSELF leader, and fetched a blob that was already on disk. The exact
+            # single-upstream-call guarantee this method exists for was therefore only
+            # probabilistic, which showed up as a test that failed roughly three runs in eight.
+            #
+            # Re-checking here closes it deterministically, because `put` and the in-flight pop
+            # both happen under this same lock and in that order: any caller that gets the lock
+            # after the pop necessarily sees the stored row. The lock is an RLock, so `open`
+            # taking it again on this thread is fine.
+            fh = self.open(blob_id, sha256, size)
+            if fh is not None:
+                with fh:
+                    return fh.read()
             flight = self._inflight.get(blob_id)
             leader = flight is None
             if leader:
@@ -285,7 +344,15 @@ class BlobCache:
             return self.get_or_fetch(blob_id, sha256, size, fetch)
         try:
             data, declared_sha = fetch()
-            self.put(blob_id, data, declared_sha)
+            try:
+                self.put(blob_id, data, declared_sha)
+            except OSError as exc:
+                # Step 11 finding F2. The bytes are already verified — `put` hashes before it
+                # writes anything — so a full or read-only volume is a warming problem, not a
+                # serving one. Propagating it turned a recoverable cold cache into a 500 for a
+                # page whose content was in hand. A CacheConflict is NOT caught here: that one
+                # means the bytes are wrong, and wrong bytes must never be served.
+                self._admission_failures.append(f"{blob_id}: {exc}")
             flight.data = data
         except BaseException as exc:
             flight.error = exc

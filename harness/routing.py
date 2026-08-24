@@ -11,10 +11,24 @@ routes are bound to the control host" a fact rather than a hope about proxy conf
 **Forwarded headers are never consulted.** `X-Forwarded-Host` and friends are client-settable,
 so trusting one would hand the attacker the very field this module exists to check.
 
-**The path is an exact key, not a filesystem path.** `canonical_path` refuses anything that is
-not already in canonical form, and the caller then requires an exact match against the
-deployment's declared assets. No filesystem path is ever derived from request input, so there is
-no traversal surface to defend — the refusals below are belt to that braces.
+**The path is an exact key, not a filesystem path.** The caller requires an exact match against
+the deployment's declared assets. No filesystem path is ever derived from request input, so there
+is no traversal surface to defend — the refusals below are belt to that braces.
+
+**A manifest url_path and a request path are DIFFERENT STRINGS, and conflating them was a bug.**
+Step 11 finding F3: one function served both, and it applied the raw-URL round-trip rule to WSGI
+`PATH_INFO`, which PEP 3333 hands over ALREADY percent-decoded. Every asset whose canonical name
+needs encoding — a space, a parenthesis, a plus — was therefore accepted at publish and then 404ed
+for ever, which is the "activates cleanly and cannot be served" failure that finding B7 exists to
+prevent. So there are two functions:
+
+- `canonical_url_path` validates a URL path a publisher wrote. The round-trip rule stays here,
+  because here the string really is a URL and one resource must get exactly one spelling.
+- `canonical_request_path` validates the decoded path WSGI already produced. It checks segments,
+  backslashes and NULs, and it does NOT require an encoded spelling.
+
+Both return the DECODED form, so that single decoded string is the one lookup key, one cache key
+and one ETag the original rule was protecting.
 """
 from __future__ import annotations
 
@@ -72,8 +86,8 @@ def resolve_host(host: str | None, zone: str) -> str:
     return label
 
 
-def canonical_path(path: str) -> str:
-    """The decoded request path, or raise `PathError` if it is not already canonical.
+def canonical_url_path(path: str) -> str:
+    """The decoded form of a publisher-declared URL path, or raise `PathError`.
 
     Refusing a non-canonical path outright, rather than normalizing it, is deliberate: two
     spellings of one resource are two cache keys and two ETags for the same bytes, and the
@@ -105,3 +119,27 @@ def canonical_path(path: str) -> str:
         if seg in ("", ".", ".."):
             raise PathError(f"path {path!r} is not canonical (empty, '.' or '..' segment)")
     return decoded
+
+
+def canonical_request_path(path: str) -> str:
+    """The already-decoded WSGI `PATH_INFO`, or raise `PathError`.
+
+    PEP 3333 states that a server URL-decodes `PATH_INFO` before the application sees it, so
+    there is nothing left to decode and no encoded spelling to compare against. What is still
+    worth refusing is a path that is not a plain sequence of non-empty, non-dot segments: those
+    are the shapes that mean two keys for one resource, or an attempt at traversal.
+
+    Returning the decoded string unchanged is what makes the asset dictionary a true allowlist:
+    the key a publisher declared through `canonical_url_path` and the key a request resolves to
+    here are the same decoded bytes.
+    """
+    if not isinstance(path, str) or not path.startswith("/"):
+        raise PathError(f"path {path!r} must start with '/'")
+    if "\\" in path or "\x00" in path:
+        raise PathError(f"path {path!r} contains a backslash or a NUL")
+    if path == "/":
+        return "/"
+    for seg in path.split("/")[1:]:
+        if seg in ("", ".", ".."):
+            raise PathError(f"path {path!r} is not canonical (empty, '.' or '..' segment)")
+    return path

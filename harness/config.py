@@ -68,6 +68,29 @@ def _number(env: Mapping[str, str], name: str, default, cast):
     return value
 
 
+def _bind(env: Mapping[str, str]) -> str:
+    """`host:port`, validated here so the refusal names its variable (Step 11 finding F12).
+
+    `__main__` split this with `rpartition(":")` and called `int()` on the tail, OUTSIDE the
+    try that turns a `ConfigError` into the "refusing to start" line. A bind with no port
+    therefore exited with a raw traceback — the one setting in this file whose mistake was not
+    reported the way every other one is.
+    """
+    raw = env.get("DOC_HARNESS_BIND", "0.0.0.0:8080").strip()
+    host, sep, port = raw.rpartition(":")
+    if not sep or not port:
+        raise ConfigError(
+            f"DOC_HARNESS_BIND must be 'host:port', got {raw!r}. Without a port there is "
+            f"nothing to listen on.")
+    try:
+        number = int(port)
+    except ValueError:
+        raise ConfigError(f"DOC_HARNESS_BIND port must be a number, got {port!r}") from None
+    if not 1 <= number <= 65535:
+        raise ConfigError(f"DOC_HARNESS_BIND port {number} is outside 1-65535")
+    return f"{host}:{number}" if host else f"0.0.0.0:{number}"
+
+
 def load_config(env: Mapping[str, str]) -> HarnessConfig:
     """Build the config from an environment mapping, or raise `ConfigError` naming the variable."""
     zone = env.get("DOC_HARNESS_ZONE", "3dstories.ca").strip().strip(".").lower()
@@ -102,6 +125,6 @@ def load_config(env: Mapping[str, str]) -> HarnessConfig:
         threads=threads,
         channel_timeout=_number(env, "DOC_HARNESS_CHANNEL_TIMEOUT", 60, int),
         connection_limit=_number(env, "DOC_HARNESS_CONNECTION_LIMIT", 100, int),
-        bind=env.get("DOC_HARNESS_BIND", "0.0.0.0:8080"),
+        bind=_bind(env),
         github_api=env.get("DOC_HARNESS_GITHUB_API", "https://api.github.com").rstrip("/"),
     )

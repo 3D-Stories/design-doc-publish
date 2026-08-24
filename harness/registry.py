@@ -58,7 +58,6 @@ CREATE TABLE IF NOT EXISTS active (
 );
 
 CREATE TABLE IF NOT EXISTS registry_meta (k TEXT PRIMARY KEY, v INTEGER NOT NULL);
-INSERT OR IGNORE INTO registry_meta(k, v) VALUES ('generation', 0), ('generated_at', 0);
 
 CREATE TRIGGER IF NOT EXISTS deployment_sealed_no_update BEFORE UPDATE ON deployment
   WHEN OLD.sealed = 1 BEGIN SELECT RAISE(ABORT, 'deployment is sealed'); END;
@@ -134,8 +133,21 @@ class Registry:
             conn.close()
             self._local.conn = None
 
+    #: Seeded ONLY when this process creates the registry. Step 11 finding F1: an
+    #: `INSERT OR IGNORE` inside the schema script recreated these rows on every start, one
+    #: statement before `assert_intact` looked for them — so the guard could never fire, and a
+    #: registry that had lost them came back with `generation` silently reset to 0. An ETag then
+    #: goes BACKWARDS, and a client is handed a 304 for a generation it never saw.
+    _META_DEFAULTS = (("generation", 0), ("generated_at", 0))
+
     def initialize(self) -> None:
-        self._conn().executescript(_SCHEMA)
+        conn = self._conn()
+        fresh = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='registry_meta'"
+        ).fetchone() is None
+        conn.executescript(_SCHEMA)
+        if fresh:
+            conn.executemany("INSERT INTO registry_meta(k, v) VALUES(?, ?)", self._META_DEFAULTS)
         self.assert_intact()
 
     def assert_intact(self) -> None:
@@ -148,15 +160,55 @@ class Registry:
                 f"generation row the index ETag would stop advancing and every client would "
                 f"hold a stale page with nothing surfaced.")
 
+    def _meta(self, conn: sqlite3.Connection, key: str) -> int:
+        """One meta value, or raise. Step 11 finding F1: these used to answer 0 for an ABSENT
+        row, which is indistinguishable from a registry that has genuinely never published —
+        and 0 is the one answer that makes the index ETag repeat itself."""
+        row = conn.execute("SELECT v FROM registry_meta WHERE k = ?", (key,)).fetchone()
+        if row is None:
+            raise RegistryError(
+                f"registry_meta row {key!r} is absent. Refusing to answer with a default: a "
+                f"fabricated 0 would make the index ETag repeat a value clients already hold.")
+        return int(row["v"])
+
     def generation(self) -> int:
-        row = self._conn().execute(
-            "SELECT v FROM registry_meta WHERE k='generation'").fetchone()
-        return int(row["v"]) if row else 0
+        return self._meta(self._conn(), "generation")
 
     def generated_at(self) -> int:
-        row = self._conn().execute(
-            "SELECT v FROM registry_meta WHERE k='generated_at'").fetchone()
-        return int(row["v"]) if row else 0
+        return self._meta(self._conn(), "generated_at")
+
+    def index_snapshot(self) -> dict:
+        """Generation, timestamp, active rows and project names, from ONE read transaction.
+
+        Step 11 finding F4: the index used to take four separate reads, so a publish landing
+        between them labelled one generation's rows with another generation's ETag. The module
+        docstring in `indexpage` claims body and validator "agree by construction"; only reading
+        them inside one transaction makes that true. WAL gives this read a stable snapshot while
+        a concurrent publisher keeps writing.
+        """
+        conn = self._conn()
+        conn.execute("BEGIN DEFERRED")
+        try:
+            snapshot = {
+                "generation": self._meta(conn, "generation"),
+                "generated_at": self._meta(conn, "generated_at"),
+                "rows": [dict(r) for r in conn.execute(
+                    "SELECT d.name, d.title, d.project, d.purpose, d.commit_sha, d.published_at "
+                    "FROM active a JOIN deployment d ON d.id = a.deployment_id ORDER BY d.name")],
+                "projects": sorted(
+                    (r["project"] for r in conn.execute(
+                        "SELECT DISTINCT d.project FROM active a "
+                        "JOIN deployment d ON d.id = a.deployment_id WHERE d.project IS NOT NULL")),
+                    key=len, reverse=True),
+            }
+            conn.execute("COMMIT")
+            return snapshot
+        except Exception:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.OperationalError:
+                pass
+            raise
 
     def _bump(self, conn: sqlite3.Connection, key: str, value: int | None) -> None:
         # `key` is always one of two internal constants, never request input, so the previous

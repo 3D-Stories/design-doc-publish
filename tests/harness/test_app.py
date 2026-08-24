@@ -118,3 +118,34 @@ class TestWsgiContract:
         assert cap["status"].startswith("500")
         assert b"secret-looking" not in body
         assert b"Traceback" not in body
+
+class TestStep11EncodedAssetNames:
+    """Step 11 F3, end to end: an asset whose name needs encoding must actually serve."""
+
+    def test_an_asset_with_a_space_serves_through_the_wsgi_boundary(self, app):
+        body = {"name": "proj-design-2", "repo": REPO, "commit_sha": COMMIT,
+                "entry_path": "/a%20b.html",
+                "assets": [{"url_path": "/a%20b.html", "repo_path": "i.html", "blob_id": BLOB,
+                            "size": len(PAGE), "sha256": PAGE_SHA}],
+                "expected_active": None}
+        raw = json.dumps(body).encode()
+        cap, _ = call(app, "docs-control.3dstories.ca", "/v1/deployments", method="POST",
+                      headers={"Authorization": "Bearer s3cr3t"}, body=raw)
+        assert cap["status"].startswith("201"), cap["status"]
+
+        # waitress hands the application the DECODED path.
+        cap, served = call(app, "proj-design-2.3dstories.ca", "/a b.html")
+        assert cap["status"].startswith("200"), cap["status"]
+        assert served == PAGE
+
+    def test_the_entry_page_still_serves_at_the_root(self, app):
+        body = {"name": "proj-design-3", "repo": REPO, "commit_sha": COMMIT,
+                "entry_path": "/a%20b.html",
+                "assets": [{"url_path": "/a%20b.html", "repo_path": "i.html", "blob_id": BLOB,
+                            "size": len(PAGE), "sha256": PAGE_SHA}],
+                "expected_active": None}
+        call(app, "docs-control.3dstories.ca", "/v1/deployments", method="POST",
+             headers={"Authorization": "Bearer s3cr3t"}, body=json.dumps(body).encode())
+        cap, served = call(app, "proj-design-3.3dstories.ca", "/")
+        assert cap["status"].startswith("200"), cap["status"]
+        assert served == PAGE

@@ -197,3 +197,15 @@ class TestDeploymentNameValidation:
         assert parse_manifest(payload(name="proj-design-12"), CFG).name == "proj-design-12"
         assert parse_manifest(payload(name="a"), CFG).name == "a"
         assert parse_manifest(payload(name="a" * 63), CFG).name == "a" * 63
+
+class TestStep11RepoSegments:
+    """Step 11 F13: a dot segment must not reach the interpolated GitHub URL."""
+
+    def test_a_repo_of_dot_dot_segments_is_refused(self):
+        for repo in ("../..", "owner/..", "../repo", "./repo", "owner/."):
+            with pytest.raises(ManifestError):
+                parse_manifest(payload(repo=repo), CFG)
+
+    def test_an_ordinary_repo_with_dots_in_its_name_still_passes(self):
+        m = parse_manifest(payload(repo="3D-Stories/design.doc-publish"), CFG)
+        assert m.repo == "3D-Stories/design.doc-publish"

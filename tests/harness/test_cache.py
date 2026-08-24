@@ -8,6 +8,7 @@ is exercised by simulating the crash and asserting reconciliation repairs it.
 import hashlib
 import os
 import threading
+import time
 
 import pytest
 
@@ -217,13 +218,31 @@ class TestSingleFlightOutcomeHandoff:
         calls = []
         start = threading.Barrier(3)
         out = {}
+        # Step 11 finding F15. The barrier releases three threads, but it cannot make the fetch
+        # still be IN FLIGHT when the other two reach the election — and an in-memory fetch
+        # returns immediately. A leader could therefore finish and drop its in-flight entry
+        # before a sibling arrived, which elected a second leader and made a second call. The
+        # test then failed roughly three runs in eight while the coalescer was working exactly
+        # as designed. A blob this large is never stored, so no cache re-check can close that
+        # window: holding the fetch open until every sibling is blocked is what makes the
+        # measurement about coalescing rather than about thread scheduling.
+        entering = threading.Semaphore(0)
 
         def fetch():
             calls.append(1)
+            # Which thread wins the election is not knowable in advance, so every thread
+            # signals; the leader's own signal is already released by the time it gets here.
+            for _ in range(3):
+                assert entering.acquire(timeout=20), "a caller never reached the coalescer"
+            # Both siblings are past their signal and heading for the lock. The pause is
+            # generous by orders of magnitude against an uncontended lock acquisition, and it
+            # is the whole reason this measures coalescing rather than thread scheduling.
+            time.sleep(0.05)
             return big, sha
 
         def worker(i):
             start.wait()
+            entering.release()
             out[i] = cache.get_or_fetch("a" * 40, sha, len(big), fetch)
 
         ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
@@ -264,3 +283,63 @@ class TestSingleFlightOutcomeHandoff:
             t.join(timeout=20)
         assert set(out.values()) == {"Upstream404"}, (
             f"every waiter needs the leader's real error type, got {out}")
+
+class TestStep11Bound:
+    """Step 11 F2: the bound has to hold DURING the write, not only after it."""
+
+    def test_room_is_made_before_the_write_lands_not_after(self, tmp_path):
+        """The bound must hold DURING the write, which is only observable AT the write."""
+        c = BlobCache(str(tmp_path / "c"), max_bytes=1000)
+        c.initialize()
+        seen = []
+        real_write = c._write_bytes
+        try:
+            def watched(target, data):
+                seen.append(c.total_bytes() + len(data))
+                return real_write(target, data)
+            c._write_bytes = watched
+            c.put("a" * 40, b"x" * 600, H(b"x" * 600))
+            c.put("b" * 40, b"y" * 600, H(b"y" * 600))
+            assert seen == [600, 600], (
+                "at each write, already-accounted bytes plus the incoming blob must fit inside "
+                f"the 1000-byte bound; saw {seen}")
+            assert c.total_bytes() <= 1000
+        finally:
+            c._write_bytes = real_write
+            c.close()
+
+    def test_a_cache_write_failure_still_returns_the_verified_bytes(self, cache, monkeypatch):
+        def boom(*_a, **_k):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(cache, "_write_bytes", boom)
+        got = cache.get_or_fetch("c" * 40, H(b"hello"), 5, lambda: (b"hello", H(b"hello")))
+        assert got == b"hello", "a full cache volume must not fail a verified fetch"
+
+    def test_a_hash_mismatch_still_propagates_through_get_or_fetch(self, cache):
+        with pytest.raises(CacheConflict):
+            cache.get_or_fetch("d" * 40, H(b"hello"), 5, lambda: (b"other", H(b"hello")))
+
+
+class TestStep11Reconcile:
+    """Step 11 F6: start-up must not claim a reconciliation it could not perform."""
+
+    def test_reconcile_refuses_when_an_orphan_cannot_be_removed(self, tmp_path, monkeypatch):
+        from harness.cache import CacheError
+        c = BlobCache(str(tmp_path / "c"), max_bytes=1000)
+        c.initialize()
+        try:
+            orphan = os.path.join(c.blob_dir, "ab", "ab" + "c" * 38)
+            os.makedirs(os.path.dirname(orphan), exist_ok=True)
+            with open(orphan, "wb") as fh:
+                fh.write(b"orphan")
+
+            def refuse(path):
+                raise OSError(1, "Operation not permitted")
+            monkeypatch.setattr(os, "unlink", refuse)
+            with pytest.raises(CacheError):
+                c.reconcile()
+        finally:
+            c.close()
+
+    def test_discard_staging_stays_best_effort(self, cache):
+        cache.discard_staging("never-created")

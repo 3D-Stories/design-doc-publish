@@ -92,3 +92,24 @@ def test_secrets_are_not_in_the_repr():
     c = load_config(dict(MINIMAL, DOC_HARNESS_GITHUB_TOKEN="ghp_supersecret"))
     assert "ghp_supersecret" not in repr(c)
     assert isinstance(c.github_token, str) and c.github_token == "ghp_supersecret"
+
+class TestStep11BindValidation:
+    """Step 11 F12: every start-up refusal names its variable, `DOC_HARNESS_BIND` included."""
+
+    def test_a_bind_with_no_port_is_refused_by_name(self):
+        with pytest.raises(ConfigError) as exc:
+            load_config(dict(MINIMAL, DOC_HARNESS_BIND="0.0.0.0"))
+        assert "DOC_HARNESS_BIND" in str(exc.value)
+
+    def test_a_bind_with_a_non_numeric_port_is_refused_by_name(self):
+        with pytest.raises(ConfigError) as exc:
+            load_config(dict(MINIMAL, DOC_HARNESS_BIND="0.0.0.0:http"))
+        assert "DOC_HARNESS_BIND" in str(exc.value)
+
+    def test_a_bind_with_an_out_of_range_port_is_refused(self):
+        with pytest.raises(ConfigError):
+            load_config(dict(MINIMAL, DOC_HARNESS_BIND="0.0.0.0:70000"))
+
+    def test_the_default_bind_and_a_port_only_bind_are_accepted(self):
+        assert load_config(MINIMAL).bind == "0.0.0.0:8080"
+        assert load_config(dict(MINIMAL, DOC_HARNESS_BIND="127.0.0.1:9000")).bind == "127.0.0.1:9000"
