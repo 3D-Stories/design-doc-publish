@@ -1,8 +1,9 @@
 # #37 — Backfill the existing Vercel doc projects into the harness registry
 
 Fourth and last child of epic #38. Spec: `docs/planning/2026-08-23-github-doc-harness-spec.md`.
-Written 2026-08-24, after #36 merged as `355dbf2`. **REVISION 2** — revision 1 carried a
-contradiction that defeated the whole drift check; see "What the gates changed".
+Written 2026-08-24, after #36 merged as `355dbf2`. **REVISION 3** — revision 1 carried a
+contradiction that defeated the whole drift check, and revision 2 carried an instruction that was
+literally impossible to execute. Both are named in "What the gates changed".
 
 ```callout
 info | Read this first — every number here was measured today, not carried
@@ -140,6 +141,59 @@ the test plan; and a report headed for a directory that does not exist.
 Declined, with reasons: the peer's eight subcommands and in-script `self-test` — five subcommands,
 and the tests belong in the existing pytest suite, which is the established way here.
 
+### Pass 2, on revision 2, found ten more — including one that could not have run at all
+
+Same reviewer, same brief, against the exact committed text (`input_sha256` matched the commit, so
+nothing had moved this time). All ten confirmed.
+
+```callout
+crit | The Critical: "publish the same manifest bytes staging proved" is impossible
+A manifest CONTAINS its `name`, and the staging and production names differ by construction. Sending
+the staged bytes again would address the staging label a second time, so activation could never have
+worked as written. Revision 3 says what is actually invariant — the asset set — and asserts that the
+production manifest differs from the staged one in `name` and nothing else.
+```
+
+The other nine, each confirmed and applied: reachability from a local remote-tracking ref proves
+nothing about the remote (now a `git fetch` before the tip is read, with the fetched sha recorded);
+a lost POST response leaves ownership unprovable, and another contender publishing the same bytes is
+indistinguishable (so an unproven deployment is NEVER adopted — the row stops for an operator); the
+completeness assertion contradicted running a sample (processed set and snapshot set are now reported
+separately, with `not_attempted` and the selection rule); re-validating the mapping did not bind a
+row to its immutable inventory row, so an edit could keep a valid blob while pointing at a different
+source or trusted name (now bound to the project id, the name and the snapshotted URL); requesting
+`Accept-Encoding: identity` is a preference, not a guarantee (now the response's `Content-Encoding`
+is CHECKED); the plan expiry was undefined and had no reason (now `--plan-ttl`, an absolute instant,
+and `plan_expired`); right-truncating a staging label is not injective (now a fixed-length hash plus
+an attempt counter, which also lets a renewal take a fresh label); the harness's GitHub grant is
+proven for exactly one public repository and no more (now `harness_fetch_denied`, carrying the
+harness's own error text); and a blanket "read-only by default" contradicted the local artifacts that
+`inventory` must write (now stated: `--execute` gates registry mutations only).
+
+### Why the gate closes here, and on what authority
+
+Three critiques ran — a blind peer proposal, an in-repo rubric deep pass, and two cross-model
+adversarial passes — and **28 findings were applied with none declined on merit** — 7 from the rubric,
+11 from the first adversarial pass, 10 from the second — plus four design changes adopted from the
+peer proposal, which is a proposal rather than a finding list. Two of the three loop-backs in the
+budget are spent. The remaining one is deliberately kept for implementation, where
+#36's experience says it is needed: a third design critique of a document that has already absorbed
+a Critical and two structural holes is worth less than a loop-back held in reserve for what the code
+turns up. This is a judgment, recorded so it can be disagreed with, not a claim that the design is
+now perfect.
+
+The close is the sanctioned budget-exhausted path: `plan_lib close-design-gate --workflow wf2
+--passes 3 --breaker-result clear`, which refuses unless every Critical/High finding carries a
+terminal disposition and no finding still carries an ambiguity marker. It wrote 28 disposition rows
+to `claude_docs/.wf2-state/37/dispositions.jsonl`.
+
+**One honest caveat about that close.** The exhaustion consult that licenses it
+(`plan_lib exhaustion-decision`) printed `close`, but its own record says `outcome: failed` — the
+consult runner exited non-zero and produced NO proposal. So `close` came from the decision path's
+fall-through, not from a second model endorsing the design. The record is write-once, so it was not
+re-run and not overwritten. Read the verdict as "no further critique was obtained", never as
+"a peer agreed".
+
 ## The design
 
 One new file, `scripts/backfill_vercel.py`, standard library only, five subcommands over one
@@ -170,7 +224,9 @@ array is **`inventory_failed`**: the campaign stops rather than reporting a part
 The naming convention `{project}-{purpose}-{ref}` narrows the search. It never decides the answer.
 
 1. Fetch the live Vercel page with **`Accept-Encoding: identity`** — a gzipped body would make every
-   byte-compare meaningless — and take its sha256. A missing `latestProductionUrl`, an auth failure,
+   byte-compare meaningless — and then **CHECK the response**: a `Content-Encoding` other than
+   absent or `identity` is refused, because a request header is a preference and an intermediary can
+   ignore it. Only then take the sha256. A missing `latestProductionUrl`, an auth failure,
    a timeout, or a 429 past its retry bound is **`source_unavailable`**, with the final transport
    error kept verbatim as evidence and never mapped onto a content verdict.
 2. Enumerate **every** syntactically viable `{project}-{purpose}-{ref}` split whose project exists in
@@ -193,9 +249,12 @@ The naming convention `{project}-{purpose}-{ref}` narrows the search. It never d
    what a migration should serve. Both are recorded. Where the target hash equals the live Vercel
    hash the page never drifted; where it differs, `stage` flags `byte_mismatch` — now a question with
    a real answer rather than a tautology.
-6. Assert the target blobs are committed and reachable from the tip commit, reusing
-   `publish_doc.assert_blob_committed`, `assert_head_reachable` and `select_remote`. Not pushed →
-   `uncommitted_or_unreachable`. **Nothing is ever auto-committed or auto-pushed** to make a row pass.
+6. **Fetch first, then resolve the tip.** A local remote-tracking ref is not evidence about the
+   remote: `git fetch <remote> <branch>` runs before the tip is read, and the fetched sha is
+   recorded on the row, so a stale ref cannot be sealed as the migration target.
+   `publish_doc.assert_head_reachable` already takes a `fetch:` flag — it is passed `True` here, not
+   defaulted. Then assert the target blobs are committed and reachable from that commit, reusing
+   `assert_blob_committed` and `select_remote`. Not pushed → `uncommitted_or_unreachable`. **Nothing is ever auto-committed or auto-pushed** to make a row pass.
 7. **Production-name uniqueness** is enforced across the whole mapping before anything is staged. Two
    rows resolving to one name are both `target_name_collision` and neither is staged, because
    whichever went second would replace the first under a trusted name.
@@ -206,9 +265,18 @@ sha256 is the **mapping digest**.
 
 ### The mapping is UNTRUSTED input on every re-read
 
-`stage` and `activate` re-validate every row from scratch: schema, then **recompute** the blob id and
-sha256 from the recorded `commit:path`, then re-run reachability for that exact commit. Any mismatch
-is `mapping_invalid` and nothing is published. The digest proves the file has not changed since it was
+`stage` and `activate` re-validate every row from scratch, and re-validation is **bound to the
+immutable inventory snapshot**, not merely to the row's own internal consistency:
+
+- the row's production name must equal the inventory row's project name, and its source URL must
+  equal that row's snapshotted `latestProductionUrl` — otherwise an edit could keep a perfectly
+  valid, reachable blob while pointing it at a different source or a different trusted name;
+- the row must reference exactly one inventory project id, which is copied from the snapshot and
+  never editable in a way that survives this check;
+- then the schema, then **recomputing** the blob id and sha256 from the recorded `commit:path`, then
+  reachability for that exact commit.
+
+Any mismatch is `mapping_invalid` and nothing is published. The digest proves the file has not changed since it was
 reviewed; it says nothing about whether its contents are TRUE, and a hand-edited row is exactly where
 an untrue one comes from.
 
@@ -231,14 +299,22 @@ predicates otherwise overlap:
    `expected_active`, row identity — BEFORE sending, and record the returned deployment id
    immediately after. A crash between the two is then recoverable: on resume, reconcile the pending
    intent against `GET` metadata and the served bytes rather than guessing.
-5. Publish under a **staging label** (`bf<run>-<name>`, truncated to a valid 63-char DNS label) with
+5. Publish under a **staging label** — `bf<run>-<first 12 hex of sha256(name)>-<attempt>`, which is
+   fixed-length and injective. Right-truncating the real name is NOT: two long names sharing a
+   prefix would collide and the second row would get `stage_publish_failed` even though the
+   production-name uniqueness check had passed. The attempt counter is what lets a re-run after an
+   expiry take a fresh label instead of colliding with its own previous one. Published with
    `expected_active: null` — measured to create only when the name is absent and to 409 otherwise, so
    an existing staging name is `stage_publish_failed`, never an overwrite.
 6. Wait for `cache_warmed: true` (`false` is a failure, not a pass), then `GET /` on
    `Host: <staging>.<zone>` and compare to the target bytes. Not identical →
    `final_verification_failed`; the known candidate is a percent-encoded asset name (#34's boundary
    learning), and it is worth stopping the campaign over rather than continuing.
-7. A row passing all of that enters the **activation plan**, sealed with its own digest and an expiry.
+7. A row passing all of that enters the **activation plan**, sealed with its own digest and an
+   explicit expiry (`--plan-ttl`, default 30 minutes, recorded as an absolute instant). An expired
+   plan is `plan_expired`: `activate` refuses it, and re-running `stage` renews the row under a NEW
+   staging label via the attempt counter, because the old one is occupied and `expected_active:
+   null` would rightly 409 against it.
 
 ```callout
 warn | Staging rows are REAL registry rows and they appear on the public index
@@ -257,9 +333,22 @@ has no delete.
 3. `GET /v1/deployments/<name>`. Active and **not this ROW's own recorded deployment** →
    `target_occupied`. Row-scoped, not run-scoped: a run-wide exception would let a second row replace
    the first row's page under a shared name.
-4. Write-ahead `pending`, then publish the **same manifest bytes** staging proved, with
-   `expected_active` set to what step 3 read. A 409 → `cas_conflict` (measured: the 409 body carries
-   the current `active_deployment_id`, and the served bytes do not change).
+
+   **An unproven deployment is never adopted.** If the write-ahead record exists but no deployment id
+   was recorded — the POST committed and its response was lost — then metadata and served bytes
+   cannot prove who owns the active deployment. Another CAS contender publishing the SAME bytes is
+   indistinguishable. So that row does not proceed: it is `final_verification_failed`, it names the
+   ambiguity, and it waits for an operator. Guessing "probably ours" is how a run overwrites another
+   publisher's deployment.
+4. Write-ahead `pending`, then publish. **The manifest cannot be the same bytes staging published,
+   and saying so was an impossible instruction** — a manifest CONTAINS its `name`, and the staging
+   and production names differ by construction, so re-sending it would address the staging label
+   again. What must be identical is the **asset set**: `repo`, `commit_sha`, `entry_path` and every
+   asset entry (`url_path`, `repo_path`, `blob_id`, `size`, `sha256`). The production manifest is
+   built by taking the staged one and replacing `name`, and the code ASSERTS that the two differ in
+   nothing else before it sends. `expected_active` is what step 3 read. A 409 → `cas_conflict`
+   (measured: the 409 body carries the current `active_deployment_id`, and the served bytes do not
+   change).
 5. `GET /` on the production host and verify bytes, ETag and `X-Doc-Deployment`. **A failure here
    halts the whole campaign**, because the production name has already changed and per-row isolation
    would otherwise leave unverified bytes live under a trusted name while the run carried on. It
@@ -342,6 +431,7 @@ or a running harness.
 | Staging labels accumulate in the registry | Every one is listed in the report with its label and deployment id, so cleanup is a decision somebody can make rather than a surprise. |
 | A crash between a POST and its journal entry | The write-ahead `pending` record, and a resume that reconciles against `GET` metadata and the served bytes rather than guessing. |
 | The bearer reaching somewhere it should not | The destination guard, checked before `Authorization` is attached, with the validated peer logged. |
+| The harness's GitHub grant may not cover ~30 repositories | Proven for ONE public repository, and that is all the probe established. A repository whose blobs the harness cannot fetch surfaces at `stage` as `harness_fetch_denied`, carrying the harness's own error text — which names the repository — so the remedy (widen the token, or exclude the row) is a decision with evidence rather than a mystery. The runbook says how. |
 
 ## What this child does NOT do
 
