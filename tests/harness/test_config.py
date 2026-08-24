@@ -14,7 +14,7 @@ MINIMAL = {"DOC_HARNESS_GITHUB_TOKEN": "gh-tok", "DOC_HARNESS_PUBLISH_TOKEN": "p
 
 def test_defaults_match_the_design_table():
     c = load_config(MINIMAL)
-    assert c.zone == "docs.3dstories.ca"
+    assert c.zone == "3dstories.ca"
     # Convention resolution names a repository under exactly one owner.
     assert c.github_owner == "3D-Stories"
     assert c.cache_max_bytes == 2147483648
@@ -68,8 +68,8 @@ def test_a_non_positive_numeric_setting_refuses():
 
 def test_the_zone_is_lowercased_and_stripped_of_dots():
     # This one supplies its own zone, so it asserts the NORMALISATION and not the default.
-    c = load_config(dict(MINIMAL, DOC_HARNESS_ZONE=".Docs.3DStories.CA."))
-    assert c.zone == "docs.3dstories.ca"
+    c = load_config(dict(MINIMAL, DOC_HARNESS_ZONE=".3DStories.CA."))
+    assert c.zone == "3dstories.ca"
 
 
 def test_concurrent_publishes_must_leave_serving_workers_free():

@@ -1,6 +1,6 @@
 {
   "name": "design-doc-publish",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "description": "Render a design or architecture document from markdown to a standalone HTML page. Rendering needs nothing configured. Publishing requires a reachable doc harness and its publish token, and requires the page to be committed and pushed first: the harness serves the committed bytes, fetched from GitHub.",
   "author": {
     "name": "3D-Stories",
