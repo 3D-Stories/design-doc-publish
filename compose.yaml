@@ -1,6 +1,6 @@
-# The doc-harness stack. Cloudflare (the tunnel, DNS and Access) is issue #35 and is
-# deliberately absent here: #34 is runnable and testable locally with no Cloudflare
-# dependency, which is its whole scope.
+# The doc-harness stack. #35 adds the cloudflared service that puts the harness on the
+# internet. The harness itself still publishes no host port and never will: cloudflared
+# dials OUTWARD to Cloudflare, so nothing here listens on the host.
 services:
   harness:
     build:
@@ -23,6 +23,50 @@ services:
     volumes:
       - registry:/var/lib/doc-harness      # durable: the registry must survive
       - blobcache:/var/cache/doc-harness   # disposable: rebuilds from GitHub by design
+
+  # #35. Reaches the harness by service name on the compose network, and dials outward to
+  # Cloudflare, so it adds no inbound host surface. Its ingress rules live in the Cloudflare
+  # dashboard rather than here — a remotely-managed tunnel is the only shape the available
+  # credential permits, and docs/planning/2026-08-24-35-harness-go-live.md records what that
+  # costs in reviewability.
+  cloudflared:
+    # Pinned by DIGEST, never a tag. --no-autoupdate does not stop a later pull resolving a
+    # different image, so a moving tag would let this stack's behavior change with no commit
+    # to review. This digest is cloudflared version 2026.8.2, and it is the exact binary whose
+    # --token-file support was probed.
+    image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    restart: unless-stopped
+    # OPT-IN. #34 documented running the harness locally with no Cloudflare at all, and an
+    # always-on tunnel service broke exactly that path. `docker compose up` still brings up
+    # only the harness; `docker compose --profile tunnel up -d` is what goes live.
+    profiles: ["tunnel"]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # The token arrives as a FILE. docker inspect prints a container's environment, so a
+      # token in an environment VALUE is readable by anything that can reach the Docker
+      # socket. cloudflared's own --help says --token takes precedence over --token-file, so
+      # TUNNEL_TOKEN must never also be set.
+      TUNNEL_TOKEN_FILE: /run/secrets/tunnel_token
+    secrets:
+      - tunnel_token
+    depends_on:
+      harness:
+        # Without this, cloudflared advertises a route to a harness that has not finished
+        # taking its cache lock. The Dockerfile's HEALTHCHECK is what makes this answerable.
+        condition: service_healthy
+
+secrets:
+  # The PATH comes from a substitution, never a literal: baking one operator's home directory
+  # into a tracked file would be a host-specific value in shared source.
+  #
+  # It carries a DEFAULT rather than the `:?` required form, and that is a deliberate trade.
+  # A top-level secrets: block is interpolated whatever profile is active, so the required
+  # form failed `docker compose config` for anyone who just wanted the harness — breaking
+  # #34's documented local path. The default is a repo-relative placeholder that does not
+  # exist, so nothing silently mounts the wrong file: bringing the tunnel profile up without
+  # setting the variable fails on a missing file that names itself.
+  tunnel_token:
+    file: ${DOC_HARNESS_TUNNEL_TOKEN_FILE:-./.tunnel-token-not-configured}
 
 volumes:
   registry:
