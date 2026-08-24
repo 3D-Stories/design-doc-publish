@@ -30,7 +30,14 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parent.parent
+ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
+# The repository root, so `harness.*` imports here work when this FILE is run alone.
+# Several tests below compare the publisher against the harness's own functions, and they
+# used to pass only because the harness's own test directory had already put the root on
+# the path — order-dependent, and invisible in a full run. Running just this file failed
+# with ModuleNotFoundError, which is exactly what a developer does.
+sys.path.insert(0, str(ROOT))
 
 import publish_doc  # noqa: E402
 
