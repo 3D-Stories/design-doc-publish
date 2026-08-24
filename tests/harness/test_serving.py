@@ -148,3 +148,53 @@ class TestFailureTable:
         assert r.headers["X-Doc-Origin"] == "cache"
         assert dead.blob_calls == 0, "a warm hit must not call GitHub, so it cannot alert"
         assert r.alert is None
+
+
+class TestColdMissCoalescing:
+    """Step 8a cross-model finding R5 (Medium).
+
+    The serving miss path called `source.blob` DIRECTLY, so `BlobCache.get_or_fetch` — the
+    single-flight coalescer, written and tested in its own module — was never reached from
+    production code. A grep proved it: the only callers were its own tests. Concurrent cold
+    requests for one blob each made an upstream call, which is how a recoverable cold burst
+    becomes a rate-limit 503.
+    """
+
+    def test_concurrent_cold_requests_for_one_blob_make_exactly_one_upstream_call(self, cache):
+        import threading
+        src = FakeGitHub(blobs={("owner/repo", BLOB): PAGE})
+        start = threading.Barrier(4)
+        results = {}
+
+        def worker(i):
+            start.wait()
+            results[i] = call(cache, src)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+        assert all(not t.is_alive() for t in threads)
+        assert all(r.status == 200 and r.body == PAGE for r in results.values())
+        assert src.blob_calls == 1, (
+            f"single-flight must collapse the cold burst, got {src.blob_calls} upstream calls")
+
+    def test_each_waiter_still_gets_the_correct_typed_failure(self, cache):
+        import threading
+        src = FakeGitHub(errors={("owner/repo", BLOB): NotFound("gone")})
+        start = threading.Barrier(3)
+        out = {}
+
+        def worker(i):
+            start.wait()
+            out[i] = call(cache, src)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=20)
+        assert all(r.status == 503 for r in out.values())
+        assert all(BLOB in r.body.decode() for r in out.values()), \
+            "every waiter needs the dead-SHA diagnostic, not a generic error"

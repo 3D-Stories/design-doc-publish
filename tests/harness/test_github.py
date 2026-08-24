@@ -235,3 +235,34 @@ class _Resp:
 
     def __exit__(self, *a):
         return False
+
+
+class TestResponseByteBound:
+    """Step 8a cross-model finding R3 (High).
+
+    The deadline bounded TIME but not BYTES. Both tree and blob bodies were accumulated in
+    memory with no limit, so a malformed or hostile upstream response consumed its full size
+    before any caller could check it — bypassing the operator's configured blob cap entirely.
+    """
+
+    def test_a_blob_larger_than_its_bound_is_cut_off_mid_stream(self):
+        def opener(request, timeout=None):
+            return _Resp(200, b"x" * 5_000_000, {})
+        gh = HttpGitHub(token="t", api="https://api.github.test", opener=opener)
+        with pytest.raises(GitHubError) as exc:
+            gh.blob(REPO, "a" * 40, Budget(60.0, 10, lambda: 0.0), max_bytes=1000)
+        assert "1000" in str(exc.value)
+
+    def test_a_blob_within_its_bound_still_returns(self):
+        def opener(request, timeout=None):
+            return _Resp(200, b"x" * 500, {})
+        gh = HttpGitHub(token="t", api="https://api.github.test", opener=opener)
+        assert len(gh.blob(REPO, "a" * 40, Budget(60.0, 10, lambda: 0.0), max_bytes=1000)) == 500
+
+    def test_a_tree_response_is_bounded_too(self):
+        huge = b'{"tree":[' + b'{"path":"x","type":"blob","mode":"100644","sha":"a"},' * 100000
+        def opener(request, timeout=None):
+            return _Resp(200, huge, {})
+        gh = HttpGitHub(token="t", api="https://api.github.test", opener=opener)
+        with pytest.raises(GitHubError):
+            gh.tree(REPO, COMMIT, Budget(60.0, 10, lambda: 0.0), max_bytes=2000)

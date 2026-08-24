@@ -29,6 +29,19 @@ INDEX_LABEL = "docs-index"
 _LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
+RESERVED_LABELS = frozenset({CONTROL_LABEL, INDEX_LABEL})
+
+
+def is_valid_label(label: object) -> bool:
+    """One DNS label, lowercase, 1-63 characters. THE shared grammar.
+
+    Step 8a finding R2: publish validated the name with nothing at all while routing
+    validated it with `_LABEL`, so a publish could activate a name routing can never
+    address. One function, used by both, is the only way those two stay honest.
+    """
+    return isinstance(label, str) and bool(_LABEL.match(label))
+
+
 class RouteError(Exception):
     """The Host header is not one this service answers for."""
 
@@ -54,7 +67,7 @@ def resolve_host(host: str | None, zone: str) -> str:
     if not name.endswith(suffix):
         raise RouteError(f"host {host!r} is not inside the configured zone")
     label = name[: -len(suffix)]
-    if not _LABEL.match(label):
+    if not is_valid_label(label):
         raise RouteError(f"host {host!r} does not carry exactly one valid label before the zone")
     return label
 

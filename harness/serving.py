@@ -91,8 +91,31 @@ def serve(deployment: ActiveDeployment, path: str, *, method: str, headers: dict
         return Response(200, _headers_for(asset, deployment.deployment_id, "cache", len(data)),
                         body)
 
+    # Step 8a finding R5. This used to call `source.blob` DIRECTLY, which left
+    # `BlobCache.get_or_fetch` — the single-flight coalescer, written and tested in its own
+    # module — reachable from nothing but its own tests. A grep proved it. The cost was real:
+    # a cold burst on one page made one upstream call PER REQUEST, which is how a recoverable
+    # cold start turns into a rate-limit 503 for everybody.
+    #
+    # The fetch closure raises the SAME typed errors as before, and `get_or_fetch` does not
+    # catch them, so each waiter still receives its own correctly classified failure rather
+    # than a shared generic one.
+    def _fetch() -> tuple[bytes, str]:
+        fetched = source.blob(deployment.repo, asset.blob_id, budget, cfg.http_timeout,
+                              max_bytes=cfg.max_blob_bytes)
+        # The DECLARED hash, never the fetched one. Handing `put` the hash of whatever
+        # arrived would make its integrity check compare a value to itself, and bytes that
+        # failed the manifest's check would be cached anyway — caught by a test that asserts
+        # the cache stays empty after a mismatch.
+        return fetched, asset.sha256
+
     try:
-        data = source.blob(deployment.repo, asset.blob_id, budget, cfg.http_timeout)
+        data = cache.get_or_fetch(asset.blob_id, asset.sha256, asset.size, _fetch)
+    except CacheConflict as exc:
+        return _text(
+            502, "this page failed its integrity check and was not served",
+            alert=f"integrity failure: blob {asset.blob_id} for {deployment.name}{clean}: "
+                  f"{exc}; nothing was cached or served")
     except NotFound:
         return _text(
             503,
@@ -108,6 +131,10 @@ def serve(deployment: ActiveDeployment, path: str, *, method: str, headers: dict
         return _text(503, "this page is temporarily unavailable",
                      alert=f"upstream failure reading {deployment.repo}: {exc}")
 
+    # `get_or_fetch` already verified and stored the bytes: `BlobCache.put` refuses anything
+    # whose SHA-256 disagrees with what was declared, and that refusal arrives here as the
+    # CacheConflict handled above. This check is the belt to that braces, and it also covers
+    # the path where a waiter received bytes from a leader's in-memory result.
     actual = hashlib.sha256(data).hexdigest()
     if actual != asset.sha256:
         return _text(
@@ -115,11 +142,6 @@ def serve(deployment: ActiveDeployment, path: str, *, method: str, headers: dict
             alert=f"integrity failure: blob {asset.blob_id} for {deployment.name}{clean} "
                   f"hashed to {actual[:12]}… but the manifest declares {asset.sha256[:12]}…; "
                   f"nothing was cached or served")
-    try:
-        cache.put(asset.blob_id, data, asset.sha256)
-    except CacheConflict as exc:  # pragma: no cover - the hash was just checked above
-        return _text(502, "this page failed its integrity check and was not served",
-                     alert=str(exc))
 
     body = b"" if method == "HEAD" else data
     return Response(200, _headers_for(asset, deployment.deployment_id, "fetch", len(data)), body)

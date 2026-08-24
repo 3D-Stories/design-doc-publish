@@ -26,7 +26,7 @@ import uuid
 from .cache import BlobCache
 from .config import HarnessConfig
 from .github import (Budget, BudgetExhausted, DeadlineExceeded, GitHubError, NotFound,
-                     Unauthorized, Unavailable, resolve_path)
+                     ResponseTooLarge, Unauthorized, Unavailable, resolve_path)
 from .manifest import ManifestError, parse_manifest
 from .registry import Registry, StalePublisher
 from .serving import Response
@@ -106,6 +106,7 @@ def _publish(raw: bytes, registry: Registry, cache: BlobCache, source,
     publish_id = uuid.uuid4().hex
     staged: list[tuple[str, str, int]] = []
     memo: dict = {}
+    actual_bytes = 0
     try:
         for asset in manifest.assets:
             try:
@@ -126,14 +127,25 @@ def _publish(raw: bytes, registry: Registry, cache: BlobCache, source,
             if entry.blob_id != asset.blob_id:
                 return _plain(422, f"{asset.repo_path}: the tree holds blob {entry.blob_id}, "
                                    f"but the manifest declares {asset.blob_id}")
-            if entry.size is not None and entry.size != asset.size:
+            # Step 8a finding R4. `entry.size is not None and ...` meant an incomplete tree
+            # response DISABLED the size comparison rather than failing it, so an
+            # under-declared manifest sailed through whenever upstream omitted the field.
+            # A missing size is an upstream problem, not a publisher one: 502.
+            if not isinstance(entry.size, int):
+                return _plain(502, "the repository returned a tree entry with no size",
+                              alert=f"tree entry for {asset.repo_path} in {manifest.repo} "
+                                    f"carried no integer size; refusing to skip the check")
+            if entry.size != asset.size:
                 return _plain(422, f"{asset.repo_path}: the tree says {entry.size} bytes, "
                                    f"but the manifest declares {asset.size}")
 
             try:
-                data = source.blob(manifest.repo, asset.blob_id, budget, cfg.http_timeout)
+                data = source.blob(manifest.repo, asset.blob_id, budget, cfg.http_timeout,
+                                   max_bytes=cfg.max_blob_bytes)
             except NotFound as exc:
                 return _plain(422, f"{asset.repo_path}: {exc}")
+            except ResponseTooLarge as exc:
+                return _plain(413, f"{asset.repo_path}: {exc}")
             except (Unauthorized, Unavailable) as exc:
                 return _plain(502, "could not read the repository", alert=str(exc))
             except (DeadlineExceeded, BudgetExhausted) as exc:
@@ -142,6 +154,16 @@ def _publish(raw: bytes, registry: Registry, cache: BlobCache, source,
             if len(data) > cfg.max_blob_bytes:
                 return _plain(413, f"{asset.repo_path} is {len(data)} bytes, over "
                                    f"DOC_HARNESS_MAX_BLOB_BYTES ({cfg.max_blob_bytes})")
+            # The DECLARED size was checked against the tree; this checks what actually
+            # arrived. Both halves are needed (finding R4): the declaration is the
+            # publisher's claim, and the fetch is the truth.
+            if len(data) != asset.size:
+                return _plain(422, f"{asset.repo_path}: fetched {len(data)} bytes but the "
+                                   f"manifest declares size {asset.size}")
+            actual_bytes += len(data)
+            if actual_bytes > cfg.max_publish_bytes:
+                return _plain(413, f"this publish has fetched {actual_bytes} bytes, over "
+                                   f"DOC_HARNESS_MAX_PUBLISH_BYTES ({cfg.max_publish_bytes})")
             actual_sha = hashlib.sha256(data).hexdigest()
             if actual_sha != asset.sha256:
                 return _plain(422, f"{asset.repo_path}: the fetched bytes hash to "
@@ -159,10 +181,31 @@ def _publish(raw: bytes, registry: Registry, cache: BlobCache, source,
             return _json(409, {"error": "stale publisher", "name": manifest.name,
                                "active_deployment_id": exc.current_active})
 
-        # Only now do the bytes enter the LRU (finding B5).
-        cache.commit_staging(publish_id, staged)
-        return _json(201, {"deployment_id": deployment_id, "name": manifest.name,
-                           "commit_sha": manifest.commit_sha,
-                           "assets": len(manifest.assets)})
+        # `registry.publish` above is the IRREVERSIBLE commit point. Everything after it
+        # touches only the disposable half of the system, so nothing after it may turn a
+        # successful publish into a reported failure.
+        #
+        # Step 8a finding R1: cache admission used to run bare here, so an OSError from a
+        # full or read-only cache volume propagated out as a 500 while the deployment was
+        # already active and the generation had already moved. The publisher then believed
+        # publication had failed, skipped verification, and its retry with the old
+        # `expected_active` hit a 409 raised by the deployment its own "failed" request had
+        # created. A cold cache costs one refetch. A false failure costs the publisher its
+        # whole model of what happened.
+        cache_warmed = True
+        cache_alert = None
+        try:
+            cache.commit_staging(publish_id, staged)
+        except Exception as exc:            # noqa: BLE001 - deliberately broad; see above
+            cache_warmed = False
+            cache_alert = (f"publish {deployment_id} for {manifest.name} COMMITTED, but warming "
+                           f"the cache failed: {exc}. The deployment is active and will serve "
+                           f"from a cold fetch.")
+        response = _json(201, {"deployment_id": deployment_id, "name": manifest.name,
+                               "commit_sha": manifest.commit_sha,
+                               "assets": len(manifest.assets),
+                               "cache_warmed": cache_warmed})
+        response.alert = cache_alert
+        return response
     finally:
         cache.discard_staging(publish_id)

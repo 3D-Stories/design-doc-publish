@@ -28,6 +28,10 @@ from typing import Callable, Iterable, Protocol
 
 _CHUNK = 65536
 
+# A tree listing is JSON metadata, never file content. GitHub truncates its own tree
+# responses well below this, so a body past it means something is wrong upstream.
+MAX_TREE_BYTES = 16 * 1024 * 1024
+
 
 class GitHubError(Exception):
     """Any refusal from this module. Never carries credentials."""
@@ -43,6 +47,10 @@ class Unavailable(GitHubError):
 
 class Unauthorized(GitHubError):
     """The credential was refused, or the rate limit is exhausted."""
+
+
+class ResponseTooLarge(GitHubError):
+    """The upstream response passed its byte bound and was cut off mid-stream."""
 
 
 class DeadlineExceeded(GitHubError):
@@ -98,12 +106,13 @@ class TreeEntry:
 class GitHubSource(Protocol):
     """The seam every caller depends on. Two methods, so both halves are fakeable."""
 
-    def tree(self, repo: str, sha: str, budget: Budget) -> tuple[list[TreeEntry], bool]:
+    def tree(self, repo: str, sha: str, budget: Budget, http_timeout: float = 20.0,
+             max_bytes: int | None = None) -> tuple[list[TreeEntry], bool]:
         """Entries of ONE tree object, plus whether GitHub truncated the response."""
 
-    def blob(self, repo: str, blob_id: str, budget: Budget,
-             http_timeout: float = 20.0) -> bytes:
-        """Raw bytes of one blob."""
+    def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
+             max_bytes: int | None = None) -> bytes:
+        """Raw bytes of one blob, refused once it exceeds `max_bytes`."""
 
 
 def _entries(raw: Iterable[dict]) -> list[TreeEntry]:
@@ -160,28 +169,39 @@ class HttpGitHub:
             return Unauthorized("GitHub refused the request (403)")
         return Unavailable(f"GitHub returned {status}")
 
-    def tree(self, repo: str, sha: str, budget: Budget,
-             http_timeout: float = 20.0) -> tuple[list[TreeEntry], bool]:
+    def tree(self, repo: str, sha: str, budget: Budget, http_timeout: float = 20.0,
+             max_bytes: int | None = None) -> tuple[list[TreeEntry], bool]:
         url = f"{self._api}/repos/{repo}/git/trees/{sha}"
+        cap = MAX_TREE_BYTES if max_bytes is None else max_bytes
         with self._request(url, "application/vnd.github+json", budget, http_timeout) as resp:
-            payload = json.loads(self._read(resp, budget).decode("utf-8"))
+            payload = json.loads(self._read(resp, budget, cap).decode("utf-8"))
         return _entries(payload.get("tree") or []), bool(payload.get("truncated"))
 
-    def blob(self, repo: str, blob_id: str, budget: Budget,
-             http_timeout: float = 20.0) -> bytes:
+    def blob(self, repo: str, blob_id: str, budget: Budget, http_timeout: float = 20.0,
+             max_bytes: int | None = None) -> bytes:
         url = f"{self._api}/repos/{repo}/git/blobs/{blob_id}"
         with self._request(url, "application/vnd.github.raw", budget, http_timeout) as resp:
-            return self._read(resp, budget)
+            return self._read(resp, budget, max_bytes)
 
     @staticmethod
-    def _read(resp, budget: Budget) -> bytes:
-        """Stream the body, re-checking the deadline on EVERY chunk (finding C2)."""
+    def _read(resp, budget: Budget, max_bytes: int | None) -> bytes:
+        """Stream the body, bounded in BOTH time and bytes.
+
+        The deadline (finding C2) bounds how long this can take. It does not bound how much
+        memory it can take, and Step 8a finding R3 showed why that matters: an unbounded
+        accumulate consumes a hostile or malformed response in full BEFORE any caller can
+        check its length, which walks straight past the operator's configured blob cap.
+        """
         out = bytearray()
         while True:
             budget.check()
             chunk = resp.read(_CHUNK)
             if not chunk:
                 return bytes(out)
+            if max_bytes is not None and len(out) + len(chunk) > max_bytes:
+                raise ResponseTooLarge(
+                    f"the upstream response exceeded {max_bytes} bytes and was abandoned "
+                    f"mid-stream")
             out.extend(chunk)
 
 
@@ -197,7 +217,7 @@ class FakeGitHub:
         self.tree_calls = 0
         self.blob_calls = 0
 
-    def tree(self, repo, sha, budget, http_timeout: float = 20.0):
+    def tree(self, repo, sha, budget, http_timeout: float = 20.0, max_bytes=None):
         budget.spend_call()
         self.tree_calls += 1
         if (repo, sha) in self._errors:
@@ -206,7 +226,7 @@ class FakeGitHub:
             raise NotFound(f"no tree {sha}")
         return self._trees[(repo, sha)], (repo, sha) in self._truncated
 
-    def blob(self, repo, blob_id, budget, http_timeout: float = 20.0):
+    def blob(self, repo, blob_id, budget, http_timeout: float = 20.0, max_bytes=None):
         budget.spend_call()
         self.blob_calls += 1
         if (repo, blob_id) in self._errors:

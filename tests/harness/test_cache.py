@@ -194,24 +194,73 @@ class TestSingleFlight:
         assert len(calls) == 1, "single-flight must collapse the duplicate fetch"
 
 
-class TestSingleFlightWaiterFallback:
-    """Step 8a inline review, finding I2.
+class TestSingleFlightOutcomeHandoff:
+    """Step 8a findings I2 and R5 together, because two earlier attempts each fixed one
+    and broke the other.
 
-    `get_or_fetch` set the in-flight event BEFORE popping the shared result, so a waiter
-    woken by that event raced the pop. Losing the race meant falling back to `open()`, and
-    for a blob too large to cache `open()` is always a miss — so the waiter raised
-    `CacheError` and the request became a 502 for a page that had just been fetched
-    successfully. A duplicate fetch is the right trade against that.
+    I2: the result was published into a shared dict and popped AFTER the event was set, so a
+    waiter raced the pop. Losing the race fell through to `open()`, which for a blob too
+    large to cache is always a miss — the waiter raised, and a page that had just been
+    fetched successfully became a 502.
+
+    The next attempt had the losing waiter fetch again. That stopped the raise and defeated
+    R5: the coalescer's whole purpose is exactly ONE upstream call, and that version made
+    two.
+
+    Handing every waiter a reference to the same outcome object satisfies both.
     """
 
-    def test_a_waiter_that_misses_the_shared_result_fetches_rather_than_raising(self, cache):
+    def test_a_blob_too_large_to_cache_still_reaches_every_waiter(self, cache):
         import hashlib
-        big = b"x" * 5000                      # larger than the 1000-byte bound: never cached
+        big = b"x" * 5000                      # over the 1000-byte bound: never stored
         sha = hashlib.sha256(big).hexdigest()
-        # Simulate the lost race directly: an event that is already set, with no result
-        # recorded, is exactly the state a waiter sees when the leader popped first.
-        ev = threading.Event(); ev.set()
-        cache._inflight["a" * 40] = ev
-        cache._results.pop("a" * 40, None)
-        got = cache.get_or_fetch("a" * 40, sha, len(big), lambda: (big, sha))
-        assert got == big, "the waiter must return the bytes, not raise"
+        calls = []
+        start = threading.Barrier(3)
+        out = {}
+
+        def fetch():
+            calls.append(1)
+            return big, sha
+
+        def worker(i):
+            start.wait()
+            out[i] = cache.get_or_fetch("a" * 40, sha, len(big), fetch)
+
+        ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=20)
+        assert all(not t.is_alive() for t in ts)
+        assert all(v == big for v in out.values()), "no waiter may raise or get short data"
+        assert len(calls) == 1, "and there must still be exactly one upstream call"
+
+    def test_a_fetch_failure_reaches_every_waiter_with_its_own_type(self, cache):
+        import hashlib
+        sha = hashlib.sha256(b"never arrives").hexdigest()
+        start = threading.Barrier(3)
+        out = {}
+
+        class Upstream404(Exception):
+            pass
+
+        def fetch():
+            raise Upstream404("gone")
+
+        def worker(i):
+            start.wait()
+            try:
+                cache.get_or_fetch("a" * 40, sha, 13, fetch)
+                out[i] = "NO RAISE"
+            except Upstream404:
+                out[i] = "Upstream404"
+            except Exception as exc:
+                out[i] = type(exc).__name__
+
+        ts = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join(timeout=20)
+        assert set(out.values()) == {"Upstream404"}, (
+            f"every waiter needs the leader's real error type, got {out}")

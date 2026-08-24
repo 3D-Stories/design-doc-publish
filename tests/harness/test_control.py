@@ -195,3 +195,86 @@ class TestReadBackContract:
 
     def test_an_unknown_route_is_404(self, env):
         assert get(env, "/v1/nonsense").status == 404
+
+
+class TestPostCommitFailureWindow:
+    """Step 8a cross-model finding R1 (High).
+
+    `registry.publish` is the irreversible commit point. Cache admission happens AFTER it,
+    and the cache is the DISPOSABLE half of the system. If admission raised, the handler
+    returned 500 while the deployment was already active and the generation had already
+    moved — so the publisher believed publication failed, skipped verification, and a retry
+    with the old `expected_active` got a 409 against the deployment its own "failed" request
+    had created.
+    """
+
+    def test_a_cache_failure_after_the_swap_still_reports_success(self, env, monkeypatch):
+        reg, cache = env
+        def boom(*a, **k):
+            raise OSError("the cache volume went read-only")
+        monkeypatch.setattr(cache, "commit_staging", boom)
+        r = post(env, body())
+        assert r.status == 201, "the deployment IS active; reporting failure would be a lie"
+        payload_out = json.loads(r.body)
+        assert payload_out["cache_warmed"] is False
+        assert reg.active("proj-design-1") is not None
+        assert r.alert is not None and "cache" in r.alert.lower()
+
+    def test_a_successful_publish_reports_the_cache_as_warmed(self, env):
+        r = post(env, body())
+        assert json.loads(r.body)["cache_warmed"] is True
+
+
+class TestActualByteAccounting:
+    """Step 8a cross-model finding R4 (High).
+
+    A tree entry with no `size` disabled the comparison entirely, the FETCHED byte count was
+    never required to equal the declared size, and nothing accumulated actual bytes against
+    `max_publish_bytes`. An authorized publisher could under-declare every asset and stage
+    far beyond the claimed total.
+    """
+
+    def test_a_tree_entry_with_no_size_is_an_upstream_502_not_a_silent_pass(self, env):
+        src = FakeGitHub(
+            trees={(REPO, COMMIT): [{"path": "docs", "type": "tree", "mode": "040000",
+                                     "sha": "t1"}],
+                   (REPO, "t1"): [{"path": "i.html", "type": "blob", "mode": "100644",
+                                   "sha": BLOB}]},          # no "size" key at all
+            blobs={(REPO, BLOB): PAGE})
+        r = post(env, body(), src=src)
+        assert r.status == 502, "an incomplete tree response must not disable the check"
+
+    def test_an_underdeclared_size_is_caught_against_the_tree(self, env):
+        under = [{"url_path": "/index.html", "repo_path": "docs/i.html", "blob_id": BLOB,
+                  "size": 1, "sha256": PAGE_SHA}]
+        r = post(env, body(assets=under))
+        assert r.status == 422
+        assert "the tree says 32 bytes" in r.body.decode()
+
+    def test_fetched_bytes_must_equal_the_declared_size_too(self, env):
+        """Both halves are needed, and this exercises the SECOND one.
+
+        The check above compares the manifest against the TREE. This one covers the case
+        where the tree agrees with the manifest but the fetched body does not — an upstream
+        inconsistency rather than a publisher one. Without it, the tree check alone is the
+        only thing standing between an under-declaration and the staging directory.
+        """
+        short = b"<html>tiny</html>"
+        src = FakeGitHub(
+            trees={(REPO, COMMIT): [{"path": "docs", "type": "tree", "mode": "040000",
+                                     "sha": "t1"}],
+                   # the tree AGREES with the manifest's declared size...
+                   (REPO, "t1"): [{"path": "i.html", "type": "blob", "mode": "100644",
+                                   "sha": BLOB, "size": len(PAGE)}]},
+                   # ...but the bytes that actually arrive are a different length.
+            blobs={(REPO, BLOB): short})
+        r = post(env, body(), src=src)
+        assert r.status == 422
+        assert f"fetched {len(short)} bytes" in r.body.decode()
+
+    def test_actual_bytes_are_accumulated_against_the_publish_cap(self, env):
+        cfg = load_config({"DOC_HARNESS_GITHUB_TOKEN": "g", "DOC_HARNESS_PUBLISH_TOKEN": "s3cr3t",
+                           "DOC_HARNESS_MAX_PUBLISH_BYTES": "10"})
+        r = post(env, body(), cfg=cfg)
+        assert r.status in (413, 422), r.body
+        assert "MAX_PUBLISH_BYTES" in r.body.decode()

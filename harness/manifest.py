@@ -22,7 +22,7 @@ import dataclasses
 import re
 
 from .config import HarnessConfig
-from .routing import PathError, canonical_path
+from .routing import RESERVED_LABELS, PathError, canonical_path, is_valid_label
 
 _HEX40 = re.compile(r"^[0-9a-f]{40}$")
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -143,6 +143,19 @@ def parse_manifest(body, cfg: HarnessConfig) -> Manifest:
         raise ManifestError(f"the request body must be a JSON object, got {type(body).__name__}")
 
     name = _text(body, "name")
+    # Step 8a finding R2. Nothing validated this, so a publish could return 201 and become
+    # ACTIVE under a name routing can never address — uppercase, underscores, spaces, more
+    # than one label, over 63 characters — or under a RESERVED name, where the control or
+    # index host wins for ever and the deployment is permanently unreachable. An activated
+    # deployment that can never be served is worse than a refusal, so this refuses.
+    if not is_valid_label(name):
+        raise ManifestError(
+            f"name {name!r} is not a single lowercase DNS label of 1 to 63 characters, so no "
+            f"host could ever route to it")
+    if name in RESERVED_LABELS:
+        raise ManifestError(
+            f"name {name!r} is reserved for the harness itself; a deployment published under "
+            f"it would activate and then never be reachable")
     repo = _text(body, "repo")
     if not _REPO.match(repo):
         raise ManifestError(f"repo must be 'owner/name', got {repo!r}")

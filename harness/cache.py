@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS blob (
 """
 
 
+class _Flight:
+    """One in-flight fetch, and the single place its outcome is published.
+
+    Waiters hold a reference to this object, so the leader cannot remove the result out from
+    under them. `data` and `error` are written exactly once, before `event` is set.
+    """
+
+    __slots__ = ("event", "data", "error")
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.data = None
+        self.error = None
+
+
 class CacheError(Exception):
     """The cache refused an operation."""
 
@@ -62,8 +77,7 @@ class BlobCache:
         # `ORDER BY last_access` returns an arbitrary order — which showed up immediately as
         # an eviction test that removed the wrong entry. A counter cannot tie.
         self._tick = 0
-        self._inflight: dict[str, threading.Event] = {}
-        self._results: dict[str, bytes] = {}
+        self._inflight: dict[str, "_Flight"] = {}
         self.blob_dir = os.path.join(root, "blobs")
         self.tmp_dir = os.path.join(root, "tmp")
         self.staging_root = os.path.join(root, "staging")
@@ -233,45 +247,54 @@ class BlobCache:
         self._remove(self.path_for(blob_id))
 
     def get_or_fetch(self, blob_id: str, sha256: str, size: int, fetch) -> bytes:
-        """Read a hit, or fetch exactly once across concurrent callers, then store and return."""
+        """Read a hit, or fetch EXACTLY ONCE across concurrent callers, then store and return.
+
+        The outcome — bytes or exception — is carried on a `_Flight` object that every waiter
+        already holds a reference to, so there is no window in which a waiter can wake and
+        find the result gone.
+
+        This replaces two earlier attempts, and the history is worth keeping because each one
+        was wrong in an instructive way. The first published the result into a shared dict and
+        popped it AFTER setting the event, so a waiter raced the pop (Step 8a inline finding
+        I2). The second had the losing waiter fetch again, which fixed the raise but defeated
+        the whole point of the coalescer — Step 8a finding R5 wanted exactly one upstream
+        call, and that version made two. Handing every waiter a reference to the same outcome
+        object satisfies both: nobody raises spuriously, and nobody fetches twice.
+
+        An exception from `fetch` propagates to every waiter unchanged, so each one keeps its
+        correctly typed failure instead of a shared generic one.
+        """
         fh = self.open(blob_id, sha256, size)
         if fh is not None:
             with fh:
                 return fh.read()
         with self._lock:
-            event = self._inflight.get(blob_id)
-            leader = event is None
+            flight = self._inflight.get(blob_id)
+            leader = flight is None
             if leader:
-                event = threading.Event()
-                self._inflight[blob_id] = event
+                flight = _Flight()
+                self._inflight[blob_id] = flight
         if not leader:
-            event.wait()
-            cached = self._results.get(blob_id)
-            if cached is not None:
-                return cached
-            fh = self.open(blob_id, sha256, size)
-            if fh is not None:
-                with fh:
-                    return fh.read()
-            # Step 8a inline review, finding I2. `event.set()` happens before the leader pops
-            # the shared result, so a waiter can wake and find nothing — and for a blob too
-            # large to be cached at all, `open()` is ALWAYS a miss, so this path was reached
-            # every time and raised. Raising turned a page that had just been fetched
-            # successfully into a 502. Fetching again is the right trade: one duplicate
-            # request in a narrow race, instead of a wrong answer.
-            data, actual_sha = fetch()
-            self.put(blob_id, data, actual_sha)
-            return data
+            flight.event.wait()
+            if flight.error is not None:
+                raise flight.error
+            if flight.data is not None:
+                return flight.data
+            # The leader finished but left neither outcome, which should be unreachable.
+            # Retry as a fresh caller rather than inventing an answer.
+            return self.get_or_fetch(blob_id, sha256, size, fetch)
         try:
-            data, actual_sha = fetch()
-            self.put(blob_id, data, actual_sha)
-            self._results[blob_id] = data
-            return data
+            data, declared_sha = fetch()
+            self.put(blob_id, data, declared_sha)
+            flight.data = data
+        except BaseException as exc:
+            flight.error = exc
+            raise
         finally:
             with self._lock:
                 self._inflight.pop(blob_id, None)
-            event.set()
-            self._results.pop(blob_id, None)
+            flight.event.set()
+        return data
 
     # ---- staging ---------------------------------------------------------------------
 

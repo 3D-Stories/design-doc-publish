@@ -167,3 +167,33 @@ def test_a_valid_manifest_round_trips_its_fields():
     assert m.expected_active is None
     assert m.total_bytes == 10
     assert [a.url_path for a in m.assets] == ["/index.html"]
+
+
+class TestDeploymentNameValidation:
+    """Step 8a cross-model finding R2 (High).
+
+    The parser accepted uppercase, underscores, spaces, multi-label names, over-long labels
+    and the RESERVED names. Such a publish returned 201 and became active in SQLite while
+    routing could never address it — and `docs-control` would be permanently shadowed by the
+    control host. An activated deployment that can never be served is worse than a refusal.
+    """
+
+    @pytest.mark.parametrize("bad", [
+        "Docs-Control", "has_underscore", "has space", "two.labels", "-leading",
+        "trailing-", "a" * 64, "", "   ",
+    ])
+    def test_a_name_that_routing_could_never_address_is_refused(self, bad):
+        with pytest.raises(ManifestError) as exc:
+            parse_manifest(payload(name=bad), CFG)
+        assert "name" in str(exc.value)
+
+    @pytest.mark.parametrize("reserved", ["docs-control", "docs-index"])
+    def test_a_reserved_name_is_refused(self, reserved):
+        with pytest.raises(ManifestError) as exc:
+            parse_manifest(payload(name=reserved), CFG)
+        assert reserved in str(exc.value)
+
+    def test_a_valid_label_still_passes(self):
+        assert parse_manifest(payload(name="proj-design-12"), CFG).name == "proj-design-12"
+        assert parse_manifest(payload(name="a"), CFG).name == "a"
+        assert parse_manifest(payload(name="a" * 63), CFG).name == "a" * 63
