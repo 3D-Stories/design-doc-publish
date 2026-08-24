@@ -1419,3 +1419,52 @@ class TestADetachedHeadRefuses:
         with pytest.raises(publish_doc.StageError):
             publish_doc.assert_head_reachable(Path("."), "origin", "", fetch=False,
                                               runner=FakeGit({}))
+
+
+# --------------------------------------------------------------------------- Step 11, inline
+
+class TestTheFrontDoorDescribesTheCurrentArchitecture:
+    """Step 11 inline pass, mechanical lens. The module docstring is the first thing anyone
+    reads, and it had gone stale silently: it said "Six stages" and then listed SEVEN, still
+    with the Vercel names (`reuse-or-create`, `deploy`, `index`), still citing the corrected
+    37-project figure, and never mentioning publish-before-merge — the single fact that now
+    defines the file. Nothing pinned it, so nothing caught it."""
+
+    def _doc(self):
+        return publish_doc.__doc__ or ""
+
+    def test_the_stage_list_matches_the_stages_that_exist(self):
+        doc = self._doc()
+        for stage in ("1 render", "2 name", "3 LINT", "4 provenance", "5 publish", "6 verify"):
+            assert stage in doc, f"the docstring does not list {stage!r}"
+        assert "7 index" not in doc, "stage 7 retired with refresh_index"
+
+    def test_the_stage_count_agrees_with_the_list(self):
+        doc = self._doc()
+        assert "Six stages" in doc
+        import re
+        listed = re.findall(r"\b(\d) (?:render|name|LINT|provenance|publish|verify|index)\b", doc)
+        assert len(set(listed)) == 6, f"the docstring lists {sorted(set(listed))}, not six stages"
+
+    @pytest.mark.parametrize("gone", ["reuse-or-create", "vercel deploy --prod",
+                                      "37 Vercel projects"])
+    def test_no_retired_surface_is_still_described(self, gone):
+        assert gone not in self._doc()
+
+    def test_the_publish_before_merge_inversion_is_stated(self):
+        """It is the one thing a reader must know before running this, and the old docstring
+        did not mention it at all."""
+        doc = self._doc().lower()
+        assert "publish-before-merge" in doc
+        assert "committed and pushed before" in doc
+
+    def test_the_two_declared_state_exits_are_documented(self):
+        doc = self._doc()
+        assert "25" in doc and "26" in doc
+        assert "not\na pass" in doc or "not a pass" in doc
+
+    def test_the_git_split_is_described_honestly(self):
+        """AC6 used to be "no version control at all", and #36 made that false. The
+        docstring must say what actually holds: it READS git and never MUTATES."""
+        doc = self._doc()
+        assert "never COMMITS" in doc or "never commits" in doc.lower()

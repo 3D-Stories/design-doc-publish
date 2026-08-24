@@ -1,40 +1,63 @@
 #!/usr/bin/env python3
 """One command from a committed markdown doc to a verified-live page (#12, wave 5).
 
-Design: `docs/planning/2026-08-01-12-publish-pipeline.md` (revision 2, after a Step 4
-gate returned FAIL with six High findings).
+Design: `docs/planning/2026-08-01-12-publish-pipeline.md`, and for the harness migration
+`docs/planning/2026-08-24-36-publish-to-harness.md` (revision 4).
 
 Every step here already existed as prose in `SKILL.md`, and the prose had a measured
-failure rate: 37 Vercel projects, junk names like `deploy-713`, three duplicate deploys
-of one page, no index. Prose is re-performed by a model on every publish; a command is
-not. So the exit code is the verdict.
+failure rate: junk names like `deploy-713`, three duplicate deploys of one page, no index.
+Prose is re-performed by a model on every publish; a command is not. So the exit code is
+the verdict.
 
     python3 publish_doc.py --md docs/planning/x.md --project herdr-dashboard \\
                            --type design --ref 81 --title "#81 The Design"
 
+**PUBLISH-BEFORE-MERGE is the thing to understand first (#36).** The doc harness never
+receives rendered bytes. It takes a manifest naming a repo, a full 40-hex commit and, per
+asset, a repo path and a blob id — then fetches every blob FROM GITHUB itself. So the page
+must be committed and pushed BEFORE it is published, and the publish pins that commit. The
+working order is: render with ``--dry-run``, commit the ``.md`` and the ``.html`` together,
+push, then publish.
+
+One consequence is a gift: because the harness serves the COMMITTED bytes, stage 6's byte
+equality also proves the render matches the commit. "Rendered but forgot to commit" becomes
+a caught failure rather than a stale page nobody notices.
+
 Six stages, each able to refuse (exit ``EXIT_BASE + stage``):
 
-    1 render  2 name  3 LINT  4 reuse-or-create  5 deploy  6 verify  7 index
+    1 render   2 name   3 LINT   4 provenance   5 publish   6 verify
 
-**The gate runs BEFORE the deploy, and that is a correction to the issue's own order.**
-The issue lists deploy → lint → verify, but AC4 requires a lint failure to leave
-"nothing deployed". Those cannot both hold: linting after the deploy means a page with
-an external request or a sub-AA token pair is already public by the time it is caught.
+Two exits are NOT stage failures, and they sit above the 11-17 block so a caller can tell
+them apart: **25** means ``DOC_HARNESS_CONTROL_URL`` is unset and nothing was published,
+**26** means the page published and origin-verified while the edge half SKIPPED. 26 is not
+a pass.
 
-Three things this file is careful about, each because the first draft got it wrong:
+**The gate runs BEFORE the publish, and that is a correction to the issue's own order.**
+The issue lists deploy -> lint -> verify, but AC4 requires a lint failure to leave
+"nothing deployed". Those cannot both hold: linting afterwards means a page with an
+external request or a sub-AA token pair is already public by the time it is caught.
+
+Four things this file is careful about, each because a draft got it wrong:
 
 * **A name is validated by COMPONENT, never by shape.** `--project deploy --type design
   --ref 713` yields `deploy-design-713`, which matches the convention's pattern
   perfectly and is exactly the junk the convention exists to stop.
-* **The deploy is bound to the rendered file**, not to ambient link state — a temp dir
-  holding it as `index.html`, linked in that directory. `vercel deploy --prod` from the
-  wrong directory deploys the repository.
+* **Provenance is bound to the repository the MANIFEST names**, never to the process's
+  cwd. `--md` and `--out` are arbitrary paths used across a whole workspace, so resolving
+  from cwd pins the wrong repo — and the dangerous failure is not a 422, it is the path
+  existing in the wrong repo, where the harness serves a DIFFERENT file under the right
+  name with every later check still passing.
+* **No credential reaches a destination that was not validated first**, and no credential
+  is ever rendered into an error message, a log line, or a redirect that gets followed.
+  Redaction alone protects only the log; the destination check is what protects the wire.
 * **The verifier is written here, not borrowed.** `page_meta()` in `build_index.py`
   sends no cache-buster, exposes no status code, and collapses every failure into
   `(name, None)` — so a dead page and a live one are indistinguishable.
 
-Version control and PR sequencing stay OUT of this script (AC6): committing and opening
-a pull request remain the workflows' business, and a test greps this file to keep it so.
+Version control stays OUT of this script in the sense that matters (AC6): it READS git —
+the repository, the committed blob ids, whether HEAD is pushed — because the harness
+fetches from GitHub and none of that is answerable otherwise. It never COMMITS, stages,
+pushes, branches or opens a pull request, and a test enforces exactly that split.
 """
 from __future__ import annotations
 
