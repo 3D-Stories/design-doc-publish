@@ -6,12 +6,13 @@ API.
 
 Expected diff: **700-900 lines, most of it tests**. This document stays shorter than that.
 
-**Revision 4**, after Step 4 pass 3 — 12 further findings, 11 adopted and 1 declined a second
-time. This is the FINAL revision: the design loop-back budget is spent (design 2/2, global 2/3),
-the ambiguity breaker returned `stop`, and `exhaustion-decision` returned `escalate`. The owner
-authorized closing the gate here and narrowing what this child claims.
+**Revision 4.** Across three design passes this document accumulated 34 findings, and the
+owner narrowed what the child claims (decision D22).
 
-Across three passes the design accumulated 34 findings. Two were found INDEPENDENTLY by both the
+**Deliberately NOT recorded here** (Step 11 finding A3): the gate's own state — which budgets
+are spent, what the breaker returned, whether the gate is closed. That belongs in the run's
+orchestration metadata, where it is trusted, and a later reviewer should judge this document on
+its merits rather than on text inside it announcing that review is finished. Two were found INDEPENDENTLY by both the
 inline self-review and the cross-model reviewer, and are therefore treated as confirmed rather than
 plausible: the control endpoint had no reachable value at all, and the operations command named a
 file that is not in the image.
@@ -254,8 +255,14 @@ the host and reaches the container directly at its bridge address:
 CONTROL_IP=$(docker compose ps -q harness | xargs docker inspect \
   -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
 DOC_HARNESS_CONTROL_URL="http://$CONTROL_IP:8080" \
+DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT="$CONTROL_IP:8080" \
   python3 scripts/publish_doc.py --md <doc>.md --out <doc>.html
 ```
+
+**The second variable is required and it names the exact endpoint** (Step 11 finding A1,
+which caught this command failing after the credential work landed). Plaintext to the docker
+bridge range is not granted by default: a range is not the one container you inspected. The
+grant covers `host:port` exactly, so a bare `1` authorizes nothing.
 
 The probe, run on this host with a throwaway container on its own bridge network and no published
 port: `curl http://172.25.0.2:8080/` returned `HTTP/1.0 200 OK` carrying `X-Doc-Deployment`, while

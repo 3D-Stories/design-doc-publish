@@ -446,9 +446,12 @@ def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
             4, "HEAD is detached, so there is no branch to check against the remote. "
                "Check out the branch you intend to publish from.")
     if fetch:
-        f = _git(["fetch", remote], root, runner=runner)
+        # Finding A7: WITHOUT --prune a tracking ref left behind by a deleted branch or a
+        # changed remote URL still contains HEAD, so this passes while GitHub no longer
+        # exposes that commit — and the harness then cannot fetch it.
+        f = _git(["fetch", "--prune", remote], root, runner=runner)
         if f.returncode != 0:
-            raise StageError(4, f"git fetch {remote} failed, so reachability cannot be "
+            raise StageError(4, f"git fetch --prune {remote} failed, so reachability cannot be "
                                 f"established: {(f.stderr or f.stdout).strip()}")
     ref = f"{remote}/{branch}"
     r = _git(["rev-list", "--count", f"{ref}..HEAD"], root, runner=runner)
@@ -477,6 +480,10 @@ def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
 # server that trickles bytes keeps the call alive for ever, and a huge response exhausts
 # memory. Every response this tool reads is capped.
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+_READ_CHUNK = 64 * 1024
+# The WHOLE-read budget. Separate from the per-socket deadline, because that one is reset
+# by every byte a hostile peer sends.
+RESPONSE_DEADLINE = 60.0
 
 CONTROL_READ_TIMEOUT = 20      # a registry read
 PUBLISH_TIMEOUT = 120          # the harness fetches every blob from GitHub inside this call
@@ -632,7 +639,17 @@ def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base
             "entry_path": "/index.html", "assets": assets}
 
 
-def _control_request(base: str, path: str, token: str, *, method: str, body: bytes | None):
+def _control_request(base: str, path: str, token: str, *, method: str, body: bytes | None,
+                     env=None):
+    """Finding A4, and the sharpest of the Step-11 wave.
+
+    The destination check used to live in `main()` while THIS function — the one that
+    actually attaches `Authorization: Bearer` — validated nothing. Any caller that did not
+    reproduce main()'s separate step could send the token anywhere, and the proof was
+    already in the test suite: it called `read_active` and `publish` directly, with no
+    guard, and they worked. A guard a caller must remember is not a guard.
+    """
+    assert_bearer_destination(base, env=env, stage=5)
     req = urllib.request.Request(f"{base}{path}", data=body, method=method)
     req.add_header("Authorization", f"Bearer {token}")
     if body is not None:
@@ -640,15 +657,34 @@ def _control_request(base: str, path: str, token: str, *, method: str, body: byt
     return req
 
 
-def _read_bounded(resp, *, stage: int) -> bytes:
-    """At most `MAX_RESPONSE_BYTES`, refusing rather than truncating. Finding R0."""
-    raw = resp.read(MAX_RESPONSE_BYTES + 1)
-    if len(raw) > MAX_RESPONSE_BYTES:
-        raise StageError(
-            stage, f"the response exceeded {MAX_RESPONSE_BYTES} bytes and was refused "
-                   "rather than truncated. A truncated body would parse as something "
-                   "other than what was sent.")
-    return raw
+def _read_bounded(resp, *, stage: int, deadline_s: float = RESPONSE_DEADLINE) -> bytes:
+    """At most `MAX_RESPONSE_BYTES`, and at most `deadline_s` of wall clock.
+
+    Findings P1 and A2, raised independently by both Step-11 passes. A size cap is NOT a
+    time bound: a peer sending one byte inside each socket timeout keeps a single blocking
+    `read()` alive for ever, and the earlier version did exactly one such read. The design
+    promised a stage wall-clock budget; this is it, enforced between chunks.
+    """
+    end = time.monotonic() + deadline_s
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        if time.monotonic() > end:
+            raise StageError(
+                stage, f"the response did not finish within its {deadline_s:g}s budget. A "
+                       "peer that trickles bytes can hold a socket timeout open for ever, "
+                       "so the whole read is bounded rather than each operation.")
+        chunk = resp.read(_READ_CHUNK)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            raise StageError(
+                stage, f"the response exceeded {MAX_RESPONSE_BYTES} bytes and was refused "
+                       "rather than truncated. A truncated body would parse as something "
+                       "other than what was sent.")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _control_call(req, timeout: int, *, opener=None):
@@ -669,7 +705,7 @@ def _control_call(req, timeout: int, *, opener=None):
         return getattr(resp, "status", 200), None
 
 
-def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
+def read_active(base: str, name: str, token: str, *, opener=None, env=None) -> int | None:
     """The active deployment id, or None when nothing is published yet.
 
     `harness/control.py:_read_back` answers **200 with a null id**, never 404 — a first
@@ -680,7 +716,8 @@ def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
     a client that always sent null, or that misparsed a non-null read-back, would pass
     every first-publish and race test while every republish returned 409 for ever.
     """
-    req = _control_request(base, f"/v1/deployments/{name}", token, method="GET", body=None)
+    req = _control_request(base, f"/v1/deployments/{name}", token, method="GET",
+                           body=None, env=env)
     try:
         status, payload = _control_call(req, CONTROL_READ_TIMEOUT, opener=opener)
     except urllib.error.HTTPError as e:
@@ -721,7 +758,7 @@ def read_active(base: str, name: str, token: str, *, opener=None) -> int | None:
 
 
 def publish(base: str, manifest: dict, expected_active: int | None, token: str,
-            *, opener=None) -> int:
+            *, opener=None, env=None) -> int:
     """POST the manifest and return the NEW deployment id from the 201.
 
     `expected_active` is required and is sent EXPLICITLY, including as null: the parser
@@ -745,7 +782,8 @@ def publish(base: str, manifest: dict, expected_active: int | None, token: str,
                                 "from the extension, and sending one is a 422.")
 
     body = json.dumps({**manifest, "expected_active": expected_active}).encode("utf-8")
-    req = _control_request(base, "/v1/deployments", token, method="POST", body=body)
+    req = _control_request(base, "/v1/deployments", token, method="POST", body=body,
+                           env=env)
     try:
         status, payload = _control_call(req, PUBLISH_TIMEOUT, opener=opener)
     except urllib.error.HTTPError as e:
@@ -793,10 +831,17 @@ def _publish_http_error(e: urllib.error.HTTPError) -> StageError:
             5, f"the control API answered {e.code}, a redirect. It is NOT followed: the "
                "request carries the publish bearer.")
     if e.code == 409:
+        # Findings P4 and A5, raised independently by both passes. The wholesale body echo
+        # was fixed and THIS field was left — and `active_deployment_id` is a field a
+        # hostile server fills in, so a reflected credential landed in stderr.
+        current = payload.get("active_deployment_id")
+        where = (f"it is now {current}" if isinstance(current, int)
+                 and not isinstance(current, bool)
+                 else "the server did not report a valid current id")
         return StageError(
             5, "another publisher won the race: the active deployment moved while this "
-               f"publish was in flight (it is now {payload.get('active_deployment_id')}). "
-               "Nothing was published. Re-run to publish on top of the new state.")
+               f"publish was in flight ({where}). Nothing was published. Re-run to publish "
+               "on top of the new state.")
     if e.code == 502:
         # Findings A5 and S4: this is almost never transport. Stage 4a proved the
         # PUBLISHER can see the repo; the harness fetches with DOC_HARNESS_GITHUB_TOKEN,
@@ -874,7 +919,7 @@ def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
 _LOOPBACK = re.compile(r"^(?:localhost|127\.\d+\.\d+\.\d+|::1)$")
 
 
-def assert_bearer_destination(base: str, env=None) -> None:
+def assert_bearer_destination(base: str, env=None, *, stage: int = 6) -> None:
     """The publish bearer goes only where the committed allowlist permits (finding N4),
     and a NON-LOOPBACK plaintext destination is a deliberate act (finding S3).
 
@@ -893,15 +938,22 @@ def assert_bearer_destination(base: str, env=None) -> None:
     if parsed.scheme == "http" and _LOOPBACK.match(host):
         return
     if parsed.scheme == "http" and _BEARER_HOSTS_PLAINTEXT.match(host):
-        if (env.get("DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT") or "").strip():
+        # Finding P3: a flag that authorizes a whole /12 is consent, not validation. It
+        # cannot become validation without attesting the container, which needs docker
+        # access this publisher does not have — but it CAN be narrowed from "any bridge
+        # address" to "exactly the one you named". The variable now carries the
+        # `host:port` it grants, and nothing else is covered by it.
+        granted = (env.get("DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT") or "").strip()
+        if granted and granted == parsed.netloc.lower():
             return
         raise StageError(
-            6, f"refusing to send the publish bearer over plaintext to {host}. That is the "
-               "docker bridge range, and the range is not the one container you inspected — "
-               "any reachable service in it could capture the token. Set "
-               "DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT=1 to accept that for the operations step.")
+            stage, f"refusing to send the publish bearer over plaintext to {parsed.netloc}. "
+                   "That is the docker bridge range, and a range is not the one container "
+                   "you inspected. To allow exactly this endpoint for the operations step, "
+                   f"set DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT={parsed.netloc} — a bare truthy "
+                   "value grants nothing.")
     raise StageError(
-        6, f"refusing to send the publish bearer to {base!r}: it is not on the allowlist in "
+        stage, f"refusing to send the publish bearer to {base!r}: it is not on the allowlist in "
            "publish_doc.py. Permitted are the loopback and private-range addresses the "
            f"operations path uses over http, and https://docs-control.{PINNED_ZONE}. "
            "An https URL is NOT sufficient on its own — that would send the token to any "
@@ -1691,7 +1743,6 @@ def main(argv=None) -> int:
         assert_manifest_covers(staged, [a["url_path"] for a in manifest["assets"]
                                         if a["url_path"] != "/index.html"])
         control = control_base(os.environ)
-        assert_bearer_destination(control)
         edge = public_base(os.environ)
         access = assert_credentials(os.environ, edge=edge is not None)
         token = os.environ["DOC_HARNESS_PUBLISH_TOKEN"].strip()

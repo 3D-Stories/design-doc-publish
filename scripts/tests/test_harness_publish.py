@@ -285,7 +285,7 @@ class TestProvenanceFailsLocallyRatherThanAsAFourTwentyTwo:
             publish_doc.assert_head_reachable(Path("."), "origin", "main",
                                               fetch=True, runner=git)
         assert "aaa one" in e.value.message
-        assert git.ran("fetch", "origin")
+        assert git.ran("fetch", "--prune", "origin")
 
     def test_a_pushed_commit_that_is_no_longer_a_tip_still_passes(self):
         git = FakeGit({("rev-list", "--count", "origin/main..HEAD"): "0\n"})
@@ -301,7 +301,7 @@ class TestProvenanceFailsLocallyRatherThanAsAFourTwentyTwo:
         assert not git.ran("fetch")
 
     def test_a_failed_fetch_refuses_and_quotes_git(self):
-        git = FakeGit({}, fail={("fetch", "origin")})
+        git = FakeGit({}, fail={("fetch", "--prune", "origin")})
         with pytest.raises(publish_doc.StageError) as e:
             publish_doc.assert_head_reachable(Path("."), "origin", "main",
                                               fetch=True, runner=git)
@@ -355,7 +355,7 @@ import urllib.parse  # noqa: E402  (used by FakeHTTP above)
 
 BASE = "http://172.25.0.2:8080"
 # Finding S3: a bridge address needs the explicit opt-in, so the tests that use one say so.
-BRIDGE_OK = {"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"}
+BRIDGE_OK = {"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.25.0.2:8080"}
 TOKEN_ENV = {"DOC_HARNESS_CONTROL_URL": BASE, "DOC_HARNESS_PUBLISH_TOKEN": "s3cret"}
 
 
@@ -365,27 +365,27 @@ class TestTheReadBackIsParsedBeforeAnythingIsPublished:
         http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
                          (200, {"name": "example-design-12", "active_deployment_id": None})})
         assert publish_doc.read_active(BASE, "example-design-12", "s3cret",
-                                       opener=http) is None
+                                       opener=http, env=BRIDGE_OK) is None
 
     def test_an_existing_deployment_reads_its_integer_id(self):
         """Finding M12. Every other listed case passes with a client that always sends
         null, so the republish path is the one that actually needs proving."""
         http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
                          (200, {"active_deployment_id": 41})})
-        assert publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http) == 41
+        assert publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http, env=BRIDGE_OK) == 41
 
     @pytest.mark.parametrize("bad", ["41", 41.5, True, [], {}])
     def test_a_non_integer_active_id_refuses_before_the_post(self, bad):
         http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
                          (200, {"active_deployment_id": bad})})
         with pytest.raises(publish_doc.StageError):
-            publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http)
+            publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http, env=BRIDGE_OK)
         assert len(http.calls) == 1, "nothing may be published after an unparseable read-back"
 
     def test_the_read_back_carries_the_bearer(self):
         http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
                          (200, {"active_deployment_id": None})})
-        publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http)
+        publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http, env=BRIDGE_OK)
         assert http.header(0, "Authorization") == "Bearer s3cret"
 
     def test_the_path_carries_the_v1_prefix(self):
@@ -393,7 +393,7 @@ class TestTheReadBackIsParsedBeforeAnythingIsPublished:
         harness/control.py:83 — every publish would have failed at the first call."""
         http = FakeHTTP({("GET", "/v1/deployments/example-design-12"):
                          (200, {"active_deployment_id": None})})
-        publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http)
+        publish_doc.read_active(BASE, "example-design-12", "s3cret", opener=http, env=BRIDGE_OK)
         assert urllib.parse.urlsplit(http.calls[0][1]).path == "/v1/deployments/example-design-12"
 
 
@@ -408,39 +408,39 @@ class TestThePublishCall:
         http = FakeHTTP({("POST", "/v1/deployments"):
                          (201, {"deployment_id": 42, "name": "example-design-12",
                                 "commit_sha": "a" * 40, "assets": 1, "cache_warmed": True})})
-        assert publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http) == 42
+        assert publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK) == 42
 
     def test_expected_active_is_sent_explicitly_as_null_on_a_first_publish(self):
         import json as _json
         http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 42})})
-        publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+        publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK)
         sent = _json.loads(http.calls[0][3])
         assert "expected_active" in sent and sent["expected_active"] is None
 
     def test_a_republish_sends_the_exact_integer_it_read_back(self):
         import json as _json
         http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 43})})
-        publish_doc.publish(BASE, self.MANIFEST, 41, "s3cret", opener=http)
+        publish_doc.publish(BASE, self.MANIFEST, 41, "s3cret", opener=http, env=BRIDGE_OK)
         assert _json.loads(http.calls[0][3])["expected_active"] == 41
 
     def test_content_type_is_never_sent_in_the_manifest(self):
         """The #34 boundary: the harness derives it, and sending one is a 422."""
         import json as _json
         http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 42})})
-        publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+        publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK)
         sent = _json.loads(http.calls[0][3])
         assert all("content_type" not in a for a in sent["assets"])
 
     def test_a_201_without_an_integer_deployment_id_is_a_failure_not_a_pass(self):
         http = FakeHTTP({("POST", "/v1/deployments"): (201, {"name": "x"})})
         with pytest.raises(publish_doc.StageError):
-            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK)
 
     def test_a_409_is_reported_as_a_race_not_a_generic_failure(self):
         http = FakeHTTP({("POST", "/v1/deployments"):
                          (409, {"active_deployment_id": 44})})
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.publish(BASE, self.MANIFEST, 41, "s3cret", opener=http)
+            publish_doc.publish(BASE, self.MANIFEST, 41, "s3cret", opener=http, env=BRIDGE_OK)
         assert "race" in e.value.message.lower() or "another publisher" in e.value.message.lower()
         assert "44" in e.value.message
 
@@ -450,7 +450,7 @@ class TestThePublishCall:
         the harness cannot read a single blob."""
         http = FakeHTTP({("POST", "/v1/deployments"): (502, {"error": "upstream"})})
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK)
         assert "DOC_HARNESS_GITHUB_TOKEN" in e.value.message
 
     def test_a_non_canonical_url_path_refuses_locally(self):
@@ -467,7 +467,7 @@ class TestThePublishCall:
         import socket
         http = FakeHTTP({("POST", "/v1/deployments"): socket.timeout("timed out")})
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http)
+            publish_doc.publish(BASE, self.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK)
         assert len(http.calls) == 1
         assert "not retried" in e.value.message.lower() or "retry" in e.value.message.lower()
 
@@ -480,8 +480,8 @@ class TestTheBoundedCalls:
     def test_the_read_back_and_the_publish_carry_different_deadlines(self):
         http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"active_deployment_id": None}),
                          ("POST", "/v1/deployments"): (201, {"deployment_id": 1})})
-        publish_doc.read_active(BASE, "n", "s3cret", opener=http)
-        publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "s3cret", opener=http)
+        publish_doc.read_active(BASE, "n", "s3cret", opener=http, env=BRIDGE_OK)
+        publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "s3cret", opener=http, env=BRIDGE_OK)
         assert http.calls[0][4] == publish_doc.CONTROL_READ_TIMEOUT
         assert http.calls[1][4] == publish_doc.PUBLISH_TIMEOUT
 
@@ -554,7 +554,7 @@ class TestTheManifestIsRefusedLocallyBeforeTheHarnessRefusesIt:
         http = FakeHTTP({})
         with pytest.raises(publish_doc.StageError):
             publish_doc.publish(BASE, {**self.GOOD, "commit_sha": "HEAD"}, None,
-                                "s3cret", opener=http)
+                                "s3cret", opener=http, env=BRIDGE_OK)
         assert http.calls == [], "a manifest the harness would refuse must not be sent"
 
 
@@ -1007,7 +1007,7 @@ class TestTheUrlPathIsCanonicallyEncoded:
             staged=["my diagram.png", "a+b(c).css"],
             asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
         http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 9})})
-        assert publish_doc.publish(BASE, m, None, "s3cret", opener=http) == 9
+        assert publish_doc.publish(BASE, m, None, "s3cret", opener=http, env=BRIDGE_OK) == 9
 
     def test_the_harness_accepts_what_the_builder_produces(self, tmp_path):
         """Parity against the real validator rather than against my reading of it."""
@@ -1108,7 +1108,7 @@ class TestTheBearerNeverFollowsARedirect:
     def test_the_read_back_treats_a_redirect_as_a_failure(self):
         calls = []
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.read_active(BASE, "n", "s3cret", opener=self._redirector(calls))
+            publish_doc.read_active(BASE, "n", "s3cret", opener=self._redirector(calls), env=BRIDGE_OK)
         assert len(calls) == 1, "no request may be made to the redirect target"
         assert "redirect" in e.value.message.lower()
 
@@ -1116,7 +1116,7 @@ class TestTheBearerNeverFollowsARedirect:
         calls = []
         with pytest.raises(publish_doc.StageError) as e:
             publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "s3cret",
-                                opener=self._redirector(calls))
+                                opener=self._redirector(calls), env=BRIDGE_OK)
         assert len(calls) == 1
         assert "redirect" in e.value.message.lower()
 
@@ -1147,7 +1147,7 @@ class TestAnErrorBodyIsNeverEchoedVerbatim:
             raise _ue.HTTPError(req.full_url, 500, "boom", {}, _io.BytesIO(body))
 
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, leak, opener=opener)
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, leak, opener=opener, env=BRIDGE_OK)
         assert leak not in e.value.message
 
     def test_the_status_is_still_reported(self):
@@ -1158,7 +1158,7 @@ class TestAnErrorBodyIsNeverEchoedVerbatim:
             raise _ue.HTTPError(req.full_url, 500, "boom", {}, _io.BytesIO(b"{}"))
 
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t", opener=opener)
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t", opener=opener, env=BRIDGE_OK)
         assert "500" in e.value.message
 
 
@@ -1172,9 +1172,10 @@ class TestTheAllowlistIsNarrowerThanEveryPrivateNetwork:
         publish_doc.assert_bearer_destination(ok, env={})
 
     @pytest.mark.parametrize("ok", ["http://172.17.0.2:8080", "http://172.25.0.2:8080"])
-    def test_the_bridge_space_passes_only_with_the_opt_in(self, ok):
+    def test_the_bridge_space_passes_only_with_a_grant_naming_it(self, ok):
+        host = urllib.parse.urlsplit(ok).netloc
         publish_doc.assert_bearer_destination(
-            ok, env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"})
+            ok, env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": host})
 
     @pytest.mark.parametrize("bad", ["http://10.0.17.205:8080", "http://192.168.1.50:8080",
                                      "http://10.1.2.3:9000"])
@@ -1191,13 +1192,13 @@ class TestAnIndeterminateReadBackRefuses:
     def test_a_missing_field_refuses_and_publishes_nothing(self):
         http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"name": "n"})})
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.read_active(BASE, "n", "s3cret", opener=http)
+            publish_doc.read_active(BASE, "n", "s3cret", opener=http, env=BRIDGE_OK)
         assert "active_deployment_id" in e.value.message
         assert len(http.calls) == 1
 
     def test_an_explicit_null_is_still_a_first_publish(self):
         http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"active_deployment_id": None})})
-        assert publish_doc.read_active(BASE, "n", "s3cret", opener=http) is None
+        assert publish_doc.read_active(BASE, "n", "s3cret", opener=http, env=BRIDGE_OK) is None
 
 
 class TestACredentialRefusalNamesTheRightStage:
@@ -1230,7 +1231,7 @@ class TestResponsesAreBounded:
 
         payload = b'{"active_deployment_id": null, "pad": "' + b"x" * (publish_doc.MAX_RESPONSE_BYTES + 10) + b'"}'
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.read_active(BASE, "n", "s3cret",
+            publish_doc.read_active(BASE, "n", "s3cret", env=BRIDGE_OK,
                                     opener=lambda req, timeout=None, **kw: Huge(payload))
         assert "too large" in e.value.message.lower() or "bytes" in e.value.message.lower()
 
@@ -1274,18 +1275,18 @@ class TestTheStatusIsPartOfTheSuccessContract:
     def test_a_two_hundred_on_the_publish_is_refused(self):
         http = FakeHTTP({("POST", "/v1/deployments"): (200, {"deployment_id": 7})})
         with pytest.raises(publish_doc.StageError) as e:
-            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t", opener=http)
+            publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t", opener=http, env=BRIDGE_OK)
         assert "201" in e.value.message
 
     def test_a_two_oh_one_still_passes(self):
         http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 7})})
         assert publish_doc.publish(BASE, TestThePublishCall.MANIFEST, None, "t",
-                                   opener=http) == 7
+                                   opener=http, env=BRIDGE_OK) == 7
 
     def test_the_read_back_requires_exactly_two_hundred(self):
         http = FakeHTTP({("GET", "/v1/deployments/n"): (204, {"active_deployment_id": None})})
         with pytest.raises(publish_doc.StageError):
-            publish_doc.read_active(BASE, "n", "t", opener=http)
+            publish_doc.read_active(BASE, "n", "t", opener=http, env=BRIDGE_OK)
 
 
 class TestVerificationResponsesAreBoundedToo:
@@ -1349,14 +1350,14 @@ class TestPlaintextToANonLoopbackHostIsOptedIntoExplicitly:
 
     def test_a_bridge_address_passes_with_the_opt_in(self):
         publish_doc.assert_bearer_destination(
-            "http://172.25.0.2:8080", env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"})
+            "http://172.25.0.2:8080", env=BRIDGE_OK)
 
     def test_the_opt_in_does_not_widen_beyond_the_bridge_range(self):
         for bad in ("http://10.0.17.205:8080", "http://192.168.1.5:8080",
                     "http://evil.example.com:8080"):
             with pytest.raises(publish_doc.StageError):
                 publish_doc.assert_bearer_destination(
-                    bad, env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"})
+                    bad, env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.25.0.2:8080"})
 
 
 class TestAnAssetCannotBecomeASymlinkAfterStaging:
@@ -1468,3 +1469,143 @@ class TestTheFrontDoorDescribesTheCurrentArchitecture:
         docstring must say what actually holds: it READS git and never MUTATES."""
         doc = self._doc()
         assert "never COMMITS" in doc or "never commits" in doc.lower()
+
+
+# --------------------------------------------------------------------------- Step 11 wave
+
+class TestTheGuardLivesWhereTheCredentialIsAttached:
+    """A4, High, and the sharpest finding of the run: neither Step 8a wave caught it.
+
+    `assert_bearer_destination` was called from `main()`, while `_control_request` — the
+    function that actually attaches `Authorization: Bearer` — validated nothing. Any caller
+    that did not reproduce main()'s separate step could send the token anywhere. The proof
+    was already in this file: the tests below used to call `read_active` and `publish`
+    directly with no guard, and they worked.
+    """
+
+    def test_the_read_back_refuses_an_unapproved_origin_itself(self):
+        http = FakeHTTP({})
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.read_active("https://evil.example", "n", "s3cret", opener=http)
+        assert http.calls == [], "no request may be built for an unapproved destination"
+
+    def test_the_publish_refuses_an_unapproved_origin_itself(self):
+        http = FakeHTTP({})
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.publish("https://evil.example", TestThePublishCall.MANIFEST, None,
+                                "s3cret", opener=http)
+        assert http.calls == []
+
+    def test_an_approved_origin_still_works(self):
+        http = FakeHTTP({("GET", "/v1/deployments/n"): (200, {"active_deployment_id": None})})
+        assert publish_doc.read_active("http://127.0.0.1:8080", "n", "t", opener=http) is None
+
+
+class TestTheDestinationRefusalNamesStageFive:
+    """P5 and A6, found by BOTH passes. The helper hard-coded stage 6 while main() calls it
+    at stage 5, so an unapproved control origin exited 16 — reporting a verification failure
+    for a publish that was never attempted."""
+
+    def test_a_control_origin_refusal_is_stage_five(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_bearer_destination("https://evil.example", env={}, stage=5)
+        assert e.value.stage == 5
+
+    def test_the_verification_path_still_reports_stage_six(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_bearer_destination("https://evil.example", env={}, stage=6)
+        assert e.value.stage == 6
+
+
+class TestNoResponseFieldIsEchoedWithoutATypeCheck:
+    """P4 and A5, found by BOTH passes. My earlier fix stopped rendering the body wholesale
+    and left the 409 path interpolating `active_deployment_id` — a field a hostile server
+    fills in."""
+
+    def test_a_reflected_credential_in_the_409_field_cannot_reach_the_message(self):
+        import io as _io, json as _json
+        import urllib.error as _ue
+        leak = "s3cret-bearer"
+
+        def opener(req, timeout=None, **kw):
+            body = _json.dumps({"active_deployment_id": f"Bearer {leak}"}).encode()
+            raise _ue.HTTPError(req.full_url, 409, "conflict", {}, _io.BytesIO(body))
+
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish("http://127.0.0.1:8080", TestThePublishCall.MANIFEST, 41,
+                                leak, opener=opener)
+        assert leak not in e.value.message
+        assert "race" in e.value.message.lower() or "another publisher" in e.value.message.lower()
+
+    def test_a_genuine_integer_id_is_still_reported(self):
+        import io as _io, json as _json
+        import urllib.error as _ue
+
+        def opener(req, timeout=None, **kw):
+            raise _ue.HTTPError(req.full_url, 409, "conflict", {},
+                                _io.BytesIO(_json.dumps({"active_deployment_id": 44}).encode()))
+
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.publish("http://127.0.0.1:8080", TestThePublishCall.MANIFEST, 41,
+                                "t", opener=opener)
+        assert "44" in e.value.message
+
+
+class TestASlowTrickleCannotHangThePublisher:
+    """P1 and A2, found by BOTH passes. A size cap is not a time bound: a peer sending one
+    byte inside each socket timeout keeps a single blocking read alive for ever. The design
+    promised a wall-clock budget and the code did not implement one."""
+
+    class Trickle:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+        def __init__(self): self.reads = 0
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self, n=-1):
+            self.reads += 1
+            return b"x"          # never EOF, never large
+
+    def test_a_trickling_peer_is_cut_off_by_the_deadline(self):
+        r = self.Trickle()
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._read_bounded(r, stage=5, deadline_s=0.15)
+        assert "budget" in e.value.message.lower() or "deadline" in e.value.message.lower()
+        assert r.reads > 1, "it must actually have looped rather than read once"
+
+
+class TestTheBridgeOptInNamesOneAddress:
+    """P3. An environment flag that authorizes a whole /12 is consent, not validation. It
+    cannot become validation without attesting the container, which needs docker access this
+    publisher does not have — but it CAN be narrowed from 'any bridge address' to 'exactly
+    the one you named'."""
+
+    def test_a_bare_truthy_value_no_longer_authorizes_anything(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_bearer_destination(
+                "http://172.25.0.2:8080", env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "1"},
+                stage=5)
+
+    def test_the_exact_named_host_and_port_is_authorized(self):
+        publish_doc.assert_bearer_destination(
+            "http://172.25.0.2:8080",
+            env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.25.0.2:8080"}, stage=5)
+
+    def test_a_different_bridge_address_is_not_covered_by_that_grant(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_bearer_destination(
+                "http://172.25.0.9:8080",
+                env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.25.0.2:8080"}, stage=5)
+
+
+class TestReachabilityUsesAPrunedFetch:
+    """A7. The verdict rests on a local remote-tracking ref. Without pruning, a ref left
+    behind by a deleted branch or a changed remote URL still contains HEAD, so the check
+    passes while GitHub no longer exposes that commit — and the harness then cannot fetch
+    it."""
+
+    def test_the_fetch_prunes(self):
+        git = FakeGit({("rev-list", "--count", "origin/main..HEAD"): "0\n"})
+        publish_doc.assert_head_reachable(Path("."), "origin", "main", fetch=True, runner=git)
+        assert any(c[:2] == ("fetch", "--prune") for c in git.calls), \
+            f"expected a pruning fetch, saw {git.calls}"
