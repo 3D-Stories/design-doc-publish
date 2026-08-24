@@ -192,3 +192,26 @@ class TestSingleFlight:
             t.join()
         assert out[0] == out[1] == b"payload"
         assert len(calls) == 1, "single-flight must collapse the duplicate fetch"
+
+
+class TestSingleFlightWaiterFallback:
+    """Step 8a inline review, finding I2.
+
+    `get_or_fetch` set the in-flight event BEFORE popping the shared result, so a waiter
+    woken by that event raced the pop. Losing the race meant falling back to `open()`, and
+    for a blob too large to cache `open()` is always a miss — so the waiter raised
+    `CacheError` and the request became a 502 for a page that had just been fetched
+    successfully. A duplicate fetch is the right trade against that.
+    """
+
+    def test_a_waiter_that_misses_the_shared_result_fetches_rather_than_raising(self, cache):
+        import hashlib
+        big = b"x" * 5000                      # larger than the 1000-byte bound: never cached
+        sha = hashlib.sha256(big).hexdigest()
+        # Simulate the lost race directly: an event that is already set, with no result
+        # recorded, is exactly the state a waiter sees when the leader popped first.
+        ev = threading.Event(); ev.set()
+        cache._inflight["a" * 40] = ev
+        cache._results.pop("a" * 40, None)
+        got = cache.get_or_fetch("a" * 40, sha, len(big), lambda: (big, sha))
+        assert got == big, "the waiter must return the bytes, not raise"

@@ -72,7 +72,53 @@ class TestPathCanonicalization:
         with pytest.raises(PathError):
             canonical_path(path)
 
-    def test_a_doubly_encoded_traversal_is_refused(self):
-        # Decoding once must not produce something that would traverse if decoded again.
+    def test_a_doubly_encoded_sequence_decodes_to_a_literal_segment(self):
+        """This test's ASSERTION was inverted during the Step 8a review. Read the reason.
+
+        It used to demand that `/%252e%252e/b` be refused, on the premise that decoding once
+        must not produce something that would traverse "if decoded again". That premise was
+        checked and is false for this codebase: nothing decodes a second time. `grep` over
+        `harness/` finds `unquote` in exactly one place, this module, and the decoded path
+        goes straight to an exact-match lookup against declared asset paths — which were
+        themselves canonicalized by this same function at publish time.
+
+        So `/%252e%252e/b` names a literal segment `%2e%2e`, which is an ordinary filename.
+        Accepting it is correct AND it is the only spelling of that resource, which is the
+        invariant this function actually enforces. The rule that replaced the old one is
+        strictly stronger where it matters: `%2f` and a singly-encoded `%2e` used to be
+        ACCEPTED and are now refused.
+        """
+        assert canonical_path("/%252e%252e/b") == "/%2e%2e/b"
+
+
+class TestEncodedSeparatorsAndDuplicateSpellings:
+    """Step 8a inline review, finding I1.
+
+    The design's stated rule is that `canonical_path` REFUSES a non-canonical path rather
+    than normalizing it, because two spellings of one resource are two ETags for the same
+    bytes. `%2f` broke that rule: `/a%2fb` was accepted and decoded to `/a/b`, so the same
+    asset had two accepted spellings. Not a traversal — the manifest is an exact-match
+    allowlist — but exactly the invariant the rule exists to hold.
+    """
+
+    @pytest.mark.parametrize("path", [
+        "/a%2fb",        # encoded separator
+        "/a%2Fb",
+        "/a%2e%2e/b",    # encoded dots that decode to a literal `a..` segment
+        "/a%2eb",        # encoded dot inside a name
+        "/a%zz.html",    # malformed encoding, passed through unchanged by unquote
+        "/a%2",          # truncated encoding
+    ])
+    def test_a_redundantly_encoded_path_is_refused(self, path):
         with pytest.raises(PathError):
-            canonical_path("/%252e%252e/b")
+            canonical_path(path)
+
+    def test_encoding_that_is_genuinely_required_still_works(self):
+        # A space MUST be encoded in a URL, so this spelling is the canonical one.
+        assert canonical_path("/a%20b.html") == "/a b.html"
+
+    def test_a_non_ascii_name_survives_its_required_encoding(self):
+        assert canonical_path("/caf%C3%A9.html") == "/café.html"
+
+    def test_the_plain_spelling_is_unaffected(self):
+        assert canonical_path("/a/b.html") == "/a/b.html"

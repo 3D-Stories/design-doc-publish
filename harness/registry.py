@@ -159,10 +159,14 @@ class Registry:
         return int(row["v"]) if row else 0
 
     def _bump(self, conn: sqlite3.Connection, key: str, value: int | None) -> None:
+        # `key` is always one of two internal constants, never request input, so the previous
+        # f-string was not injectable. It is parameterized anyway: an f-string carrying a
+        # value into SQL is the shape a reader has to stop and prove safe, and proving it
+        # safe again after every future edit is a cost with no benefit.
         if value is None:
-            cur = conn.execute(f"UPDATE registry_meta SET v = v + 1 WHERE k = '{key}'")
+            cur = conn.execute("UPDATE registry_meta SET v = v + 1 WHERE k = ?", (key,))
         else:
-            cur = conn.execute(f"UPDATE registry_meta SET v = ? WHERE k = '{key}'", (value,))
+            cur = conn.execute("UPDATE registry_meta SET v = ? WHERE k = ?", (value, key))
         if cur.rowcount != 1:
             # Finding A4. SQLite runs this happily against zero rows, so without the check the
             # swap would commit while the ETag never moved.

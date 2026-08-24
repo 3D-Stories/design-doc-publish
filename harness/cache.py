@@ -253,7 +253,15 @@ class BlobCache:
             if fh is not None:
                 with fh:
                     return fh.read()
-            raise CacheError(f"the in-flight fetch for {blob_id} did not produce bytes")
+            # Step 8a inline review, finding I2. `event.set()` happens before the leader pops
+            # the shared result, so a waiter can wake and find nothing — and for a blob too
+            # large to be cached at all, `open()` is ALWAYS a miss, so this path was reached
+            # every time and raised. Raising turned a page that had just been fetched
+            # successfully into a 502. Fetching again is the right trade: one duplicate
+            # request in a narrow race, instead of a wrong answer.
+            data, actual_sha = fetch()
+            self.put(blob_id, data, actual_sha)
+            return data
         try:
             data, actual_sha = fetch()
             self.put(blob_id, data, actual_sha)

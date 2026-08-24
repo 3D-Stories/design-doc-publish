@@ -19,7 +19,7 @@ no traversal surface to defend — the refusals below are belt to that braces.
 from __future__ import annotations
 
 import re
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 CONTROL_LABEL = "docs-control"
 INDEX_LABEL = "docs-index"
@@ -70,14 +70,19 @@ def canonical_path(path: str) -> str:
         raise PathError(f"path {path!r} must start with '/'")
     if "\\" in path or "\x00" in path:
         raise PathError(f"path {path!r} contains a backslash or a NUL")
-    if "%" in path:
-        # Decode exactly once, then require that the result needs no further decoding: a
-        # doubly-encoded traversal is refused rather than silently decoded twice downstream.
-        decoded = unquote(path)
-        if "%" in decoded and unquote(decoded) != decoded:
-            raise PathError(f"path {path!r} is multiply percent-encoded")
-    else:
-        decoded = path
+    decoded = unquote(path)
+    # Decode once, then require the decoded form to RE-ENCODE to exactly what was sent.
+    #
+    # Step 8a inline review, finding I1. The earlier rule only refused DOUBLE encoding, so
+    # `/a%2fb` was accepted and decoded to `/a/b` — a second accepted spelling of one asset,
+    # which is precisely what this function's "refuse, do not normalize" rule exists to
+    # prevent. The round-trip is the exact test: an encoding that is genuinely REQUIRED (a
+    # space, a non-ASCII character) re-encodes to itself and passes, while a redundant one
+    # (`%2f` for `/`, `%2e` for `.`) or a malformed one (`%zz`, a truncated `%2`) does not.
+    if quote(decoded, safe="/") != path:
+        raise PathError(
+            f"path {path!r} is not canonically encoded; the same resource is reachable at "
+            f"{quote(decoded, safe='/')!r}, and one resource gets exactly one spelling here")
     if "\\" in decoded or "\x00" in decoded:
         raise PathError(f"path {path!r} decodes to a backslash or a NUL")
     if decoded == "/":
