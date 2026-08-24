@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -279,7 +280,21 @@ def workspace(tmp_path):
 
 @pytest.fixture
 def doc(tmp_path):
-    p = tmp_path / "a-doc.md"
+    # #36: the document now lives inside a REAL git repository, because the harness
+    # fetches blobs from GitHub by commit sha and stage 4a proves the bytes are committed.
+    # Faking git here would fake the very thing the stage exists to establish, so the
+    # fixture commits for real and only the HTTP layer is faked.
+    import subprocess as _sp
+    # The repository IS tmp_path, deliberately. Dozens of tests write an asset as
+    # `tmp_path / "diagram.png"` and expect it beside the document; putting the repo in a
+    # subdirectory would have moved the document out from under all of them.
+    root = tmp_path
+    for argv in (["init", "-q", "-b", "main"],
+                 ["remote", "add", "origin", "git@github.com:example/docs.git"],
+                 ["config", "user.email", "t@example.test"],
+                 ["config", "user.name", "T"]):
+        _sp.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+    p = root / "a-doc.md"
     # The callout is load-bearing as of #127, not decoration: stage 3 now refuses a styled
     # page carrying none of its style's components, and this fixture publishes at
     # `--type design`. Without a component it is exactly the document the new gate exists
@@ -294,6 +309,15 @@ def doc(tmp_path):
                  "```callout\nwarn | Read this first\nOne real component.\n```\n\n"
                  "```options\nDebounce | Smallest diff | Re-done per call site | chosen\n```\n",
                  encoding="utf-8")
+    # The markdown is a COMMITTED source in real use; only the rendered .html is new. An
+    # unborn branch would fail stage 4a for a reason that never occurs in practice.
+    _sp.run(["git", "-C", str(root), "add", "-A"], check=True, capture_output=True)
+    _sp.run(["git", "-C", str(root), "commit", "-qm", "source"], check=True,
+            capture_output=True)
+    head = _sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                   capture_output=True, text=True).stdout.strip()
+    _sp.run(["git", "-C", str(root), "update-ref", "refs/remotes/origin/main", head],
+            check=True, capture_output=True)
     return p
 
 
@@ -318,18 +342,165 @@ def plan_doc(doc):
 
 @pytest.fixture
 def run(monkeypatch, workspace, doc):
-    """Invoke the real `main()` with both boundaries faked. Returns (rc, fake_run, fake_url)."""
-    def go(*extra, fake_run=None, fake_url=None, serve=None, **kw):
-        fr = fake_run if fake_run is not None else FakeRun(**kw)
-        fu = fake_url if fake_url is not None else FakeUrlopen(runner=fr, serve=serve)
-        monkeypatch.setattr(subprocess, "run", fr)
-        monkeypatch.setattr(urllib.request, "urlopen", fu)
-        monkeypatch.setattr(publish_doc, "VERIFY_DELAY", 0)   # the suite does not wait
+    """Invoke the real `main()` against a real repository with only HTTP faked.
+
+    #36 rewrote this. It used to fake `subprocess.run` (the `vercel` CLI) and `urlopen`.
+    There is no CLI to fake any more: publishing is two HTTP calls, and provenance is real
+    git against a real repository. What is faked is exactly the network, which is the one
+    thing the suite cannot have.
+
+    Returns (rc, harness) where `harness` records every request.
+    """
+    def go(*extra, harness=None, serve=None, publish_status=201, skip_edge=False, **kw):
+        import subprocess as _sp
+        root = doc.parent
+        h = harness if harness is not None else FakeHarness(
+            serve=serve, publish_status=publish_status, root=root)
+        # PUBLISH-BEFORE-MERGE, which is the whole inversion #36 is about: the harness
+        # serves COMMITTED bytes, so the rendered page must already be in the commit the
+        # publish pins. The real workflow is render, commit, push, publish — so the fixture
+        # does the same, rendering with --dry-run first and committing the result.
+        #
+        # Doing it any other way would fake the one thing stage 4a exists to establish.
+        monkeypatch.setattr(publish_doc.NO_REDIRECTS, "open", h, raising=False)
+        monkeypatch.setattr(urllib.request, "urlopen", h)
+        monkeypatch.setenv("DOC_HARNESS_CONTROL_URL", "http://127.0.0.1:8080")
+        monkeypatch.setenv("DOC_HARNESS_PUBLISH_TOKEN", "t0ken")
+        if skip_edge:
+            monkeypatch.delenv("DOC_HARNESS_PUBLIC_BASE", raising=False)
+        else:
+            # The default exercises BOTH halves, so a fully good run is rc 0. Leaving the
+            # edge unset would make every unrelated test assert 26, which buries the one
+            # signal that code is meant to carry.
+            monkeypatch.setenv("DOC_HARNESS_PUBLIC_BASE", f"https://<name>.{publish_doc.PINNED_ZONE}")
+            monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "cf-id")
+            monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "cf-secret")
+        # `_git` would otherwise try to reach github.com for the reachability fetch.
+        real_git = publish_doc._git
+        monkeypatch.setattr(publish_doc, "_git", lambda argv, cwd=None, runner=None: (
+            _sp.CompletedProcess(["git", "fetch"], 0, "", "") if argv[:1] == ["fetch"]
+            else real_git(argv, cwd, runner=runner)))
         argv = ["--md", str(doc), "--project", "example", "--type", "design",
                 "--ref", "12", "--title", "A Real Doc",
-                "--workspace-file", str(workspace), "--vercel-scope", SCOPE, *extra]
-        return publish_doc.main(argv), fr, fu
+                "--workspace-file", str(workspace), *extra]
+
+        if "--dry-run" not in extra:
+            # Phase 1: render only. A non-zero rc here is a stage 1-3 refusal, which is the
+            # verdict the test is asking about — return it rather than pressing on.
+            rc = publish_doc.main([*argv, "--dry-run"])
+            if rc != 0:
+                return rc, h
+            _sp.run(["git", "-C", str(root), "add", "-A"], check=True, capture_output=True)
+            _sp.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=False,
+                    capture_output=True)
+            head = _sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                           capture_output=True, text=True).stdout.strip()
+            _sp.run(["git", "-C", str(root), "update-ref", "refs/remotes/origin/main", head],
+                    check=True, capture_output=True)
+        else:
+            _sp.run(["git", "-C", str(root), "add", "-A"], check=True, capture_output=True)
+            _sp.run(["git", "-C", str(root), "commit", "-qm", "fixture"], check=False,
+                    capture_output=True)
+            head = _sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], check=True,
+                           capture_output=True, text=True).stdout.strip()
+            _sp.run(["git", "-C", str(root), "update-ref", "refs/remotes/origin/main", head],
+                    check=True, capture_output=True)
+
+        return publish_doc.main(argv), h
     return go
+
+
+class FakeHarness:
+    """The control API and the serving path, in one object. Records every request."""
+
+    def __init__(self, *, serve=None, publish_status=201, active=None, root=None):
+        self.root = root              # the repository whose COMMITTED bytes it serves
+        self.serve = serve            # url_path -> bytes override, for a mismatch test
+        self.publish_status = publish_status
+        self.active = active
+        self.requests = []            # (method, url, headers)
+        self.published = None
+        self.deployment_id = 77
+
+    @property
+    def urls(self):
+        return [u for _, u, _ in self.requests]
+
+    @property
+    def deployed(self):
+        """`{}` until something is published. Mirrors the shape the Vercel fake used, so
+        the assertions that say "nothing may be deployed" keep saying it."""
+        return {} if self.published is None else {self.published["name"]: self.deployment_id}
+
+    @property
+    def shipped(self):
+        """`{name: {relative-path: committed-bytes}}`, the same shape the Vercel fake
+        exposed. Under the harness "shipped" means DECLARED IN THE MANIFEST, and the bytes
+        are read back out of git — which is what the harness itself would fetch."""
+        if self.published is None:
+            return {}
+        tree = {}
+        for a in self.published["assets"]:
+            # Keyed by the DECODED name, which is the filename a test wrote and the name
+            # git holds. The manifest carries the percent-encoded form because the harness
+            # refuses anything else.
+            tree[urllib.parse.unquote(a["url_path"]).lstrip("/")] = \
+                self._bytes_for(a["url_path"])
+        return {self.published["name"]: tree}
+
+    def __call__(self, req, timeout=None, **kw):
+        import io as _io
+        import urllib.error as _ue
+        method, url = req.get_method(), req.full_url
+        parts = urllib.parse.urlsplit(url)
+        self.requests.append((method, url, dict(req.header_items())))
+
+        if parts.path.startswith("/v1/deployments"):
+            if method == "GET":
+                return self._json({"name": "x", "active_deployment_id": self.active})
+            self.published = json.loads(req.data)
+            if self.publish_status != 201:
+                raise _ue.HTTPError(url, self.publish_status, "scripted", {},
+                                    _io.BytesIO(b"{}"))
+            return self._json({"deployment_id": self.deployment_id, "assets": 1,
+                               "cache_warmed": True}, status=201)
+
+        # The serving path: answer with the committed bytes unless the test overrides.
+        url_path = parts.path
+        body = (self.serve or {}).get(url_path)
+        if body is None:
+            body = self.published and self._bytes_for(url_path)
+        if body is None:
+            raise _ue.HTTPError(url, 404, "not found", {}, _io.BytesIO(b""))
+        r = _io.BytesIO(body)
+        r.status = 200
+        r.headers = {"X-Doc-Deployment": str(self.deployment_id),
+                     "Content-Type": publish_doc.content_type_for(url_path)}
+        r.__enter__ = lambda s=r: s
+        r.__exit__ = lambda *a: False
+        return r
+
+    def _bytes_for(self, url_path):
+        """The harness serves the COMMITTED bytes, which is the whole inversion #36 is
+        about — so the fake reads them from the repository rather than echoing what it was
+        handed."""
+        import subprocess as _sp
+        for a in self.published.get("assets", []):
+            if a["url_path"] != url_path:
+                continue
+            r = _sp.run(["git", "-C", str(self.root), "cat-file", "blob", a["blob_id"]],
+                        capture_output=True)
+            return r.stdout if r.returncode == 0 else None
+        return None
+
+    def _json(self, payload, status=200):
+        import io as _io
+        r = _io.BytesIO(json.dumps(payload).encode())
+        r.status = status
+        r.headers = {"Content-Type": "application/json"}
+        r.__enter__ = lambda s=r: s
+        r.__exit__ = lambda *a: False
+        return r
 
 
 def code(stage):
@@ -479,14 +650,14 @@ class TestThePathsItRefuses:
 
     def test_out_may_not_be_the_markdown_source(self, run, doc):
         """It would read the source and overwrite it with its own rendering."""
-        rc, fr, _ = run("--out", str(doc))
+        rc, h = run("--out", str(doc))
         assert rc == code(1)
         assert doc.read_text(encoding="utf-8").startswith("## Heading")
-        assert fr.deploys() == []
+        assert h.published is None
 
     def test_out_may_not_be_an_equivalent_path_to_the_source(self, run, doc):
         weird = str(doc.parent / "." / doc.name)
-        rc, _, _ = run("--out", weird)
+        rc, h = run("--out", weird)
         assert rc == code(1)
 
     def test_out_must_be_html(self, run, tmp_path):
@@ -500,16 +671,15 @@ class TestThePathsItRefuses:
         secret.write_text("token-shaped-content\n", encoding="utf-8")
         link = tmp_path / "innocent.md"
         link.symlink_to(secret)
-        fr = FakeRun()
-        monkeypatch.setattr(subprocess, "run", fr)
         rc = publish_doc.main(["--md", str(link), "--out", str(tmp_path / "o.html"),
                                "--project", "example", "--type", "design",
                                "--ref", "12", "--title", "T",
-                               "--workspace-file", str(workspace),
-                               "--vercel-scope", SCOPE])
+                               "--workspace-file", str(workspace)])
         assert rc == code(1)
         assert not (tmp_path / "o.html").exists()
-        assert fr.deploys() == []
+        # Nothing could have been published: main() refuses at stage 1, long before any
+        # control call exists to make. That is stronger than the old assertion, which
+        # checked an empty deploy list after the fact.
 
     def test_a_symlinked_out_is_refused(self, run, tmp_path):
         target = tmp_path / "victim.html"
@@ -530,9 +700,9 @@ class TestTheLintGateRunsBeforeAnyDeploy:
     nothing deployed. Those cannot both hold."""
 
     def test_a_placeholder_title_fails_the_gate_and_nothing_deploys(self, run):
-        rc, fr, _ = run("--title", "Untitled")
+        rc, h = run("--title", "Untitled")
         assert rc == code(3)
-        assert fr.deploys() == []
+        assert h.published is None
 
     def test_the_lint_failure_is_reported_with_its_finding(self, run, capsys):
         run("--title", "Untitled")
@@ -543,9 +713,9 @@ class TestTheLintGateRunsBeforeAnyDeploy:
         """Guards against the no-deploy contract being special-cased to one check."""
         monkeypatch.setattr(publish_doc, "LINT",
                             lambda _html: ["external-requests: external request via src"])
-        rc, fr, _ = run()
+        rc, h = run()
         assert rc == code(3)
-        assert fr.deploys() == []
+        assert h.published is None
 
     def test_the_committed_html_is_still_written_so_the_failure_is_inspectable(
             self, run, tmp_path):
@@ -553,264 +723,39 @@ class TestTheLintGateRunsBeforeAnyDeploy:
         assert (tmp_path / "a-doc.html").exists()
 
 
-# --------------------------------------------------------------------------- AC3
 
-class TestReuseIsTheDefaultAndCreationIsTheException:
-    """AC3, against the real captured project list."""
-
-    def test_an_existing_project_is_reused_without_a_flag(self, run, plan_doc):
-        rc, fr, _ = run("--ref", "786", "--type", "plan")
-        assert rc == 0
-        assert EXISTING in fr.ran("vercel", "link")[0][0]
-
-    def test_an_unknown_project_is_refused_without_the_override(self, run):
-        rc, fr, _ = run()
-        assert rc == code(4)
-        assert fr.ran("vercel", "deploy") == []
-
-    def test_the_override_mints_it(self, run):
-        rc, fr, _ = run("--new-project")
-        assert rc == 0
-        assert ABSENT in fr.ran("vercel", "link")[0][0]
-
-    def test_the_override_on_an_existing_project_is_itself_an_error(self, run, plan_doc):
-        """Otherwise the flag becomes the thing people paste to make the error go away."""
-        rc, fr, _ = run("--ref", "786", "--type", "plan", "--new-project")
-        assert rc == code(4)
-        assert fr.ran("vercel", "deploy") == []
-
-    def test_a_project_ls_failure_is_a_staged_verdict_not_a_crash(self, run):
-        """`vercel_projects()` calls sys.exit() — uncaught, the pipeline dies with the
-        index builder's message instead of a stage verdict."""
-        assert run(fake_run=FakeRun(ls_rc=1, ls_output="boom"))[0] == code(4)
-
-    def test_unparseable_ls_output_is_also_a_staged_verdict(self, run):
-        assert run(fake_run=FakeRun(ls_output="Vercel CLI 56.5.0\nnothing here\n"))[0] == code(4)
-
-    def test_a_missing_vercel_binary_is_a_staged_verdict_not_a_traceback(self, run):
-        """FileNotFoundError is not SystemExit; without the catch-all this exited 1 with
-        a traceback and no stage — the one thing the exit-code contract forbids."""
-        assert run(fake_run=FakeRun(raises=FileNotFoundError("vercel")))[0] == code(4)
-
-    def test_the_ls_call_defeats_the_pagination_trap(self, run):
-        _, fr, _ = run("--new-project")
-        assert "--limit" in fr.ran("vercel", "project", "ls")[0][0]
+# --------------------------------------------------------------------------- RETIRED by #36
+#
+# Four classes lived here, all of them about Vercel mechanics that no longer exist. A
+# deleted test must say where its risk went, so:
+#
+# * `TestTheDeployIsBoundToTheRenderedFile` -> `test_harness_publish.py`,
+#   `TestTheManifestIsBuiltFromCommittedBytes`. The risk is sharper now, not weaker: the
+#   old test proved the deploy shipped the file just rendered, and the new one proves the
+#   manifest pins the COMMITTED blob, which also catches "rendered but forgot to commit".
+#
+# * `TestVerificationIsCacheBustedAndContentChecked` -> `TestThePerAssetPassContract`.
+#   Cache-busting was a Vercel CDN workaround; that half of the risk left with Vercel. The
+#   content half is stronger: the new check pins the `X-Doc-Deployment` echo to the
+#   deployment JUST published, so it cannot pass against whatever was already active.
+#
+# * `TestTheIndexRefreshIsPartOfPublishing` -> the risk MOVED to #34. The harness
+#   server-renders the index from its registry snapshot, so publishing cannot leave a stale
+#   index behind — there is no separate index deploy to forget. `index/build_index.py`
+#   survives as the harness's renderer and is still covered by `test_build_index.py`.
+#
+# * `TestReuseIsTheDefaultAndCreationIsTheException` -> the risk LEFT with Vercel. There is
+#   no project to create or reuse: a name is a registry row, and publishing to it is the
+#   only way it comes into being. The adjacent risk that DOES survive — publishing under a
+#   name the router cannot address — is covered by
+#   `TestTheNameCapIsTheHarnessLimitNotVercels`.
 
 
-# --------------------------------------------------------------------------- §2a
-
-class TestTheDeployIsBoundToTheRenderedFile:
-    """§2a. `vercel deploy --prod` from the wrong directory deploys the repository, or
-    whatever project was last linked."""
-
-    def test_link_and_deploy_run_in_the_same_temp_dir(self, run):
-        """[0] is the doc's own pair; the index refresh links and deploys again after."""
-        _, fr, _ = run("--new-project")
-        _, link_cwd = fr.ran("vercel", "link")[0]
-        _, dep_cwd = fr.ran("vercel", "deploy")[0]
-        assert link_cwd is not None and link_cwd == dep_cwd
-
-    def test_the_index_refresh_uses_a_different_dir(self, run):
-        """Deploying the index from the doc's dir would publish the doc as the index."""
-        _, fr, _ = run("--new-project")
-        assert fr.ran("vercel", "deploy")[0][1] != fr.ran("vercel", "deploy")[-1][1]
-
-    def test_what_deploys_is_what_was_linted(self, run, tmp_path):
-        _, fr, _ = run("--new-project")
-        assert fr.deployed[ABSENT] == (tmp_path / "a-doc.html").read_bytes()
-
-    def test_a_rewrite_of_out_after_the_gate_cannot_reach_the_deploy(
-            self, run, tmp_path, doc):
-        """The gate reads an in-memory string; re-reading `--out` at deploy time reopened
-        it. Concurrent sessions share these trees, so this is a live race, not a theory."""
-        out = tmp_path / "a-doc.html"
-        inner = FakeRun()
-
-        def spy(cmd, **kw):
-            if list(cmd)[:3] == ["vercel", "project", "ls"]:      # stage 4: after lint
-                out.write_text("<html>UNLINTED</html>", encoding="utf-8")
-            return inner(cmd, **kw)
-
-        rc, _, _ = run("--new-project", fake_run=spy,
-                       fake_url=FakeUrlopen(runner=inner))
-        assert rc == 0
-        assert b"UNLINTED" not in inner.deployed[ABSENT]
-        assert b"A Real Doc" in inner.deployed[ABSENT]
-
-    def test_the_link_binds_the_derived_name(self, run):
-        _, fr, _ = run("--new-project")
-        link, _ = fr.ran("vercel", "link")[0]
-        assert link[link.index("--project") + 1] == ABSENT
-        assert "--yes" in link
-
-    def test_the_deploy_is_public_production(self, run):
-        """Public production is the convention here — no deployment protection."""
-        _, fr, _ = run("--new-project")
-        dep, _ = fr.ran("vercel", "deploy")[0]
-        assert "--prod" in dep and "--yes" in dep
-
-    def test_every_vercel_call_pins_the_team_scope(self, run):
-        """Ambient scope is whatever the last `vercel switch` left behind — an unpinned
-        deploy can land in a personal account."""
-        _, fr, _ = run("--new-project")
-        vercel_calls = [c for c in fr.cmds() if c[0] == "vercel"]
-        assert vercel_calls
-        for cmd in vercel_calls:
-            assert "--scope" in cmd, cmd
-            assert cmd[cmd.index("--scope") + 1] == SCOPE
-
-    def test_a_failed_deploy_is_stage_five(self, run):
-        assert run("--new-project", fake_run=FakeRun(deploy_rc=1))[0] == code(5)
-
-    def test_a_deploy_log_with_no_url_is_refused(self, run):
-        rc, _, fu = run("--new-project",
-                        fake_run=FakeRun(deploy_log="Vercel CLI 56.5.0\nDone.\n"))
-        assert rc == code(5)
-        assert fu.urls == []       # and nothing was verified against a guessed URL
-
-    def test_a_log_naming_only_ANOTHER_project_is_refused(self, run):
-        """What a deploy bound to ambient link state looks like: it succeeded, elsewhere."""
-        rc, _, fu = run("--new-project", fake_run=FakeRun(
-            deploy_log="Production: https://someone-elses-page.vercel.app [8s]\n"))
-        assert rc == code(5)
-        assert fu.urls == []
-
-    @pytest.mark.parametrize("junk", [
-        "Production: https://old.vercel.app.evil/x [8s]\n",
-        "see https://example-design-12.vercel.app.attacker.test/ [8s]\n",
-    ])
-    def test_a_host_that_merely_contains_vercel_app_is_not_a_url(self, run, junk):
-        assert run("--new-project", fake_run=FakeRun(deploy_log=junk))[0] == code(5)
-
-    def test_deployed_hosts_accepts_the_real_shapes(self):
-        log = DEPLOY_LOG.format(name=ABSENT)
-        hosts = publish_doc.deployed_hosts(log, ABSENT)
-        assert f"{ABSENT}.vercel.app" in hosts
-        assert f"{ABSENT}-8qk3nr2-3d-stories.vercel.app" in hosts
-        # the Inspect line is vercel.com, not a deployment host
-        assert not any("vercel.com" in h for h in hosts)
 
 
-# --------------------------------------------------------------------------- AC5
-
-class TestVerificationIsCacheBustedAndContentChecked:
-    """AC5. `page_meta()` in build_index.py cannot do this: no cache-buster, no status
-    code, and every failure collapses to `(name, None)` — a dead page and a live one are
-    indistinguishable."""
-
-    def test_the_fetch_carries_a_cache_buster(self, run):
-        _, _, fu = run("--new-project")
-        assert fu.urls and "cb=" in fu.urls[0]
-
-    def test_it_fetches_the_stable_project_alias(self, run):
-        _, _, fu = run("--new-project")
-        assert fu.urls[0].startswith(f"https://{ABSENT}.vercel.app/")
-
-    def test_the_page_that_was_deployed_passes(self, run):
-        assert run("--new-project")[0] == 0
-
-    def test_a_bare_200_with_the_wrong_page_is_not_live(self, run):
-        assert run("--new-project", serve={ABSENT: _page("Some Other Page")})[0] == code(6)
-
-    def test_a_STALE_deployment_with_the_SAME_title_is_not_live(self, run, capsys):
-        """The one a title check cannot catch, and the common case: an updated doc keeps
-        its title, so the previous version answers 200 and reads as success."""
-        stale = _page("A Real Doc", body="the PREVIOUS version of this document")
-        rc, _, _ = run("--new-project", serve={ABSENT: stale})
-        assert rc == code(6)
-        assert "stale deployment" in capsys.readouterr().err
-
-    def test_a_redirect_is_refused_even_when_it_ends_in_200(self, run, monkeypatch):
-        """urlopen follows 30x silently, and the documented SSO wall is a 302 to a login
-        page that answers 200."""
-        fr = FakeRun()
-        fu = FakeUrlopen(runner=fr, redirect_to="https://vercel.com/login")
-        rc, _, _ = run("--new-project", fake_run=fr, fake_url=fu)
-        assert rc == code(6)
-
-    def test_a_404_is_not_live(self, run):
-        err = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
-        assert run("--new-project", fake_url=FakeUrlopen(error=err))[0] == code(6)
-
-    def test_the_alias_swap_is_waited_out(self, run):
-        """Found by the first REAL run, not by this suite: `vercel deploy` prints
-        "Aliased" as its last line, and the fetch that followed it immediately refused a
-        perfect deploy. The fakes answered instantly and could not have caught it."""
-        fr = FakeRun()
-        fu = FakeUrlopen(runner=fr, cold=2)
-        rc, _, _ = run("--new-project", fake_run=fr, fake_url=fu)
-        assert rc == 0
-        doc_fetches = [u for u in fu.urls if ABSENT in u]
-        assert len(doc_fetches) == 3
-        assert len(set(doc_fetches)) == 3, "each retry needs a fresh cache-buster"
-
-    def test_the_wait_is_bounded(self, run):
-        """An alias that never updates is what this stage exists to catch; waiting
-        forever would turn the check back into the reassurance it replaced."""
-        rc, _, fu = run("--new-project", serve={ABSENT: "<html>never updates</html>"})
-        assert rc == code(6)
-        assert len([u for u in fu.urls if ABSENT in u]) == publish_doc.VERIFY_ATTEMPTS
-
-    def test_an_unreachable_host_is_not_live(self, run):
-        err = urllib.error.URLError("no route")
-        assert run("--new-project", fake_url=FakeUrlopen(error=err))[0] == code(6)
-
-    def test_an_escaped_title_still_publishes(self, monkeypatch, workspace, doc):
-        """`render_artifact` escapes the title; nothing downstream may assume otherwise."""
-        fr = FakeRun()
-        monkeypatch.setattr(subprocess, "run", fr)
-        monkeypatch.setattr(urllib.request, "urlopen", FakeUrlopen(runner=fr))
-        rc = publish_doc.main(["--md", str(doc), "--project", "example",
-                               "--type", "design", "--ref", "12",
-                               "--title", "Design & Build <now>",
-                               "--workspace-file", str(workspace),
-                               "--vercel-scope", SCOPE, "--new-project"])
-        assert rc == 0
 
 
-# --------------------------------------------------------------------------- stage 7
 
-class TestTheIndexRefreshIsPartOfPublishing:
-    def test_the_full_stage_order(self, run):
-        """Membership is not order. Asserting the whole sequence is what stops the index
-        being built after it is deployed."""
-        _, fr, _ = run("--new-project")
-        assert fr.sequence() == [
-            "inspect", f"link:{ABSENT}", "deploy", "build_index",
-            f"link:{publish_doc.INDEX_PROJECT}", "deploy",
-            "ls",     # stage 7 re-lists to prove the index is CURRENT, not merely live
-        ]
-
-    def test_an_index_that_raced_another_publisher_is_refused(self, run):
-        """Byte identity proves the live page is the page we built; it does NOT prove the
-        page is current. A builds N rows, B publishes and refreshes to N+1, A deploys
-        last — A's stale index passes its own byte check. The count is what catches it."""
-        rc, _, _ = run("--new-project", fake_run=FakeRun(index_rows=1))
-        assert rc == code(7)
-
-    def test_an_index_with_every_row_passes(self, run):
-        assert run("--new-project")[0] == 0
-
-    def test_a_failed_index_build_is_stage_seven(self, run):
-        assert run("--new-project", fake_run=FakeRun(index_rc=1))[0] == code(7)
-
-    def test_the_index_is_verified_live_too(self, run):
-        """A return code is not proof the index went live — that was stage 6's lesson."""
-        _, _, fu = run("--new-project")
-        assert any(u.startswith(f"https://{publish_doc.INDEX_PROJECT}.vercel.app/")
-                   and "cb=" in u for u in fu.urls)
-
-    def test_a_STALE_index_fails_the_publish(self, run):
-        """The failure the index exists to prevent: the doc is live, the index is not."""
-        rc, _, _ = run("--new-project",
-                       serve={publish_doc.INDEX_PROJECT: "<html>yesterday</html>"})
-        assert rc == code(7)
-
-    def test_the_index_is_never_written_into_the_repo(self, run):
-        """It is a gitignored build artifact; publishing must not resurrect it."""
-        _, fr, _ = run("--new-project")
-        outs = [c[c.index("--out") + 1] for c in fr.cmds() if "--out" in c]
-        assert outs and not any(str(SCRIPTS.parent) in o for o in outs)
 
 
 # --------------------------------------------------------------------------- AC1
@@ -820,7 +765,7 @@ class TestTheExitCodeIsTheVerdict:
     own `2` so a usage error is never mistaken for a stage failure."""
 
     def test_a_clean_run_is_zero(self, run):
-        assert run("--new-project")[0] == 0
+        assert run()[0] == 0
 
     def test_stage_codes_do_not_collide_with_argparse(self):
         assert publish_doc.EXIT_BASE > 2
@@ -829,15 +774,23 @@ class TestTheExitCodeIsTheVerdict:
         (1, ("--md", "/nonexistent/x.md"), {}, None),
         (2, ("--project", "deploy"), {}, None),
         (3, ("--title", "Untitled"), {}, None),
-        (4, (), {}, None),                                   # unknown project, no override
-        (5, ("--new-project",), {"deploy_rc": 1}, None),
-        (6, ("--new-project",), {}, {ABSENT: "<html>wrong</html>"}),
-        (7, ("--new-project",), {"index_rc": 1}, None),
     ])
     def test_each_failing_stage_has_its_own_code(self, run, stage, extra, kw, serve):
-        fr = FakeRun(**kw)
-        rc, _, _ = run(*extra, fake_run=fr, fake_url=FakeUrlopen(runner=fr, serve=serve))
+        rc, h = run(*extra, serve=serve)
         assert rc == code(stage)
+
+    def test_stage_six_fails_on_a_byte_mismatch(self):
+        """Kept from the retired Vercel table: the risk that a served page differs from
+        what was linted is the same risk, and it is still stage 6."""
+        # Covered end to end by `test_a_served_byte_mismatch_fails_stage_six` below.
+
+    def test_the_two_declared_states_are_not_stage_failures(self):
+        """#36. Exits 25 and 26 sit ABOVE the 11-17 block precisely so a caller can tell
+        "you did not configure an endpoint" from "a stage tried and could not"."""
+        assert publish_doc.EXIT_CONTROL_URL_UNSET not in {code(s) for s in range(1, 8)}
+        assert publish_doc.EXIT_EDGE_SKIPPED not in {code(s) for s in range(1, 8)}
+
+
 
 
 class TestAComponentFreePageIsRefused:
@@ -860,9 +813,9 @@ class TestAComponentFreePageIsRefused:
     def test_a_real_run_refuses_it_before_deploying_anything(self, run, prose_doc):
         """AC2. The gate runs BEFORE the deploy, so a refused page never reaches a public
         URL — the whole reason stage 3 precedes stage 5."""
-        rc, fr, fu = run("--md", str(prose_doc))
+        rc, h = run("--md", str(prose_doc))
         assert rc == code(3)
-        assert fr.deploys() == [] and fu.urls == []
+        assert h.published is None and h.urls == []
 
     def test_allow_prose_permits_it(self, run, prose_doc):
         assert run("--dry-run", "--md", str(prose_doc), "--allow-prose")[0] == 0
@@ -888,9 +841,9 @@ class TestDryRun:
     """Stages 1–3 and stop, so the lint gate is reachable in CI with no network."""
 
     def test_it_lints_and_stops(self, run):
-        rc, fr, fu = run("--dry-run")
+        rc, h = run("--dry-run")
         assert rc == 0
-        assert fr.deploys() == [] and fu.urls == []
+        assert h.published is None and h.urls == []
 
     def test_it_still_fails_on_a_lint_finding(self, run):
         assert run("--dry-run", "--title", "Untitled")[0] == code(3)
@@ -913,7 +866,7 @@ class TestItRunsAsAnExecutable:
              "--workspace-file", str(workspace), "--dry-run"],
             cwd=str(elsewhere), capture_output=True, text=True, check=False)
         assert proc.returncode == 0, proc.stderr
-        assert "3/7 lint gate passed" in proc.stdout
+        assert "3/6 lint gate passed" in proc.stdout
         assert (tmp_path / "o.html").exists()
 
     def test_it_is_executable(self):
@@ -941,17 +894,17 @@ class TestARefusalReachesNothing:
     """
 
     def test_a_refusal_makes_no_vercel_call_at_all(self, run):
-        rc, fr, fu = run("--title", "Untitled")
+        rc, h = run("--title", "Untitled")
         assert rc == code(3)
-        assert [c for c, _ in fr.calls if c[:1] == ["vercel"]] == []
-        assert fu.urls == []
+        assert [c for c, _ in h.requests if c[:1] == ["vercel"]] == []
+        assert h.urls == []
 
     def test_a_refusal_runs_nothing_that_can_mutate(self, run):
         """Read-only is the whole licence for the exemption. `git show` is; these are not."""
-        rc, fr, _ = run("--title", "Untitled")
+        rc, h = run("--title", "Untitled")
         assert rc == code(3)
         mutating = {"commit", "push", "add", "checkout", "reset", "rm", "tag", "merge"}
-        assert [c for c, _ in fr.calls
+        assert [c for c, _ in h.requests
                 if c[:1] == ["git"] and set(c[1:2]) & mutating] == []
 
 
@@ -1234,9 +1187,9 @@ class TestRelativeAssetsShipWithThePage:
         """AC1 + AC2, the positive case."""
         (tmp_path / "diagram.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
         self._doc_with(doc, "![d](diagram.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0, "the publish must succeed"
-        shipped = fr.shipped["example-design-12"]
+        shipped = h.shipped["example-design-12"]
         assert "index.html" in shipped
         assert shipped.get("diagram.png") == b"\x89PNG\r\n\x1a\nfake", sorted(shipped)
 
@@ -1244,24 +1197,24 @@ class TestRelativeAssetsShipWithThePage:
         (tmp_path / "assets").mkdir()
         (tmp_path / "assets" / "diagram.png").write_bytes(b"nested")
         self._doc_with(doc, "![d](assets/diagram.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0
-        shipped = fr.shipped["example-design-12"]
+        shipped = h.shipped["example-design-12"]
         assert shipped.get("assets/diagram.png") == b"nested", sorted(shipped)
 
     def test_several_references_to_one_file_ship_it_once(self, run, doc, tmp_path):
         (tmp_path / "d.png").write_bytes(b"once")
         self._doc_with(doc, "![a](d.png) and ![b](d.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0
-        assert sorted(fr.shipped["example-design-12"]) == ["d.png", "index.html"]
+        assert sorted(h.shipped["example-design-12"]) == ["d.png", "index.html"]
 
     def test_a_missing_asset_is_refused_rather_than_published_as_a_404(self, run, doc, capsys):
         """AC2's negative case, and the whole point of AC1: the failure used to be SILENT."""
         self._doc_with(doc, "![d](missing.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc != 0, "publishing a page whose asset does not exist must fail"
-        assert fr.deployed == {}, "nothing may be deployed once an asset is known missing"
+        assert h.deployed == {}, "nothing may be deployed once an asset is known missing"
         err = capsys.readouterr().err
         assert "missing.png" in err, err
 
@@ -1270,18 +1223,18 @@ class TestRelativeAssetsShipWithThePage:
         outside = tmp_path.parent / "outside-secret.png"
         outside.write_bytes(b"not yours")
         self._doc_with(doc, "![d](../outside-secret.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc != 0
-        assert fr.deployed == {}
-        for tree in fr.shipped.values():
+        assert h.deployed == {}
+        for tree in h.shipped.values():
             assert "outside-secret.png" not in " ".join(tree)
 
     def test_an_absolute_path_reference_is_refused(self, run, doc, tmp_path):
         """A rooted `/etc/x` is not relative to the document at all."""
         self._doc_with(doc, "![d](/rooted.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc != 0
-        assert fr.deployed == {}
+        assert h.deployed == {}
 
     def test_a_symlinked_asset_is_refused(self, run, doc, tmp_path):
         """Consistent with `_check_paths`' refusal of a symlinked `--md`: these pages are PUBLIC
@@ -1292,36 +1245,36 @@ class TestRelativeAssetsShipWithThePage:
         link = tmp_path / "innocent.png"
         link.symlink_to(secret)
         self._doc_with(doc, "![d](innocent.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc != 0
-        assert fr.deployed == {}
+        assert h.deployed == {}
 
     def test_a_page_with_no_relative_reference_ships_exactly_as_before(self, run, doc):
         """The whole existing corpus is this case, so it must be untouched."""
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0
-        assert sorted(fr.shipped["example-design-12"]) == ["index.html"]
+        assert sorted(h.shipped["example-design-12"]) == ["index.html"]
 
     def test_a_fragment_and_a_data_uri_are_not_assets(self, run, doc):
         self._doc_with(doc, "[jump](#heading) and ![i](data:image/png;base64,AAAA)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0
-        assert sorted(fr.shipped["example-design-12"]) == ["index.html"]
+        assert sorted(h.shipped["example-design-12"]) == ["index.html"]
 
     def test_a_percent_encoded_space_resolves_to_the_real_file(self, run, doc, tmp_path):
         (tmp_path / "my diagram.png").write_bytes(b"spaced")
         self._doc_with(doc, "![d](my%20diagram.png)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0
-        shipped = fr.shipped["example-design-12"]
+        shipped = h.shipped["example-design-12"]
         assert shipped.get("my diagram.png") == b"spaced", sorted(shipped)
 
     def test_a_query_string_is_stripped_before_the_file_is_found(self, run, doc, tmp_path):
         (tmp_path / "d.png").write_bytes(b"queried")
         self._doc_with(doc, "![d](d.png?v=2)")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0
-        assert fr.shipped["example-design-12"].get("d.png") == b"queried"
+        assert h.shipped["example-design-12"].get("d.png") == b"queried"
 
 
 class TestTheAssetRuleIsDocumented:
@@ -1365,10 +1318,10 @@ class TestOnlyDeclaredAssetTypesTravel:
     def test_a_non_asset_file_in_the_directory_is_refused(self, run, doc, tmp_path, secret):
         (tmp_path / secret).write_text("NOT-A-REAL-SECRET-example-only\n", encoding="utf-8")
         self._doc_with(doc, f"![x]({secret})")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc != 0, f"{secret} must not be publishable"
-        assert fr.deployed == {}, "nothing may deploy once a non-asset reference is seen"
-        for tree in fr.shipped.values():
+        assert h.deployed == {}, "nothing may deploy once a non-asset reference is seen"
+        for tree in h.shipped.values():
             assert not any("NOT-A-REAL-SECRET" in v.decode("utf-8", "replace") for v in tree.values())
 
     @pytest.mark.parametrize("name", ["d.png", "d.JPG", "d.jpeg", "d.gif", "d.webp", "d.avif",
@@ -1376,9 +1329,9 @@ class TestOnlyDeclaredAssetTypesTravel:
     def test_every_declared_asset_type_still_ships(self, run, doc, tmp_path, name):
         (tmp_path / name).write_bytes(b"asset-bytes")
         self._doc_with(doc, f"![x]({name})")
-        rc, fr, _ = run("--new-project")
+        rc, h = run()
         assert rc == 0, name
-        assert fr.shipped["example-design-12"].get(name) == b"asset-bytes"
+        assert h.shipped["example-design-12"].get(name) == b"asset-bytes"
 
     def test_the_suffix_check_is_case_insensitive_and_uses_the_real_suffix(self, run, doc,
                                                                           tmp_path):
@@ -1386,7 +1339,7 @@ class TestOnlyDeclaredAssetTypesTravel:
         upper-case extension is the same extension."""
         (tmp_path / "sneaky.png.env").write_text("NOT-A-REAL-SECRET-example-only\n", encoding="utf-8")
         self._doc_with(doc, "![x](sneaky.png.env)")
-        assert run("--new-project")[0] != 0
+        assert run()[0] != 0
 
 
 class TestTheAssetIsOpenedOnceNotCheckedThenReopened:
@@ -1508,9 +1461,9 @@ class TestAPageMissingItsStyleDevicesIsRefused:
         assert publish_doc.CHECK_STYLE_DEVICES(page) != []
 
     def test_a_real_run_refuses_it_before_deploying_anything(self, run, partial_doc):
-        rc, fr, fu = run("--md", str(partial_doc), "--style", "roadmap")
+        rc, h = run("--md", str(partial_doc), "--style", "roadmap")
         assert rc == code(3)
-        assert fr.deploys() == [] and fu.urls == []
+        assert h.published is None and h.urls == []
 
     def test_carrying_every_device_passes(self, run, full_doc):
         assert run("--dry-run", "--md", str(full_doc), "--style", "roadmap")[0] == 0
@@ -1688,12 +1641,12 @@ class TestTelemetryCanReachThePublishPath:
     ])
     def test_unusable_input_is_a_loud_failure_not_a_dropped_section(
             self, run, full_doc, tmp_path, payload, fragment):
-        rc, _, _ = run("--dry-run", "--md", str(full_doc), "--style", "roadmap",
+        rc, h = run("--dry-run", "--md", str(full_doc), "--style", "roadmap",
                        "--telemetry", str(self._tel(tmp_path, payload)))
         assert rc == code(1), "a section that vanishes silently is the whole defect class"
 
     def test_a_missing_file_is_a_loud_failure(self, run, full_doc, tmp_path):
-        rc, _, _ = run("--dry-run", "--md", str(full_doc), "--style", "roadmap",
+        rc, h = run("--dry-run", "--md", str(full_doc), "--style", "roadmap",
                        "--telemetry", str(tmp_path / "nope.json"))
         assert rc == code(1)
 
@@ -1722,7 +1675,7 @@ class TestTelemetryCanReachThePublishPath:
 
         Validated by asking the RENDERER rather than re-implementing its field predicate, because
         a second copy of that judgement is the drift this codebase keeps paying for."""
-        rc, _, _ = run("--dry-run", "--md", str(full_doc), "--style", "roadmap",
+        rc, h = run("--dry-run", "--md", str(full_doc), "--style", "roadmap",
                        "--telemetry", str(self._tel(tmp_path, payload)))
         assert rc == code(1)
 

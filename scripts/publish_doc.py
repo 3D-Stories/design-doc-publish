@@ -12,7 +12,7 @@ not. So the exit code is the verdict.
     python3 publish_doc.py --md docs/planning/x.md --project herdr-dashboard \\
                            --type design --ref 81 --title "#81 The Design"
 
-Seven stages, each able to refuse (exit ``EXIT_BASE + stage``):
+Six stages, each able to refuse (exit ``EXIT_BASE + stage``):
 
     1 render  2 name  3 LINT  4 reuse-or-create  5 deploy  6 verify  7 index
 
@@ -39,6 +39,7 @@ a pull request remain the workflows' business, and a test greps this file to kee
 from __future__ import annotations
 
 import argparse
+import hashlib
 import html
 import importlib.util
 import json
@@ -498,6 +499,52 @@ def validate_manifest(manifest: dict) -> None:
     if entry_path not in seen:
         bad(f"entry_path {entry_path!r} names no declared asset, so '/' would 404 on a "
             "deployment that otherwise activated cleanly")
+
+
+def build_manifest(*, root: Path, page_path: Path, staged: list[str], asset_base: Path,
+                   name: str, repo: str, commit_sha: str) -> dict:
+    """Describe what is COMMITTED, never what is in hand.
+
+    The harness fetches every blob from GitHub by `blob_id`, which is git's own object id
+    (`harness/control.py:git_blob_id`) — a sha256 in its place would look up nothing. The
+    per-asset `sha256` is a SECOND, independent check the harness makes on the bytes it
+    fetched, so both are sent.
+
+    `content_type` is deliberately absent: the harness derives it from the extension and a
+    sent one is a 422.
+    """
+    root = root.resolve()
+
+    def entry_for(path: Path, url_path: str) -> dict:
+        path = path.resolve()
+        if not path.is_relative_to(root):
+            raise StageError(
+                4, f"{path} is outside the repository at {root}, so the harness could "
+                   "never fetch it. Everything published must be committed here.")
+        raw = path.read_bytes()
+        blob = _git(["hash-object", str(path)], root)
+        if blob.returncode != 0:
+            raise StageError(4, f"git could not hash {path}: {blob.stderr.strip()}")
+        blob_id = blob.stdout.strip()
+        repo_path = str(path.relative_to(root))
+        assert_blob_committed(root, repo_path, blob_id)
+        return {"url_path": url_path, "repo_path": repo_path, "blob_id": blob_id,
+                "size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+    # The entry page is served at a real path and REACHED through `entry_path`; an asset
+    # `url_path` of `/` is refused outright (`harness/manifest.py:113`).
+    # The url_path must be CANONICALLY PERCENT-ENCODED or the publish is a 422. This is
+    # the #34 boundary learning, and it is easy to lose: `stage_assets` resolves a
+    # percent-encoded reference back to the real filename, so `rel` here carries the
+    # DECODED name — a literal space, or any of `+ ( ) , & ' = @ ! $ *`. Prefixing "/" and
+    # sending that is exactly the 422 the learning warns about.
+    #
+    # `repo_path` keeps the real decoded name, because that is what git holds.
+    assets = [entry_for(page_path, "/index.html")]
+    assets += [entry_for(asset_base / rel, "/" + urllib.parse.quote(rel, safe="/"))
+               for rel in staged]
+    return {"name": name, "repo": repo, "commit_sha": commit_sha,
+            "entry_path": "/index.html", "assets": assets}
 
 
 def _control_request(base: str, path: str, token: str, *, method: str, body: bytes | None):
@@ -978,8 +1025,12 @@ def assert_manifest_covers(staged: list[str], url_paths: list[str]) -> None:
       on a deployment that otherwise activated cleanly;
     * declared but unstaged -> the harness fetches a blob the render never produced.
     """
-    want = {p.lstrip("/") for p in url_paths}
-    have = {s.lstrip("/") for s in staged}
+    # Compared DECODED on both sides. The manifest carries percent-encoded url_paths
+    # (the harness refuses anything else) while `staged` carries the real filenames, so a
+    # raw string comparison would report every asset with a space as both missing AND
+    # extra — which is how a correct manifest looked like a broken one for one commit.
+    want = {urllib.parse.unquote(p).lstrip("/") for p in url_paths}
+    have = {urllib.parse.unquote(s).lstrip("/") for s in staged}
     missing = sorted(have - want)
     if missing:
         raise StageError(
@@ -1062,27 +1113,6 @@ def gate(page: str, *, skip_component_checks: bool = False) -> None:
 _VERCEL_TIMEOUT = 300
 
 
-def _vercel(args: list[str], cwd: Path, scope: str) -> subprocess.CompletedProcess:
-    """Every call is given an explicit cwd, and every path used afterwards is absolute —
-    the CLI resets the shell's working directory.
-
-    `scope` is REQUIRED and is never conditionally omitted (#9). Dropping `--scope` when no
-    team is configured would silently target whichever account `vercel switch` last selected,
-    which is the failure the pin exists to prevent — so the caller refuses long before here.
-    """
-    try:
-        return subprocess.run(["vercel", *args, "--scope", scope], cwd=str(cwd),
-                              capture_output=True, text=True, check=False,
-                              timeout=_VERCEL_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        # Fail the stage rather than raise. Every caller already reads `returncode` and
-        # `stderr`, so a synthetic failure keeps them working and keeps the reason legible.
-        # 124 is the conventional exit code for a timed-out command.
-        return subprocess.CompletedProcess(
-            ["vercel", *args, "--scope", scope], 124, "",
-            "vercel did not answer within %d seconds, so this stage was stopped rather "
-            "than left hanging. Nothing about your account or permissions is implied."
-            % _VERCEL_TIMEOUT)
 
 
 #: Vercel's own wording for a permission refusal, matched loosely on purpose: this only
@@ -1128,57 +1158,6 @@ def _says_no_such_project(proc, name: str) -> bool:
     return needle in (proc.stderr or "").lower()
 
 
-def resolve_project(name: str, *, new_project: bool, scope: str) -> bool:
-    """True if the project already exists (and is being reused).
-
-    **This asks about ONE project. It does not enumerate the account, and that is the point.**
-
-    It used to list every project in the team and test membership. Two failures came out of
-    that, one certain and one latent, and they pull in opposite directions:
-
-    * A brand-new account has NO projects, and the listing refused an empty result outright —
-      so a first publish died at stage 4 while setup reported the account ready (#9).
-    * Reading absence out of an empty LIST is unsound anyway. A truncated or erroneous CLI
-      response can carry the requested tenant, an empty `projects` array and a null cursor,
-      which is indistinguishable from a genuinely empty account. Stage 4 answers absence by
-      minting a duplicate project under a new URL — the #125 failure, which changes a
-      published document's URL.
-
-    Asking about the one project removes both. `vercel project inspect` gives an EXPLICIT
-    not-found, so absence is something the platform states rather than something inferred from
-    a listing whose completeness had to be proved. Probed live against Vercel CLI 56.5.0: exit
-    0 when the project exists, exit 1 with `Error: There is no project for "<name>"` when it
-    does not.
-
-    Anything else — a network error, a rate limit, a changed CLI — is a stage-4 error. It is
-    NEVER read as absence, because that is the reading that mints the duplicate.
-    """
-    try:
-        proc = _vercel(["project", "inspect", name], cwd=Path.cwd(), scope=scope)
-    except OSError as e:
-        # A missing or unrunnable binary RAISES rather than returning, so the promise that
-        # everything but an explicit not-found is a stage-4 error has to catch it here.
-        raise StageError(4, f"could not run the `vercel` CLI to check whether {name} exists "
-                            f"({e.__class__.__name__}: {e}). Install it, or check it is on "
-                            f"PATH.") from e
-    if proc.returncode == 0:
-        exists = True
-    elif _says_no_such_project(proc, name):
-        exists = False
-    else:
-        raise StageError(4, f"could not determine whether {name} exists (rc="
-                            f"{proc.returncode}). Refusing to guess: reading this as "
-                            f"'absent' would mint a duplicate project under a new URL.\n"
-                            f"{_log(proc)}")
-    if exists and new_project:
-        raise StageError(4, f"{name} already exists — drop --new-project and it is "
-                            f"reused, which is what keeps its URL stable. Otherwise the "
-                            f"flag becomes the thing people paste to clear the error.")
-    if not exists and not new_project:
-        raise StageError(4, f"no Vercel project named {name}. Reuse is the default; "
-                            f"re-run with --new-project once you are sure this doc has "
-                            f"never been published under another name.")
-    return exists
 
 
 # --- stage 5: the deploy -------------------------------------------------------------
@@ -1193,75 +1172,8 @@ _ALIASED_LINE = re.compile(r"^[^A-Za-z0-9]*aliased\b", re.I)
 _URL_HOST = re.compile(r"https://([a-z0-9][a-z0-9.-]*\.vercel\.app)(?=[/\s]|$)", re.I)
 
 
-def deployed_hosts(log: str, name: str) -> list[str]:
-    """The hosts in a deploy log that belong to THIS project.
-
-    `vercel deploy` prints the deployment URL (`<name>-<hash>-<team>.vercel.app`) and
-    usually the alias. Accepting any vercel.app URL would accept a log that only ever
-    mentions somebody else's project — which is exactly what a deploy bound to ambient
-    link state looks like.
-    """
-    out = []
-    for host in _URL_HOST.findall(log):
-        h = host.lower()
-        if h == f"{name}.vercel.app" or h.startswith(f"{name}-"):
-            out.append(h)
-    return out
 
 
-def aliased_host(log: str, name: str, stage: int = 6) -> str:
-    """The host the deploy itself reported as THIS project's alias (#23).
-
-    Stage 6 used to fetch a URL CONSTRUCTED from the project name, and for any name over
-    `MAX_ALIAS_LABEL` that URL is permanently absent (Vercel truncates the label), so a
-    perfect deploy read as `HTTP 404 — not live`. The deploy's own `Aliased` line is the
-    truth, and it is already in the log stage 5 receives — zero extra CLI calls, and the
-    same trust boundary `deployed_hosts` uses for the stage-5 binding check.
-
-    Two host shapes are THIS project's alias, judged per host from the same `_URL_HOST`
-    scan `deployed_hosts` uses:
-    * the label equals the name — the intact alias, preferred;
-    * the label is a PREFIX of the name no shorter than `MAX_ALIAS_LABEL - 1` — the
-      cap-truncated alias (35, or 34 after Vercel strips a trailing hyphen the cut left).
-      The floor matters: without it, a stray short host like `design.vercel.app` would
-      read as "a prefix of the name" and point the verifier at somebody else's project.
-
-    The deployment URL (`<name>-<hash>-<team>`) matches neither: its label is LONGER
-    than the name, and a longer string is not a prefix. With the stage-2 cap in place the
-    truncated branch is defense-in-depth — no new over-cap name can be minted — but the
-    cap is a measured constant, not a contract, so the reader stays tolerant.
-
-    Refuses rather than constructing when the log names no alias: verifying a guessed
-    URL is exactly the defect this function replaces.
-    """
-    exact = truncated = None
-    suffix = ".vercel.app"
-    # Anchored to lines that START with the Aliased verdict (8a + Step 11 findings): a
-    # same-name URL in an error or diagnostic line — including one that merely contains
-    # the word, like `Error: project was not aliased to https://…` — is not an alias the
-    # deploy granted. Both observed success forms match: `Aliased to https://…` (56.5.0
-    # capture) and `▲ Aliased https://…` (live 2026-08-12); both START with the word
-    # after at most a marker glyph.
-    aliased_lines = "\n".join(
-        ln for ln in log.splitlines() if _ALIASED_LINE.match(ln))
-    # The truncation Vercel applies is DETERMINISTIC — cut at the cap, strip trailing
-    # hyphens — so the acceptable truncated label is THE truncation, never any prefix
-    # that merely resembles one (Step 11 finding). Empty when the name is at or under
-    # the cap: those names alias intact, so only the exact label can match.
-    expected_cut = name[:MAX_ALIAS_LABEL].rstrip("-") if len(name) > MAX_ALIAS_LABEL else ""
-    for host in _URL_HOST.findall(aliased_lines):
-        h = host.lower()
-        label = h[:-len(suffix)]
-        if label == name:
-            exact = h
-        elif expected_cut and label == expected_cut:
-            truncated = h
-    if exact or truncated:
-        return exact or truncated
-    raise StageError(stage, f"the deploy log reports no alias for {name!r} — refusing "
-                            f"to fetch a URL constructed from the name: for a truncated "
-                            f"domain that guess is permanently absent and a perfect "
-                            f"deploy reads as not-live (#23).")
 
 
 # A reference is only shippable if it names one of these. Step 11 found the real hole: with
@@ -1367,41 +1279,6 @@ def stage_assets(page: str, base: Path, workdir: Path) -> list[str]:
     return staged
 
 
-def deploy(name: str, page: str, workdir: Path, scope: str) -> str:
-    """Deploy the LINTED page, bound to `name` (§2a).
-
-    The bytes written here are the string the gate passed — not a re-read of `--out`.
-    Re-reading reopened the gate: this workspace runs concurrent sessions, and anything
-    that rewrote that file between stage 3 and stage 5 would have shipped unlinted HTML
-    to a public URL.
-
-    `vercel link` runs in this same directory, which is what binds the deploy to the
-    derived project rather than to whatever was last linked.
-    """
-    (workdir / "index.html").write_text(page, encoding="utf-8")
-
-    link = _vercel(["link", "--yes", "--project", name], cwd=workdir, scope=scope)
-    if link.returncode != 0:
-        raise StageError(5, f"`vercel link --project {name}` failed:\n{_log(link)}")
-
-    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir, scope=scope)
-    log = _log(dep)
-    if dep.returncode != 0:
-        # Listing a team and DEPLOYING to it are different permissions, and setup can only
-        # prove the first — the only way to prove a deploy is permitted is to deploy (#9).
-        # So an authorization refusal surfaces here, named, rather than looking like a
-        # configuration mistake the user already fixed.
-        if _looks_like_denied(log):
-            raise StageError(5, f"the Vercel team {scope!r} refused this deploy on "
-                                f"permissions. Setup cannot detect this in advance: it can "
-                                f"prove you may LIST the team, not that you may deploy to "
-                                f"it. Ask an owner of {scope!r} for deploy access.\n{log}")
-        raise StageError(5, f"`vercel deploy --prod` failed (rc={dep.returncode}):\n{log}")
-    if not deployed_hosts(log, name):
-        raise StageError(5, f"the deploy log names no URL belonging to {name} — the "
-                            f"deploy did not go where the link said it would, and "
-                            f"verifying a guessed alias would paper over it:\n{log}")
-    return log
 
 
 # --- stage 6: verification -----------------------------------------------------------
@@ -1414,37 +1291,6 @@ def _title_of(body: str) -> str:
     return html.unescape(m.group(1)).strip() if m else ""
 
 
-def _verify_once(url: str, want: bytes, stage: int, timeout: float) -> None:
-    """One cache-busted fetch. Raises StageError on anything short of byte identity."""
-
-    busted = f"{url}?cb={random.randrange(10 ** 9)}"
-    req = urllib.request.Request(
-        busted, headers={"User-Agent": "publish-doc-verifier", "Cache-Control": "no-cache"})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            status = getattr(resp, "status", None) or resp.getcode()
-            final = resp.geturl()
-            body = resp.read(MAX_FETCH + 1)
-    except urllib.error.HTTPError as e:
-        raise StageError(stage, f"{busted} returned HTTP {e.code} — not live") from e
-    except OSError as e:
-        raise StageError(stage, f"{busted} could not be fetched: {e}") from e
-
-    if status != 200:
-        raise StageError(stage, f"{busted} returned HTTP {status} — not live")
-    if final != busted:
-        raise StageError(stage, f"{busted} redirected to {final}. The URL itself is not "
-                                f"serving the page — a login wall answers 200 too.")
-    if len(body) > MAX_FETCH:
-        raise StageError(stage, f"{busted} returned more than {MAX_FETCH} bytes")
-    if body != want:
-        got = _title_of(body.decode("utf-8", "replace"))
-        title_note = ("its <title> matches, so this is a DIFFERENT version of the same "
-                      "page — most likely a stale deployment"
-                      if got == _title_of(want.decode("utf-8", "replace"))
-                      else f"its <title> is {got!r}")
-        raise StageError(stage, f"{busted} returned 200 but not the bytes just published "
-                                f"({len(body)} bytes vs {len(want)}); {title_note}")
 
 
 # A fresh deploy is not instantly live at its alias. `vercel deploy` prints "Aliased" as
@@ -1455,109 +1301,32 @@ VERIFY_ATTEMPTS = 6
 VERIFY_DELAY = 5.0
 
 
-def verify_live(url: str, expected: str, stage: int = 6, timeout: float = 20.0) -> None:
-    """The URL must serve EXACTLY the bytes just published (AC5).
-
-    A title match is not enough, and that was the gap two reviewers found independently.
-    An updated document normally keeps its title, so a stale prior deployment, or an
-    alias still pointing at the old one, answers 200 with the right title and reads as a
-    successful publish. `vercel project rename` not moving the `<name>.vercel.app` domain
-    is exactly that shape, and it has bitten this account before.
-
-    So the assertion is byte identity against what was deployed. A cache-buster defeats a
-    CDN copy; identity defeats everything else, including a page that merely looks right.
-    Redirects are refused rather than followed — `urlopen` follows them silently, and the
-    documented SSO wall is a 302 to a login page that answers 200.
-
-    The check is retried on a BOUNDED budget, because the alias swap is not instant. It
-    is bounded rather than patient because an alias that never updates is precisely the
-    failure this stage exists to catch — waiting forever would convert the check back
-    into the reassurance it replaced.
-
-    Raises rather than degrading to a plausible-looking value: that degradation is the
-    exact behaviour that makes `page_meta()` in build_index.py unusable for this.
-    """
-    want = expected.encode("utf-8")
-    last = None
-    for attempt in range(VERIFY_ATTEMPTS):
-        if attempt:
-            time.sleep(VERIFY_DELAY)
-        try:
-            _verify_once(url, want, stage, timeout)
-            return
-        except StageError as e:
-            last = e
-    waited = int((VERIFY_ATTEMPTS - 1) * VERIFY_DELAY)
-    raise StageError(stage, f"{url} still does not serve what was just published, after "
-                            f"{VERIFY_ATTEMPTS} attempts over ~{waited}s. "
-                            f"Last: {last.message if last else 'unknown'}")
 
 
 # --- stage 7: the docs index ---------------------------------------------------------
 
-def refresh_index(workdir: Path, workspace_file: Path, scope: str) -> None:
-    """Rebuild the index from `vercel project ls`, deploy it, and prove it went live.
 
-    The generated page is a build artifact: it is written into a temp directory and
-    never into the repository, whose ignore rules exist precisely to keep the shared
-    mutable file — and its lost-row race — from coming back.
 
-    The deploy's return code is not proof. Stage 6 learned that on the document; the
-    index earns the same treatment, so a publish that leaves the index stale — which is
-    the failure that made the index worth deriving at all — cannot report OK.
-    """
-    out = workdir / "index.html"
-    # Both resolved values are handed to the child EXPLICITLY (#9). Left to look them up
-    # again it would re-read the environment and the config file, so a single publish could
-    # render its page under one Vercel account and its index under another — with nothing in
-    # either output saying so.
-    build = subprocess.run(
-        [sys.executable, str(INDEX_SCRIPT), "--out", str(out),
-         "--workspace-file", str(workspace_file), "--vercel-scope", scope],
-        capture_output=True, text=True, check=False)
-    if build.returncode != 0:
-        raise StageError(7, f"could not rebuild the docs index:\n{_log(build)}")
-    try:
-        built = out.read_text(encoding="utf-8")
-    except OSError as e:
-        raise StageError(7, f"the index builder reported success but wrote no page: {e}") from e
-
-    link = _vercel(["link", "--yes", "--project", INDEX_PROJECT], cwd=workdir, scope=scope)
-    if link.returncode != 0:
-        raise StageError(7, f"could not link {INDEX_PROJECT}:\n{_log(link)}")
-    dep = _vercel(["deploy", "--yes", "--prod"], cwd=workdir, scope=scope)
-    if dep.returncode != 0:
-        raise StageError(7, f"could not deploy {INDEX_PROJECT}:\n{_log(dep)}")
-    if not deployed_hosts(_log(dep), INDEX_PROJECT):
-        raise StageError(7, f"the index deploy log names no {INDEX_PROJECT} URL:\n{_log(dep)}")
-
-    # Same #23 rule as stage 6: the index's own deploy just reported its alias — use it.
-    verify_live(f"https://{aliased_host(_log(dep), INDEX_PROJECT, stage=7)}/",
-                built, stage=7)
-
-    # Byte identity proves the page we built is the page that is live. It does NOT prove
-    # the page is CURRENT: two publishers interleaving — A builds N rows, B publishes and
-    # refreshes to N+1, A deploys last — leaves A's stale N-row index passing its own
-    # byte check. The original prose rule was "the page's computed count equals
-    # `vercel project ls` minus one", and it is the only thing that catches that race.
-    try:
-        live_count = len(INDEX.vercel_projects(100, scope=scope))
-    except SystemExit as e:
-        raise StageError(7, f"could not re-list projects to check the index: {e}") from e
-    # An empty listing HERE cannot be an empty account: a deploy just succeeded, so at least
-    # that project exists. It used to pass vacuously (`shown < 0` is never true), which meant
-    # the one check that catches an interleaved publisher was silently disabled by exactly the
-    # untruthful-listing case that made `vercel_projects` stop refusing empties elsewhere.
-    if not live_count:
-        raise StageError(7, "the account lists no projects at all, moments after a deploy "
-                            "succeeded — so the listing cannot be believed, and the index "
-                            "cannot be checked against it. Nothing is lost; re-run.")
-    shown = built.count('<li><a href="https://')
-    if shown < live_count:
-        raise StageError(7, f"the index went live with {shown} pages but the account now "
-                            f"has {live_count} — another publish landed while this one was "
-                            f"building. Re-run to pick it up; nothing is lost.")
-
+# --- RETIRED by #36: the whole Vercel path ----------------------------------------------
+#
+# `_vercel`, `resolve_project`, `deploy`, `deployed_hosts`, `aliased_host`, `verify_live`,
+# `_verify_once` and `refresh_index` lived here. AC1 retires the deploy path, AC4 retires
+# the index refresh. Where each risk went:
+#
+# * `deploy` / `_vercel`          -> `publish()`, the control-API POST.
+# * `resolve_project`             -> nothing. The harness has no project to create or reuse;
+#                                    a name is a registry row, minted by publishing.
+# * `deployed_hosts`/`aliased_host` -> the risk LEFT with Vercel. It existed because Vercel
+#                                    TRUNCATED the domain, so the served host could differ
+#                                    from the name. The harness truncates nothing.
+# * `verify_live` / `_verify_once` -> `build_verify_request`, `fetch_for_verify` and
+#                                    `check_verify_response`, which additionally pin the
+#                                    deployment id and each asset's own content type.
+# * `refresh_index`               -> the harness server-renders the index from its registry
+#                                    snapshot (#34, spec D3). **`index/build_index.py`
+#                                    SURVIVES** as the harness's shared renderer (finding
+#                                    S5); only this invocation and the index's own Vercel
+#                                    deploy go.
 
 # --- the CLI -------------------------------------------------------------------------
 
@@ -1586,9 +1355,6 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--subtitle", default="")
     ap.add_argument("--doc-id", dest="doc_id",
                     help="stable identity for a uat page (its localStorage namespace)")
-    ap.add_argument("--new-project", action="store_true",
-                    help="mint a new Vercel project. Reuse is the default; passing this "
-                         "when the project already exists is itself an error.")
     ap.add_argument("--dry-run", action="store_true",
                     help="render, name and lint, then stop — no network call at all")
     # #151. `--allow-prose` named ONE check honestly until #130 put a second behind it: "this
@@ -1629,14 +1395,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the workspace file --project is checked against. Resolved from "
                          "your configuration when omitted; run setup if nothing is "
                          "configured, because stage 2 refuses rather than guessing.")
-    ap.add_argument("--vercel-scope", default=None,
-                    help="the Vercel team to deploy to. Resolved from your configuration "
-                         "when omitted. There is no built-in default: an unpinned deploy "
-                         "lands in whichever account `vercel switch` last selected.")
+    ap.add_argument("--publish-remote", default=None, dest="publish_remote",
+                    help="the git remote whose GitHub owner/name the manifest pins. Only "
+                         "needed when this branch has no upstream AND there are several "
+                         "GitHub remotes; otherwise it is derived.")
     ap.add_argument("--config", default=None,
                     help="read configuration from this file instead of the default location")
-    ap.add_argument("--limit", type=int, default=100,
-                    help="`vercel project ls` page size (it paginates at 20 without one)")
     return ap
 
 
@@ -1652,9 +1416,6 @@ def main(argv=None) -> int:
     stage = 1   # so an UNEXPECTED failure is still attributed to the stage it happened in
 
     try:
-        # Resolved ONCE, before stage 1, and threaded through every stage that needs it —
-        # including the stage-7 CHILD PROCESS (#9). A helper that resolved for itself could
-        # answer for a different Vercel account than the page it is indexing.
         config_path = CONFIG.config_file(cli_value=args.config)
         workspace = CONFIG.workspace_file(cli_value=args.workspace_file,
                                           config_path=config_path)
@@ -1668,7 +1429,7 @@ def main(argv=None) -> int:
                       style=style, doc_id=args.doc_id, vdl=pack,
                       telemetry=load_telemetry(Path(args.telemetry) if args.telemetry else None),
                       section_chips=not args.no_section_chips)
-        print(f"publish_doc: 1/7 rendered {out_path} ({style} template, "
+        print(f"publish_doc: 1/6 rendered {out_path} ({style} template, "
               f"{pack['origin']} palette {pack['accent']['light']})")
 
         stage = 2
@@ -1678,7 +1439,7 @@ def main(argv=None) -> int:
         workspace = CONFIG.require_workspace_file(cli_value=args.workspace_file,
                                                   config_path=config_path)
         name = derive_name(args.project, args.purpose, args.ref, workspace)
-        print(f"publish_doc: 2/7 name {name}")
+        print(f"publish_doc: 2/6 name {name}")
 
         stage = 3
         for note in source_gate(Path(args.md),
@@ -1688,46 +1449,85 @@ def main(argv=None) -> int:
         gate(page, skip_component_checks=args.skip_component_checks)
         # Said out loud, every run. A skipped check that reports nothing is how a page with
         # no components reaches a public URL looking like it passed.
-        print("publish_doc: 3/7 lint gate passed"
+        print("publish_doc: 3/6 lint gate passed"
               + (" (--skip-component-checks: BOTH component checks were SKIPPED)"
                  if args.skip_component_checks else ""))
 
+        # Staging proves every referenced asset can ship. No network, no git.
+        with tempfile.TemporaryDirectory(prefix="publish-doc-") as tmp:
+            staged = stage_assets(page, Path(args.md).parent, Path(tmp))
+
         if args.dry_run:
-            print("publish_doc: --dry-run, stopping before the first network call")
+            # **AC5: `--dry-run` behavior is unchanged.** Nothing below this line runs.
+            #
+            # An earlier revision of this rewrite ran stage 4a provenance here, on the
+            # reasoning that it touches no network once the fetch is skipped. That was
+            # wrong, and an existing first-run test caught it: provenance needs a git
+            # REPOSITORY, so a dry run began failing on documents that render perfectly —
+            # a behavior change on the one flag whose criterion says it must not change.
+            #
+            # Provenance is about PUBLISHING. A dry run stops before publishing, so it has
+            # nothing to establish. This also settles finding N10 outright: a dry run
+            # performs no git at all, so there is no fetch to skip.
+            print(f"publish_doc: --dry-run, stopping before the first network call "
+                  f"({len(staged)} asset(s) would ship)")
             return 0
 
         stage = 4
-        # Deferred to here on purpose: rendering, naming and linting all work without a
-        # Vercel account, and `--dry-run` returns above. A team is required only once a
-        # network call is about to target one.
-        scope = CONFIG.require_vercel_scope(cli_value=args.vercel_scope,
-                                            config_path=config_path)
-        reused = resolve_project(name, new_project=args.new_project, scope=scope)
-        print(f"publish_doc: 4/7 {'reusing' if reused else 'creating'} {name}")
+        # #36 stage 4a. The harness fetches blobs from GITHUB, so the page must already be
+        # committed and pushed, and the publish pins that commit.
+        root = Path(assert_one_repository(Path(args.md), out_path))
+        remote, repo = select_remote(root, args.publish_remote)
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], root).stdout.strip()
+        assert_head_reachable(root, remote, branch, fetch=True)
+        commit_sha = _git(["rev-parse", "HEAD"], root).stdout.strip()
+        print(f"publish_doc: 4/6 provenance {repo}@{commit_sha[:12]} via {remote}")
 
         stage = 5
-        with tempfile.TemporaryDirectory(prefix="publish-doc-") as tmp:
-            # #121: assets go in BEFORE the deploy, because a deploy ships the directory. Any
-            # reference that cannot ship safely raises here, so nothing is published — a page
-            # with a hole in it is the defect, not the fallback.
-            assets = stage_assets(page, Path(args.md).parent, Path(tmp))
-            if assets:
-                print(f"publish_doc: 5/7 packaging {len(assets)} asset(s): "
-                      f"{', '.join(assets)}")
-            log = deploy(name, page, Path(tmp), scope)
-        print(f"publish_doc: 5/7 deployed\n{log.strip()}")
+        manifest = build_manifest(root=root, page_path=out_path, staged=staged,
+                                  asset_base=Path(args.md).parent, name=name,
+                                  repo=repo, commit_sha=commit_sha)
+        assert_manifest_covers(staged, [a["url_path"] for a in manifest["assets"]
+                                        if a["url_path"] != "/index.html"])
+        control = control_base(os.environ)
+        assert_bearer_destination(control)
+        edge = public_base(os.environ)
+        access = assert_credentials(os.environ, edge=edge is not None)
+        token = os.environ["DOC_HARNESS_PUBLISH_TOKEN"].strip()
+
+        previous = read_active(control, name, token)
+        deployment_id = publish(control, manifest, previous, token)
+        print(f"publish_doc: 5/6 published deployment {deployment_id} "
+              f"({len(manifest['assets'])} asset(s), was {previous})")
 
         stage = 6
-        # The domain the deploy REPORTED, never one constructed from the name (#23).
-        url = f"https://{aliased_host(log, name)}/"
-        verify_live(url, page)
-        print(f"publish_doc: 6/7 verified live — {url} serves exactly what was linted")
+        want = {a["url_path"]: (root / a["repo_path"]).read_bytes()
+                for a in manifest["assets"]}
+        for url_path, body in want.items():
+            req = build_verify_request(control, url_path, deployment_id,
+                                       name=name, access=None)
+            check_verify_response(fetch_for_verify(req), want=body,
+                                  deployment_id=deployment_id, url_path=url_path)
+        print(f"publish_doc: 6/6 origin verified — {len(want)} asset(s) serve exactly "
+              f"what was committed")
 
-        stage = 7
-        with tempfile.TemporaryDirectory(prefix="publish-index-") as tmp:
-            refresh_index(Path(tmp), workspace, scope)
-        print(f"publish_doc: 7/7 index refreshed and verified — "
-              f"https://{INDEX_PROJECT}.vercel.app")
+        if edge is None:
+            print("publish_doc: edge half SKIPPED — DOC_HARNESS_PUBLIC_BASE is not set, so "
+                  "nothing past the Cloudflare edge was checked. This is NOT a pass.")
+            return EXIT_EDGE_SKIPPED
+        edge_base = edge.replace("<name>", name)
+        for url_path, body in want.items():
+            req = build_verify_request(edge_base, url_path, deployment_id,
+                                       name=name, access=access)
+            check_verify_response(fetch_for_verify(req), want=body,
+                                  deployment_id=deployment_id, url_path=url_path)
+        url = f"{edge_base}/"
+        print(f"publish_doc: 6/6 edge verified — {url}")
+    except DeclaredStateError as e:
+        # Not a stage failure: a state the operator declared by leaving a variable unset.
+        # It carries its own code precisely so a caller can tell the two apart.
+        print(f"publish_doc: {e.message}", file=sys.stderr)
+        return e.code
     except CONFIG.ConfigError as e:
         # A configuration refusal is a stage failure with a legible sentence, never a
         # traceback (#9 AC5). The stage counter says WHERE it stopped, so the exit code

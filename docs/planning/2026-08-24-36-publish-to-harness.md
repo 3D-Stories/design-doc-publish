@@ -415,15 +415,22 @@ does not define a boundary. So:
 | Operation | Under `--dry-run` |
 | --- | --- |
 | render, source gate, derive name, lint | RUN (unchanged) |
-| stage 4a repo/blob/reachability checks | RUN, **except** the `git fetch`, which is SKIPPED |
+| stage assets | RUN (unchanged — it touches no network and no git) |
+| stage 4a repo/blob/reachability checks | **never** |
 | `GET /v1/deployments/<name>` | never |
 | `POST /v1/deployments` | never |
 | stage 6, either half | never |
 
-Skipping the fetch keeps dry-run offline, which is what "unchanged" has to mean for a flag whose
-whole point is that it touches nothing. Reachability is then checked against the remote-tracking
-ref as it already stands, and says so in its output. Three assertions cover this directly, rather
-than relying on the legacy tests: no subprocess `fetch`, and no HTTP call of either kind.
+**Corrected during implementation, and the correction matters.** This table first said stage 4a
+would run under dry-run with only the `git fetch` skipped, on the reasoning that the rest touches
+no network. That was wrong, and an existing first-run test caught it: provenance needs a git
+REPOSITORY, so a dry run started failing on documents that render perfectly — a behavior change on
+the one flag whose acceptance criterion says it must not change.
+
+Provenance is about PUBLISHING, and a dry run stops before publishing, so it has nothing to
+establish. Moving stage 4a below the dry-run return also settles finding N10 outright: a dry run
+performs no git at all, so there is no fetch to skip. Asserted directly: no subprocess `fetch`,
+no git invocation, and no HTTP call of either kind.
 
 ## This child does not close #36
 

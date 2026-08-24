@@ -5,6 +5,24 @@ the new contract in its own file means the retirement churn and the new coverage
 obscure each other in review.
 
 Design: docs/planning/2026-08-24-36-publish-to-harness.md (revision 4).
+
+## Two whole files retired into this one
+
+A deleted test must say where its risk went.
+
+* **`test_scope_threading.py`** (410 lines) existed to prove `--vercel-scope` was threaded
+  into every account-targeting call, so an unpinned deploy could not land in whichever
+  account `vercel switch` last selected. **That risk left with Vercel**: there is no
+  account to target and no scope to thread. The adjacent risk that survives — a credential
+  reaching a destination nobody validated — is covered here by
+  `TestACredentialNeverReachesAnUnvalidatedDestination`, and it is a stronger check than
+  the one it replaces, because it bounds the DESTINATION rather than a CLI flag.
+
+* **`test_vercel_timeout.py`** (82 lines) proved both Vercel helpers passed a timeout and
+  that a timeout failed the stage rather than being diagnosed as something else. **That
+  risk did NOT leave** — an unbounded call still hangs the CLI — so it is replaced here by
+  `TestTheBoundedCalls`, plus the no-auto-retry assertion in `TestThePublishCall`, which
+  the old file had no equivalent of.
 """
 import sys
 from pathlib import Path
@@ -804,3 +822,171 @@ class TestEverySameOriginResourceIsDeclared:
             publish_doc.assert_manifest_covers(["style.css"],
                                                ["/style.css", "/ghost.css"])
         assert "ghost.css" in e.value.message
+
+
+# --------------------------------------------------------------------------- T6, AC1/AC4
+
+class TestTheManifestIsBuiltFromCommittedBytes:
+    """The inversion #36 is really about: the harness does not accept rendered bytes. It
+    takes a manifest naming a repo, a commit and per-asset blob ids, then fetches every
+    blob FROM GITHUB. So the manifest describes what is COMMITTED, not what is in hand."""
+
+    def _repo(self, tmp_path):
+        import subprocess
+        root = tmp_path / "repo"
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "d.html").write_text("<html>page</html>", encoding="utf-8")
+        (root / "docs" / "s.css").write_text("a{}", encoding="utf-8")
+        for argv in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(["git", "-C", str(root), *argv], check=True,
+                           capture_output=True)
+        return root
+
+    def test_every_declared_field_matches_the_committed_object(self, tmp_path):
+        import hashlib
+        import subprocess
+        root = self._repo(tmp_path)
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html",
+            staged=["s.css"], asset_base=root / "docs",
+            name="example-design-12", repo="o/r", commit_sha=head)
+
+        assert m["name"] == "example-design-12" and m["repo"] == "o/r"
+        assert m["commit_sha"] == head
+        assert m["entry_path"] == "/index.html"
+        by_url = {a["url_path"]: a for a in m["assets"]}
+        assert set(by_url) == {"/index.html", "/s.css"}
+
+        entry = by_url["/index.html"]
+        raw = (root / "docs" / "d.html").read_bytes()
+        assert entry["repo_path"] == "docs/d.html"
+        assert entry["size"] == len(raw)
+        assert entry["sha256"] == hashlib.sha256(raw).hexdigest()
+        blob = subprocess.run(["git", "-C", str(root), "hash-object", str(root / "docs" / "d.html")],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        assert entry["blob_id"] == blob
+
+    def test_the_blob_id_is_gits_own_object_id(self, tmp_path):
+        """Probed 2026-08-24 and pinned here: the harness looks blobs up by this id, so a
+        sha256 in its place would fetch nothing."""
+        from harness.control import git_blob_id
+        root = self._repo(tmp_path)
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html", staged=[],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        assert m["assets"][0]["blob_id"] == git_blob_id(
+            (root / "docs" / "d.html").read_bytes())
+
+    def test_the_built_manifest_satisfies_the_local_validator(self, tmp_path):
+        root = self._repo(tmp_path)
+        publish_doc.validate_manifest(publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html", staged=["s.css"],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40))
+
+    def test_no_asset_carries_a_content_type(self, tmp_path):
+        """The harness derives it and a sent one is a 422. Checked against the built
+        OUTPUT, not the source text: the docstring naming the field in order to explain
+        its absence is exactly what should be there."""
+        root = self._repo(tmp_path)
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html", staged=["s.css"],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        assert all("content_type" not in a for a in m["assets"])
+
+    def test_an_asset_outside_the_repository_is_refused(self, tmp_path):
+        root = self._repo(tmp_path)
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.build_manifest(
+                root=root, page_path=tmp_path / "elsewhere.html", staged=[],
+                asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+
+
+class TestTheVercelPathIsGone:
+    """AC1 and AC4. Each of these is a surface a caller could still reach."""
+
+    @pytest.mark.parametrize("flag", ["--new-project", "--vercel-scope", "--limit"])
+    def test_the_retired_flags_are_rejected(self, flag):
+        flags = {o for a in publish_doc.build_parser()._actions for o in a.option_strings}
+        assert flag not in flags
+
+    @pytest.mark.parametrize("symbol", ["refresh_index", "resolve_project", "deploy",
+                                        "deployed_hosts", "aliased_host", "_vercel"])
+    def test_the_retired_symbols_are_gone(self, symbol):
+        assert not hasattr(publish_doc, symbol), f"{symbol} survived"
+
+    def test_the_script_never_shells_out_to_vercel(self):
+        import ast
+        tree = ast.parse((SCRIPTS / "publish_doc.py").read_text(encoding="utf-8"))
+        literals = [n.value for n in ast.walk(tree)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        assert [s for s in literals if s.strip() == "vercel"] == []
+
+    def test_build_index_still_imports(self):
+        """Finding S5. `index/build_index.py` SURVIVES as the harness's shared renderer;
+        only publish_doc's invocation of it and the index's Vercel deploy go."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "_bi", SCRIPTS.parent / "index" / "build_index.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        assert mod is not None
+
+
+class TestTheUrlPathIsCanonicallyEncoded:
+    """The #34 boundary learning, and the easiest thing in this child to lose:
+    `stage_assets` resolves a percent-encoded reference back to the REAL filename, so the
+    staged name carries a literal space. Prefixing "/" and sending that is a 422."""
+
+    def _repo(self, tmp_path):
+        import subprocess
+        root = tmp_path / "r"
+        (root / "docs").mkdir(parents=True)
+        (root / "docs" / "d.html").write_text("<html>p</html>", encoding="utf-8")
+        (root / "docs" / "my diagram.png").write_bytes(b"\x89PNG")
+        (root / "docs" / "a+b(c).css").write_text("a{}", encoding="utf-8")
+        for argv in (["init", "-q"], ["add", "-A"],
+                     ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x"]):
+            subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True)
+        return root
+
+    def test_a_space_is_encoded_in_the_url_path_but_not_the_repo_path(self, tmp_path):
+        root = self._repo(tmp_path)
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html", staged=["my diagram.png"],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        a = [x for x in m["assets"] if x["url_path"] != "/index.html"][0]
+        assert a["url_path"] == "/my%20diagram.png"
+        assert a["repo_path"] == "docs/my diagram.png", "git holds the real name"
+
+    def test_every_character_the_harness_refuses_is_encoded(self, tmp_path):
+        root = self._repo(tmp_path)
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html", staged=["a+b(c).css"],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        a = [x for x in m["assets"] if x["url_path"] != "/index.html"][0]
+        assert not (publish_doc._NEEDS_ENCODING & set(a["url_path"]))
+
+    def test_the_built_manifest_survives_its_own_publish_check(self, tmp_path):
+        """The regression that matters: publish() refuses an unencoded url_path, so a
+        builder that forgets to encode makes every such document unpublishable."""
+        root = self._repo(tmp_path)
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html",
+            staged=["my diagram.png", "a+b(c).css"],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        http = FakeHTTP({("POST", "/v1/deployments"): (201, {"deployment_id": 9})})
+        assert publish_doc.publish(BASE, m, None, "s3cret", opener=http) == 9
+
+    def test_the_harness_accepts_what_the_builder_produces(self, tmp_path):
+        """Parity against the real validator rather than against my reading of it."""
+        from harness.routing import canonical_url_path
+        root = self._repo(tmp_path)
+        m = publish_doc.build_manifest(
+            root=root, page_path=root / "docs" / "d.html",
+            staged=["my diagram.png", "a+b(c).css"],
+            asset_base=root / "docs", name="n", repo="o/r", commit_sha="a" * 40)
+        for a in m["assets"]:
+            canonical_url_path(a["url_path"])     # raises PathError if not canonical
