@@ -37,8 +37,15 @@ def app(tmp_path):
     cache = BlobCache(str(tmp_path / "c"), max_bytes=100000); cache.initialize()
     src = FakeGitHub(
         trees={(REPO, COMMIT): [{"path": "i.html", "type": "blob", "mode": "100644",
-                                 "sha": BLOB, "size": len(PAGE)}]},
-        blobs={(REPO, BLOB): PAGE})
+                                 "sha": BLOB, "size": len(PAGE)}],
+               # The index WALKS the repositories now, so the fixture carries one with a
+               # document in it. A registry publish no longer puts anything on the index.
+               ("3D-Stories/rawgentic", "r" * 40): [
+                   {"path": "docs/planning/2026-08-19-unified-roadmap.html", "type": "blob",
+                    "mode": "100644", "sha": BLOB, "size": len(PAGE)}]},
+        blobs={(REPO, BLOB): PAGE, ("3D-Stories/rawgentic", BLOB): PAGE},
+        commits={("3D-Stories/rawgentic", "HEAD"): "r" * 40},
+        repos=["rawgentic"])
     yield make_app(cfg=CFG, registry=reg, cache=cache, source=src)
     reg.close(); cache.close()
 
@@ -93,10 +100,11 @@ class TestDispatch:
         assert body == PAGE
 
     def test_the_index_host_renders(self, app):
-        publish(app)
         cap, body = call(app, f"index.{ZONE}", "/")
         assert cap["status"].startswith("200")
         assert b"3dstories" in body
+        # The listing comes from the REPOSITORY WALK, not from anything published.
+        assert b"2026-08-19-rawgentic-unified-roadmap" in body
 
     def test_the_index_is_served_at_index_on_the_zone(self, app):
         # `resolve_host` accepts exactly ONE label before the configured zone. With the zone at
@@ -104,7 +112,6 @@ class TestDispatch:
         # application narrowed to that wildcard protected nothing this service serves. The zone
         # moved under `docs.` and the index label became `index`, which is the one pair that
         # puts the index inside the protected wildcard.
-        publish(app)
         cap, body = call(app, "index.3dstories.ca", "/")
         assert cap["status"].startswith("200")
         assert b"3dstories" in body

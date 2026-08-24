@@ -80,10 +80,15 @@ def _rows_for(snapshot: dict, bi, zone: str) -> list[dict]:
 
 
 def render_index(registry: Registry, *, zone: str = "3dstories.ca",
-                 if_none_match: str | None = None) -> Response:
+                 if_none_match: str | None = None, snapshot: dict | None = None) -> Response:
     # ONE snapshot, so the ETag and the body cannot describe different generations
     # (Step 11 finding F4). The 304 decision is made from the same read as the body.
-    snapshot = registry.index_snapshot()
+    #
+    # `snapshot` is supplied by the caller once documents stopped being published: a
+    # convention-resolved document has no registry row, so the registry-derived listing went
+    # blank. The SHAPE is identical either way, which is why nothing below this line changed.
+    if snapshot is None:
+        snapshot = registry.index_snapshot()
     etag = f'"gen-{snapshot["generation"]}"'
     if if_none_match == etag:
         return Response(304, {"ETag": etag}, b"")

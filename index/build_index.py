@@ -638,6 +638,11 @@ def render(rows: list[dict], stamp: str, now: datetime, sig: str,
     def slug(g: str) -> str:
         return re.sub(r"[^a-z0-9]+", "-", g.lower()).strip("-")
 
+    # An EMPTY listing is a real state: an account with no documents yet, or a credential that
+    # cannot read any repository. Found live 2026-08-24, when the index answered 500 because
+    # `order[0]` below indexed an empty list. The accent falls back to a defined token rather
+    # than to a crash — the page then renders and says, truthfully, that there is nothing here.
+    accent = slug(order[0]) if order else "none"
     tokens = "\n".join(
         f"  --l-{slug(g)}:{colors[g][0]};" for g in order)
     tokens_light = "\n".join(
@@ -739,7 +744,7 @@ a:focus-visible,input:focus-visible,button:focus-visible{{outline:2px solid var(
 header{{padding:34px clamp(18px,5vw,54px) 22px;border-bottom:1px solid var(--hair)}}
 .eyebrow{{font:600 11px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.22em;text-transform:uppercase;color:var(--dim)}}
 h1{{font-size:clamp(30px,5.5vw,52px);font-weight:800;letter-spacing:-.03em;line-height:1.05;margin:10px 0 6px}}
-h1 .tick{{display:inline-block;width:.45em;height:.45em;border-radius:50%;background:var(--l-{slug(order[0])});margin:0 .12em 0 .06em}}
+h1 .tick{{display:inline-block;width:.45em;height:.45em;border-radius:50%;background:var(--l-{accent});margin:0 .12em 0 .06em}}
 .sub{{color:var(--dim);max-width:60ch}}
 .hud{{display:flex;flex-wrap:wrap;gap:18px;align-items:center;margin-top:18px}}
 .stat{{font:700 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.06em;color:var(--dim)}}
