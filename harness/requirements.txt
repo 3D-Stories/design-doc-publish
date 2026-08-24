@@ -1,0 +1,11 @@
+# Runtime requirements for the doc-harness CONTAINER only.
+#
+# The test gate never installs this file and never imports waitress: `harness/app.py` is a
+# plain PEP 3333 callable with no non-stdlib import, and `harness/__main__.py` is the only
+# module that needs a server. That separation is why adding a runtime dependency here does
+# not add one to `pytest scripts/tests/ tests/ -q`.
+#
+# Pinned exactly. Measured 2026-08-24: waitress 3.0.2 is pure Python (zero compiled
+# extensions) and has ZERO transitive dependencies, which is why it was chosen over a
+# framework — see docs/planning/2026-08-24-34-doc-harness-service.md, approach A1.
+waitress==3.0.2

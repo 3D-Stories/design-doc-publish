@@ -1,0 +1,29 @@
+# The doc-harness stack. Cloudflare (the tunnel, DNS and Access) is issue #35 and is
+# deliberately absent here: #34 is runnable and testable locally with no Cloudflare
+# dependency, which is its whole scope.
+services:
+  harness:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # EXACTLY ONE replica. The cache's LRU accounting and single-flight map are
+    # process-local, so a second writer on one volume would silently disagree about what is
+    # cached. The process takes an exclusive flock on the cache volume and refuses to start
+    # if it cannot, so this is enforced rather than merely documented.
+    deploy:
+      replicas: 1
+    # No published ports. The harness is reachable only from the compose network, which is
+    # what keeps the slow-client limitation recorded in the design out of reach until #35
+    # puts Cloudflare in front of it.
+    environment:
+      DOC_HARNESS_GITHUB_TOKEN: ${DOC_HARNESS_GITHUB_TOKEN:?set DOC_HARNESS_GITHUB_TOKEN}
+      DOC_HARNESS_PUBLISH_TOKEN: ${DOC_HARNESS_PUBLISH_TOKEN:?set DOC_HARNESS_PUBLISH_TOKEN}
+      DOC_HARNESS_ZONE: ${DOC_HARNESS_ZONE:-3dstories.ca}
+    volumes:
+      - registry:/var/lib/doc-harness      # durable: the registry must survive
+      - blobcache:/var/cache/doc-harness   # disposable: rebuilds from GitHub by design
+
+volumes:
+  registry:
+  blobcache:
