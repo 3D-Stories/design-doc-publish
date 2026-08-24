@@ -691,7 +691,13 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
         run.journal(str(row["inventory"]["name"]),
                     {"phase": "map", "reason": row["reason"], "detail": row["detail"][:400]})
     rows = enforce_name_uniqueness(rows)
-    mapping = {"rows": rows, "inventory_digest": snapshot.get("digest")}
+    mapping = {"rows": rows, "inventory_digest": snapshot.get("digest"),
+               # The selection is RECORDED, so the report can tell "sampled out" from "a row went
+               # missing". Without it every absent row read as a deliberate sample, which would let
+               # a truncated or corrupt mapping satisfy the completeness assertion silently.
+               "selection": {"limit": (int(limit) if limit is not None else None),
+                             "rule": "the first N of the snapshot in its recorded order",
+                             "snapshot_rows": len(snapshot.get("rows") or [])}}
     mapping["digest"] = digest(rows)
     run.write_json("mapping.json", mapping)
     return rows
@@ -1057,8 +1063,15 @@ def stage_rows(rows, *, run: RunDir, control, opener, repos: dict, run_id: str,
     # defeated by an aliasing bug.
     rows = [json.loads(json.dumps(r)) for r in rows]
     plan = []
+    stage_halted = False
     for row in rows:
         if row.get("reason"):
+            continue
+        if stage_halted:
+            row["reason"] = "final_verification_failed"
+            row["detail"] = ("not attempted: an earlier row's staging publish served bytes that "
+                             "did not match its target, which is a harness defect rather than "
+                             "drift, so staging stopped")
             continue
         name = row["harness_name"]
         try:
@@ -1104,6 +1117,11 @@ def stage_rows(rows, *, run: RunDir, control, opener, repos: dict, run_id: str,
             row["reason"], row["detail"] = _classify_control_error(exc)
         except RowError as exc:
             row["reason"], row["detail"] = exc.reason, exc.detail
+            # The design says a served-bytes mismatch is worth stopping the campaign over, because
+            # it means the harness did not serve what it was given — a defect in the thing every
+            # later row depends on. Recording it per row and carrying on contradicted that.
+            if exc.reason == "final_verification_failed":
+                stage_halted = True
         finally:
             run.journal(name, {"phase": "stage", "state": "done",
                                "reason": row.get("reason"), "detail": (row.get("detail") or "")[:300]})
@@ -1186,13 +1204,17 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
             "is not evidence about the content beside it")
     require_execute(execute=execute, expected=recomputed, what="activation plan")
     sealed_mapping = plan.get("mapping_digest")
-    if sealed_mapping and sealed_mapping != mapping.get("digest"):
+    # RECOMPUTED from the rows, like every other digest comparison in this file. Comparing against
+    # the string stored inside the editable mapping file is the same defect a third time, and the
+    # reviewer was right to keep pointing at it.
+    mapping_now = digest(mapping.get("rows") or [])
+    if sealed_mapping and sealed_mapping != mapping_now:
         raise Refused(
             f"the plan was sealed against mapping {str(sealed_mapping)[:12]} and the mapping on "
-            f"disk is {str(mapping.get('digest'))[:12]}: re-run `stage` rather than activating "
-            "against a mapping nobody compared")
+            f"disk hashes to {mapping_now[:12]}: re-run `stage` rather than activating against a "
+            "mapping nobody compared")
     by_name = {r.get("harness_name"): r for r in (mapping.get("rows") or [])}
-    expired = int(plan.get("expires_at", 0)) < int(time.time())
+    expires_at = int(plan.get("expires_at", 0))
     halted = False
     out = []
     planned = plan.get("rows") or []
@@ -1214,7 +1236,10 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
             continue
         published_ok = False
         try:
-            if expired:
+            # Checked PER ROW. Evaluated once before the loop, a run that started just inside the
+            # window could publish every later production name long after the plan expired, which
+            # is exactly what a short-lived plan is supposed to prevent.
+            if expires_at < int(time.time()):
                 raise RowError("plan_expired",
                                "the activation plan's expiry has passed; re-run `stage` so the "
                                "comparison is re-taken against the page as it is now")
@@ -1287,6 +1312,13 @@ def activate_rows(plan: dict, *, mapping: dict, run: RunDir, control, opener, re
         except RowError as exc:
             result["reason"] = exc.reason
             result["detail"] = exc.detail
+            # Same rule as the ControlError path: once the production POST has committed, ANY later
+            # failure leaves an unverified name live. `_git_bytes` raising here — a local object
+            # gone missing between the publish and the compare — was recorded and stepped over.
+            if published_ok:
+                halted = True
+                result["detail"] += (" — the production POST had already committed when this "
+                                     "failed, so activation stops here")
         run.journal(name, {"phase": "activate", "state": "done", "outcome": result["outcome"],
                            "reason": result["reason"], "detail": result["detail"][:300]})
         out.append(result)
@@ -1426,6 +1458,25 @@ def build_report(run: RunDir) -> dict:
               "makes the acceptance criterion checkable rather than claimed.")
 
     not_attempted = [n for n in snapshot_names if n not in mapped]
+    # Assert the sample selection ACCOUNTS for every absent row. A row missing for any other
+    # reason — a deleted mapping entry, a truncated file — must not be laundered into
+    # "not attempted", which reads as deliberate.
+    selection = mapping.get("selection") or {}
+    limit = selection.get("limit")
+    if limit is not None:
+        expected_absent = [n for n in snapshot_names[int(limit):]]
+        unexplained = sorted(set(not_attempted) - set(expected_absent))
+        if unexplained:
+            raise Refused(
+                "the report refuses: these rows are inside the sampled range and yet absent from "
+                "the mapping — " + ", ".join(unexplained)
+                + ". `not_attempted` means SAMPLED OUT, and calling a lost row deliberate is the "
+                  "one thing the completeness assertion exists to prevent.")
+    elif not_attempted:
+        raise Refused(
+            "the report refuses: the mapping records no selection limit, so every snapshot row "
+            f"should have been processed, and {len(not_attempted)} are absent. Re-run `map`, or "
+            "record the selection that explains them.")
     staging = []
     for entry in run.journal_entries():
         record = entry.get("record") or {}

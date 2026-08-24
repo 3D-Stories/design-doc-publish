@@ -1170,13 +1170,16 @@ class ReportTests(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.run = bf.RunDir(self.tmp / "run")
 
-    def _write(self, *, snapshot_names, mapping_rows, outcomes):
+    def _write(self, *, snapshot_names, mapping_rows, outcomes, limit=None):
         rows = [{"id": f"prj_{n}", "name": n, "latestProductionUrl": f"https://{n}/",
                  "updatedAt": 1} for n in snapshot_names]
         self.run.write_json("inventory.json", {
             "rows": rows, "digest": bf.digest(rows), "converged": True, "cutoff": False,
             "walks": 2, "started_at": 100, "completed_at": 200})
-        self.run.write_json("mapping.json", {"rows": mapping_rows,
+        selection = {"limit": (len(mapping_rows) if limit is None else limit),
+                     "rule": "the first N of the snapshot in its recorded order",
+                     "snapshot_rows": len(snapshot_names)}
+        self.run.write_json("mapping.json", {"rows": mapping_rows, "selection": selection,
                                              "digest": bf.digest(mapping_rows)})
         self.run.write_json("outcomes.json", {"rows": outcomes, "halted": False})
 
@@ -1208,6 +1211,18 @@ class ReportTests(unittest.TestCase):
         summary = bf.build_report(self.run)
         self.assertEqual(1, summary["reasons"]["harness_fetch_denied"])
         self.assertEqual(1, summary["processed"])
+
+    def test_a_row_lost_from_the_mapping_is_NOT_laundered_into_not_attempted(self):
+        """`not_attempted` means sampled out. A lost row calling itself deliberate is the one
+        thing the completeness assertion exists to prevent."""
+        self._write(snapshot_names=["a", "b", "c"],
+                    mapping_rows=[{"harness_name": "a", "reason": None}],
+                    outcomes=[{"name": "a", "outcome": "live", "reason": None, "detail": ""}],
+                    limit=2)          # b was inside the sampled range and is missing
+        with self.assertRaises(bf.Refused) as caught:
+            bf.build_report(self.run)
+        self.assertIn("inside the sampled range", str(caught.exception))
+        self.assertIn("b", str(caught.exception))
 
     def test_a_corrupt_outcome_paired_with_a_known_reason_is_still_refused(self):
         self._write(snapshot_names=["a"],
@@ -1274,7 +1289,9 @@ class ReportTests(unittest.TestCase):
         self.run.write_json("inventory.json", {
             "rows": rows, "digest": bf.digest(rows), "converged": False, "cutoff": True,
             "walks": 3, "started_at": 100, "completed_at": 260})
-        self.run.write_json("mapping.json", {"rows": [], "digest": bf.digest([])})
+        self.run.write_json("mapping.json", {
+            "rows": [], "digest": bf.digest([]),
+            "selection": {"limit": 0, "rule": "nothing sampled", "snapshot_rows": 1}})
         self.run.write_json("outcomes.json", {"rows": [], "halted": False})
         summary = bf.build_report(self.run)
         self.assertTrue(summary["cutoff"])
