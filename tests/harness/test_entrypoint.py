@@ -1,6 +1,7 @@
 """The container surface: the entry point, the cache lock, and the compose declarations."""
 import pathlib
 import os
+import re
 import subprocess
 import sys
 
@@ -94,6 +95,67 @@ class TestComposeAndDockerfile:
         lines = [l.strip() for l in text.splitlines()
                  if l.strip() and not l.strip().startswith("#")]
         assert lines == ["waitress==3.0.2"], "one exactly-pinned runtime dependency"
+
+    # ---- the image must carry what the code loads at RUNTIME, not only what it imports ----
+    # Found live on 2026-08-24: every request to the derived index returned 500. The image
+    # copied `harness/` and `index/` only, and `index/build_index.py` loads two modules out of
+    # its SIBLING `scripts/` directory at call time. A missing sibling is invisible to an import
+    # check, because nothing imports it — the failure appears only when a page actually renders,
+    # which no test did.
+    #
+    # The requirement is DERIVED from the code rather than listed here, so the next sibling load
+    # site is covered without anyone remembering to extend a list. It asserts that each loaded
+    # FILE reaches `/app/<dir>/`, not that one particular COPY form is used: copying the whole
+    # directory and copying the two modules are both correct, and the image deliberately takes
+    # the narrow one so the publisher toolchain and its tests stay out of a serving container.
+
+    _SIBLING_LOAD = re.compile(
+        r'root\s*=\s*Path\(__file__\)\.resolve\(\)\.parent\.parent\s*/\s*"([^"]+)"'
+        r'\s*\n\s*path\s*=\s*root\s*/\s*"([^"]+)"')
+
+    def _runtime_sibling_loads(self):
+        """(directory, filename) pairs loaded relative to the app root, one level down.
+
+        Restricted to files sitting DIRECTLY inside a copied top-level package, where
+        `parent.parent` is the application root. A file nested deeper computes a different
+        root, so including one here would assert the wrong destination.
+        """
+        found = set()
+        for package in ("harness", "index"):
+            directory = os.path.join(REPO_ROOT, package)
+            for name in sorted(os.listdir(directory)):
+                if not name.endswith(".py"):
+                    continue
+                found.update(self._SIBLING_LOAD.findall(
+                    open(os.path.join(directory, name)).read()))
+        return found
+
+    @staticmethod
+    def _copy_lines(text):
+        """Every COPY as (sources, destination). Line continuations are joined first."""
+        joined = text.replace("\\\n", " ")
+        out = []
+        for line in joined.splitlines():
+            parts = line.strip().split()
+            if len(parts) >= 3 and parts[0] == "COPY" and not parts[1].startswith("--"):
+                out.append((parts[1:-1], parts[-1]))
+        return out
+
+    def test_every_file_loaded_at_runtime_is_copied_into_the_image(self):
+        needed = self._runtime_sibling_loads()
+        # Without this, a drifted pattern would match nothing and the test would pass vacuously.
+        assert needed, "the scan found no sibling loads at all — the pattern has drifted"
+        copies = self._copy_lines(open(os.path.join(REPO_ROOT, "Dockerfile")).read())
+        for directory, filename in sorted(needed):
+            destination = "/app/%s/" % directory
+            satisfied = any(
+                dest.rstrip("/") == destination.rstrip("/")
+                and any(src.rstrip("/") in (directory, "%s/%s" % (directory, filename))
+                        for src in sources)
+                for sources, dest in copies)
+            assert satisfied, (
+                "%s/%s is loaded at runtime, and no COPY puts it at %s"
+                % (directory, filename, destination))
 
     # ---- #35: the cloudflared service that puts the harness on the internet ----
     # Read as text, not parsed: this repo's compose assertions are all textual and the test
