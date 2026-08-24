@@ -343,24 +343,42 @@ def _git_bytes(repo, argv):
     return proc.stdout
 
 
-def candidate_paths(repo, ref: str, *, runner=None) -> list:
-    """Paths ever present in history whose name carries the ref. A NARROWING, nothing more.
+# One full-history walk per REPOSITORY, not per (repository, ref). Measured need: a sample of ten
+# rows across thirty repositories would otherwise run three hundred whole-history walks, and this
+# repository's own history is not small. The cache is per process and keyed by the resolved path.
+_HTML_PATHS_CACHE: dict = {}
+
+
+def all_html_paths(repo, *, runner=None) -> list:
+    """Every `.html` path ever present in this repository's history, cached.
 
     `--all` and `--name-only` over history, because most of these pages were published from a
-    commit that is now old and a search of `HEAD` would miss them entirely.
+    commit that is now old and a search of `HEAD` alone would miss them entirely.
     """
+    key = str(pathlib.Path(repo).resolve())
+    if key in _HTML_PATHS_CACHE:
+        return _HTML_PATHS_CACHE[key]
     out = _git_out(repo, ["log", "--all", "--pretty=format:", "--name-only"], runner=runner)
     seen, paths = set(), []
-    needle = str(ref).lower()
     for line in out.splitlines():
         line = line.strip()
         if not line or line in seen or not line.endswith(".html"):
             continue
         seen.add(line)
+        paths.append(line)
+    _HTML_PATHS_CACHE[key] = paths
+    return paths
+
+
+def candidate_paths(repo, ref: str, *, runner=None) -> list:
+    """The cached path list, filtered by the ref. A NARROWING, nothing more."""
+    needle = str(ref).lower()
+    out = []
+    for line in all_html_paths(repo, runner=runner):
         parts = line.lower().split("/")
         if needle in parts[-1] or any(needle in part for part in parts[:-1]):
-            paths.append(line)
-    return paths
+            out.append(line)
+    return out
 
 
 def history_candidates(repo, *, ref: str, target: bytes, cap: int = 2000,
@@ -394,6 +412,22 @@ def history_candidates(repo, *, ref: str, target: bytes, cap: int = 2000,
     return (found, capped) if report_cap else found
 
 
+def find_workspace_file(start=None):
+    """Walk UP for `.rawgentic_workspace.json`, rather than counting `parents[]` positions.
+
+    Counting was wrong by one on the first try — `parents[2]` is the projects directory, not the
+    workspace root — and a hard-coded index is wrong again the moment the layout moves. Walking up
+    is the same amount of code and cannot be off by one.
+    """
+    here = pathlib.Path(start or __file__).resolve()
+    for candidate in [here, *here.parents]:
+        target = candidate / ".rawgentic_workspace.json"
+        if target.is_file():
+            return str(target)
+    raise Refused("no .rawgentic_workspace.json found above "
+                  f"{here} — pass --workspace-file explicitly")
+
+
 def load_projects(workspace_file) -> dict:
     """`{name: absolute path}` from the rawgentic workspace file.
 
@@ -421,7 +455,18 @@ def _target_at_tip(repo, repo_path: str, *, fetch_remote: bool, runner=None) -> 
     """
     if fetch_remote:
         _git_out(repo, ["fetch", "--quiet", "origin"], runner=runner)
-        tip = _git_out(repo, ["rev-parse", "origin/HEAD"], runner=runner).strip()
+        tip = ""
+        for ref in ("origin/HEAD", "origin/main", "origin/master"):
+            try:
+                tip = _git_out(repo, ["rev-parse", ref], runner=runner).strip()
+                break
+            except RowError:
+                continue
+        if not tip:
+            raise RowError("uncommitted_or_unreachable",
+                           "no origin/HEAD, origin/main or origin/master in this repository, so "
+                           "there is no remote tip to pin — and a local ref is not evidence about "
+                           "the remote")
     else:
         tip = _git_out(repo, ["rev-parse", "HEAD"], runner=runner).strip()
     blob_id = _git_out(repo, ["rev-parse", f"{tip}:{repo_path}"], runner=runner).strip()
@@ -496,24 +541,36 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
             # would let the same bytes sit unnoticed in another repository and report a confident
             # unique answer. That was a confirmed review finding, not a hypothetical.
             refs = [r for _, _, r in row["splits"]] or [str(entry.get("name") or "")]
-            candidates, capped = [], False
+            candidates, capped, unsearchable = [], False, []
             for project in dict.fromkeys(list(projects)):
                 repo = projects[project]
-                for ref in dict.fromkeys(refs):
-                    found, hit = history_candidates(repo, ref=ref, target=live,
-                                                    cap=history_cap, report_cap=True)
-                    capped = capped or hit
-                    for item in found:
-                        candidates.append(dict(item, project=project))
+                try:
+                    for ref in dict.fromkeys(refs):
+                        found, hit = history_candidates(repo, ref=ref, target=live,
+                                                        cap=history_cap, report_cap=True)
+                        capped = capped or hit
+                        for item in found:
+                            candidates.append(dict(item, project=project))
+                except RowError as exc:
+                    # A directory that cannot be searched is a property of the WORKSPACE, not of
+                    # the document being mapped. Found by the live sample run: one workspace entry
+                    # was not a git repository at all, and charging it to the row flagged all ten
+                    # rows `uncommitted_or_unreachable` with nothing wrong with any of them.
+                    unsearchable.append(project)
+                    continue
+            row["unsearchable"] = unsearchable
             row["history_capped"] = capped
             # Dedup by (project, path, blob): the same blob reached through two refs is one answer.
             unique = {(c["project"], c["repo_path"], c["blob_id"]): c for c in candidates}
             candidates = list(unique.values())
             if not candidates:
-                raise RowError("mapping_not_found",
-                               "no committed blob in the workspace hashes to the live bytes"
-                               + (" (the history search hit its cap, so this is not exhaustive)"
-                                  if capped else ""))
+                raise RowError(
+                    "mapping_not_found",
+                    "no committed blob in the workspace hashes to the live bytes"
+                    + (" (the history search hit its cap, so this is not exhaustive)"
+                       if capped else "")
+                    + (f" — and {len(unsearchable)} workspace entries could not be searched at all: "
+                       + ", ".join(sorted(unsearchable)) if unsearchable else ""))
             if len({(c["project"], c["repo_path"]) for c in candidates}) > 1:
                 row["candidates"] = candidates
                 raise RowError("mapping_ambiguous",
@@ -539,8 +596,7 @@ def map_rows(snapshot: dict, *, workspace_file, opener, run: RunDir, history_cap
 
 def _cmd_map(args, run) -> int:
     snapshot = run.read_json("inventory.json")
-    workspace = args.workspace_file or str(
-        pathlib.Path(__file__).resolve().parents[2] / ".rawgentic_workspace.json")
+    workspace = args.workspace_file or find_workspace_file()
     rows = map_rows(snapshot, workspace_file=workspace, opener=_http, run=run,
                     history_cap=args.history_cap, limit=args.limit)
     mapped = sum(1 for r in rows if not r.get("reason"))
@@ -1006,10 +1062,10 @@ def _cmd_activate(args, run) -> int:
     base = args.control_base or os.environ.get("DOC_HARNESS_CONTROL_URL") or ""
     if not base:
         raise Refused("no control base: pass --control-base http://<ip>:<port>")
-    workspace = str(pathlib.Path(__file__).resolve().parents[2] / ".rawgentic_workspace.json")
     control = ControlClient(base, args.zone, token=token)
     rows = activate_rows(plan, mapping=mapping, run=run, control=control, opener=_http,
-                         repos=load_projects(workspace), execute=args.execute, zone=args.zone)
+                         repos=load_projects(find_workspace_file()), execute=args.execute,
+                         zone=args.zone)
     live = sum(1 for r in rows if r["outcome"] == LIVE)
     print(f"activate: {live} live, {len(rows) - live} flagged, of {len(rows)} planned rows")
     return 0

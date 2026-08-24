@@ -311,6 +311,23 @@ class HistorySearchTests(unittest.TestCase):
         make_repo(repo, {"docs/planning/2026-01-01-9-thing.html": "OLD"})
         self.assertEqual([], bf.history_candidates(repo, ref="9", target=b"absent", cap=100))
 
+    def test_the_history_walk_runs_once_per_repository_not_once_per_ref(self):
+        """Ten rows across thirty repositories would otherwise be three hundred history walks."""
+        repo = self.tmp / "repo"
+        make_repo(repo, {"docs/planning/7-x.html": "B"})
+        bf._HTML_PATHS_CACHE.clear()
+        calls = []
+
+        def counting(argv):
+            calls.append(argv)
+            return bf._default_cli(argv)
+
+        bf.candidate_paths(repo, "7", runner=counting)
+        bf.candidate_paths(repo, "8", runner=counting)
+        bf.candidate_paths(repo, "9", runner=counting)
+        walks = [c for c in calls if "log" in c and "--name-only" in c]
+        self.assertEqual(1, len(walks))
+
     def test_hitting_the_cap_is_reported_rather_than_silently_truncating(self):
         repo = self.tmp / "repo"
         make_repo(repo, {"docs/planning/2026-01-01-9-thing.html": "v0"})
@@ -342,6 +359,17 @@ class MapTests(unittest.TestCase):
     def _snapshot(self, rows):
         return {"rows": rows, "digest": bf.digest(rows), "converged": True, "cutoff": False,
                 "walks": 2, "started_at": 1, "completed_at": 2}
+
+    def test_the_workspace_file_is_found_by_walking_up_not_by_counting_parents(self):
+        nested = self.tmp / "ws" / "projects" / "proj" / "scripts"
+        nested.mkdir(parents=True)
+        (self.tmp / "ws" / ".rawgentic_workspace.json").write_text('{"projects": []}')
+        found = bf.find_workspace_file(nested / "backfill_vercel.py")
+        self.assertEqual(str(self.tmp / "ws" / ".rawgentic_workspace.json"), found)
+
+    def test_a_missing_workspace_file_refuses_rather_than_guessing(self):
+        with self.assertRaises(bf.Refused):
+            bf.find_workspace_file(pathlib.Path("/nonexistent-a/nonexistent-b/x.py"))
 
     def test_a_mapped_row_records_provenance_and_target_separately(self):
         """The live bytes are OLD. The target must be the tip, or the migration ships the stale page."""
@@ -457,6 +485,26 @@ class MapTests(unittest.TestCase):
             fetch_remote=False, limit=1)
         self.assertEqual(1, len(rows))
         self.assertEqual("proj-plan-7", rows[0]["inventory"]["name"])
+
+    def test_a_workspace_entry_that_is_not_a_git_repository_does_not_poison_every_row(self):
+        """Found by the live sample run: one non-git path flagged all ten rows.
+
+        A directory that cannot be searched is a property of the WORKSPACE, not of the document
+        being mapped, so it is skipped and RECORDED rather than charged to the row.
+        """
+        good = self.tmp / "proj"
+        make_repo(good, {"docs/planning/7-x.html": "B", "docs/planning/7-x.md": "# b"})
+        broken = self.tmp / "not-a-repo"
+        broken.mkdir()
+        http = FakeHttp({"https://proj-plan-7.vercel.app/": (200, {}, b"B")})
+        rows = bf.map_rows(
+            self._snapshot([{"id": "prj_1", "name": "proj-plan-7",
+                             "latestProductionUrl": "https://proj-plan-7.vercel.app/",
+                             "updatedAt": 1}]),
+            workspace_file=self._workspace({"proj": good, "junk": broken}), opener=http,
+            run=self.run, fetch_remote=False)
+        self.assertIsNone(rows[0]["reason"], rows[0])
+        self.assertIn("junk", rows[0]["unsearchable"])
 
     def test_the_mapping_is_persisted_with_its_digest(self):
         repo = self.tmp / "proj"
