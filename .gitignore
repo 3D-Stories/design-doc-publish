@@ -13,3 +13,13 @@ claude_docs/
 # whose lost-row race motivated deriving it (owner decision 2026-08-01).
 # Rebuild it; never edit or commit it.
 index/index.html
+
+# Local virtualenv. Untracked and previously not ignored, so it showed in every
+# `git status` and was one blanket `git add` away from being committed (#34, finding S6).
+.venv/
+
+# Local doc-harness state when the service is run OUTSIDE Docker. In the container these
+# live on named volumes; on a developer machine they land here and are never committed.
+/var-doc-harness/
+harness-local-cache/
+harness-local-registry.db*

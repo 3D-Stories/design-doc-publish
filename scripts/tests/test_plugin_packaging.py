@@ -480,3 +480,17 @@ class TestTheRecordedFixturesCarryNoLiveAccountData:
                     offenders.append(f"{relative}:{number}")
         assert not offenders, (
             "the renamed fixture project is back: " + ", ".join(offenders))
+
+
+def test_the_two_version_surfaces_agree():
+    """`plugin.json` and `marketplace.json` must state the same version.
+
+    Added with #34, which bumped both by hand. The repo has no release automation and no CI,
+    so nothing else would have caught a bump applied to one file and forgotten in the other —
+    and the marketplace surface is the one users resolve against.
+    """
+    plugin = json.loads(PLUGIN_MANIFEST.read_text(encoding="utf-8"))["version"]
+    market = json.loads(MARKETPLACE.read_text(encoding="utf-8"))["metadata"]["version"]
+    assert plugin == market, (
+        f".claude-plugin/plugin.json says {plugin!r} but .claude-plugin/marketplace.json says "
+        f"{market!r}; bump both or neither")
