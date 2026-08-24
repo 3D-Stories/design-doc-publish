@@ -373,7 +373,8 @@ class TestTheReadBackIsParsedBeforeAnythingIsPublished:
 class TestThePublishCall:
 
     MANIFEST = {"name": "example-design-12", "repo": "o/r", "commit_sha": "a" * 40,
-                "assets": [{"repo_path": "docs/p.html", "url_path": "/",
+                "entry_path": "/p.html",
+                "assets": [{"repo_path": "docs/p.html", "url_path": "/p.html",
                             "blob_id": "b" * 40, "size": 10, "sha256": "c" * 64}]}
 
     def test_a_201_yields_the_new_deployment_id(self):
@@ -460,3 +461,71 @@ class TestTheBoundedCalls:
     def test_the_publish_deadline_is_the_longer_one(self):
         """The harness fetches every blob from GitHub inside the POST."""
         assert publish_doc.PUBLISH_TIMEOUT > publish_doc.CONTROL_READ_TIMEOUT
+
+
+class TestTheManifestIsRefusedLocallyBeforeTheHarnessRefusesIt:
+    """Found while wiring T4, and missed by all three design review passes: the manifest
+    carries a top-level `entry_path` that must name a declared asset
+    (`harness/manifest.py:192-199`), and an asset `url_path` of `/` is refused outright
+    (`harness/manifest.py:113`). Serving maps a request for `/` to `entry_path`
+    (`harness/serving.py:80`). The design named neither, so the first manifest this tool
+    built would have been a 422 about a field nobody had written down.
+    """
+
+    GOOD = TestThePublishCall.MANIFEST
+
+    def test_the_good_manifest_passes(self):
+        publish_doc.validate_manifest(self.GOOD)
+
+    def test_an_asset_at_the_root_is_refused(self):
+        m = {**self.GOOD, "entry_path": "/",
+             "assets": [{**self.GOOD["assets"][0], "url_path": "/"}]}
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.validate_manifest(m)
+        assert "must name a file" in e.value.message
+
+    def test_a_missing_entry_path_is_refused(self):
+        m = {k: v for k, v in self.GOOD.items() if k != "entry_path"}
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.validate_manifest(m)
+        assert "entry_path" in e.value.message
+
+    def test_an_entry_path_naming_no_declared_asset_is_refused(self):
+        """The harness's own words: '/' would 404 on a deployment that otherwise
+        activated cleanly."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.validate_manifest({**self.GOOD, "entry_path": "/missing.html"})
+        assert "no declared asset" in e.value.message
+
+    @pytest.mark.parametrize("field,bad", [
+        ("commit_sha", "HEAD"), ("commit_sha", "a" * 39), ("repo", "just-a-name"),
+        ("repo", "../x"), ("name", "Not_A_Label"),
+    ])
+    def test_a_malformed_top_level_field_is_refused(self, field, bad):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.validate_manifest({**self.GOOD, field: bad})
+
+    @pytest.mark.parametrize("field,bad", [
+        ("blob_id", "b" * 39), ("sha256", "c" * 63), ("repo_path", "/abs/p.html"),
+        ("repo_path", "../escape.html"),
+    ])
+    def test_a_malformed_asset_field_is_refused(self, field, bad):
+        m = {**self.GOOD, "assets": [{**self.GOOD["assets"][0], field: bad}]}
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.validate_manifest(m)
+
+    def test_an_empty_asset_list_is_refused(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.validate_manifest({**self.GOOD, "assets": []})
+
+    def test_a_duplicate_url_path_is_refused(self):
+        a = self.GOOD["assets"][0]
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.validate_manifest({**self.GOOD, "assets": [a, dict(a)]})
+
+    def test_publish_validates_before_it_sends_anything(self):
+        http = FakeHTTP({})
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.publish(BASE, {**self.GOOD, "commit_sha": "HEAD"}, None,
+                                "s3cret", opener=http)
+        assert http.calls == [], "a manifest the harness would refuse must not be sent"

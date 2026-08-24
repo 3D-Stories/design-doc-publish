@@ -424,6 +424,72 @@ PUBLISH_TIMEOUT = 120          # the harness fetches every blob from GitHub insi
 _NEEDS_ENCODING = set(" +(),&'=@!$*")
 
 
+_HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+_HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+_REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+
+
+def validate_manifest(manifest: dict) -> None:
+    """Refuse locally anything `harness/manifest.py` would refuse with a 422.
+
+    **`entry_path` is the field the design forgot.** The manifest carries a top-level
+    `entry_path` that must name a declared asset (`harness/manifest.py:192-199`), an asset
+    `url_path` of `/` is refused outright (`harness/manifest.py:113`), and serving maps a
+    request for `/` onto `entry_path` (`harness/serving.py:80`). None of that appears in the
+    #36 design, and none of the three review passes caught it — so the first manifest this
+    tool built would have been a 422 about a field nobody had written down. Every rule below
+    mirrors one in the harness, so the refusal arrives here as a sentence instead.
+    """
+    def bad(msg):
+        raise StageError(5, f"manifest: {msg}")
+
+    name = manifest.get("name")
+    if not isinstance(name, str) or not re.match(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", name):
+        bad(f"name must be one DNS label, lowercase, 1-63 characters. Got {name!r}")
+    repo = manifest.get("repo")
+    if (not isinstance(repo, str) or not _REPO_RE.match(repo)
+            or any(part in (".", "..") for part in repo.split("/"))):
+        bad(f"repo must be 'owner/name' with no '.' or '..' segment. Got {repo!r}")
+    sha = manifest.get("commit_sha")
+    if not isinstance(sha, str) or not _HEX40_RE.match(sha.lower()):
+        bad(f"commit_sha must be a full 40-hex commit id, not a ref. Got {sha!r}")
+
+    assets = manifest.get("assets")
+    if not isinstance(assets, list) or not assets:
+        bad("assets must be a non-empty list")
+
+    seen = set()
+    for i, a in enumerate(assets):
+        if not isinstance(a, dict):
+            bad(f"assets[{i}] must be an object")
+        url_path = a.get("url_path")
+        if not isinstance(url_path, str) or not url_path.startswith("/"):
+            bad(f"assets[{i}].url_path must be an absolute path. Got {url_path!r}")
+        if url_path == "/":
+            bad(f"assets[{i}].url_path must name a file, not '/'. The entry page is declared "
+                "by its real path and reached through entry_path.")
+        if url_path in seen:
+            bad(f"duplicate url_path {url_path!r}")
+        seen.add(url_path)
+        repo_path = a.get("repo_path")
+        if (not isinstance(repo_path, str) or repo_path.startswith("/")
+                or ".." in repo_path.split("/")):
+            bad(f"assets[{i}].repo_path must be relative with no '..'. Got {repo_path!r}")
+        if not isinstance(a.get("blob_id"), str) or not _HEX40_RE.match(a["blob_id"].lower()):
+            bad(f"assets[{i}].blob_id must be 40 hex characters")
+        if not isinstance(a.get("sha256"), str) or not _HEX64_RE.match(a["sha256"].lower()):
+            bad(f"assets[{i}].sha256 must be 64 hex characters")
+        if not isinstance(a.get("size"), int) or isinstance(a.get("size"), bool):
+            bad(f"assets[{i}].size must be an integer")
+
+    entry_path = manifest.get("entry_path")
+    if not isinstance(entry_path, str) or not entry_path:
+        bad("entry_path is required: it is what a request for '/' resolves to")
+    if entry_path not in seen:
+        bad(f"entry_path {entry_path!r} names no declared asset, so '/' would 404 on a "
+            "deployment that otherwise activated cleanly")
+
+
 def _control_request(base: str, path: str, token: str, *, method: str, body: bytes | None):
     req = urllib.request.Request(f"{base}{path}", data=body, method=method)
     req.add_header("Authorization", f"Bearer {token}")
@@ -488,6 +554,7 @@ def publish(base: str, manifest: dict, expected_active: int | None, token: str,
     A 201 whose body lacks one is a failure, not a pass — stage 6 would otherwise verify
     against the wrong deployment.
     """
+    validate_manifest(manifest)
     for asset in manifest.get("assets", []):
         bad = _NEEDS_ENCODING & set(asset.get("url_path", ""))
         if bad:
