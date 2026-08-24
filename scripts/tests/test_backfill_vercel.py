@@ -867,5 +867,91 @@ class ActivateTests(unittest.TestCase):
         self.assertEqual(1, len([c for c in control.calls if c[0] == "publish"]))
 
 
+class ReportTests(unittest.TestCase):
+    """T6 — the report ASSERTS its own completeness, over what was PROCESSED."""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = pathlib.Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.run = bf.RunDir(self.tmp / "run")
+
+    def _write(self, *, snapshot_names, mapping_rows, outcomes):
+        rows = [{"id": f"prj_{n}", "name": n, "latestProductionUrl": f"https://{n}/",
+                 "updatedAt": 1} for n in snapshot_names]
+        self.run.write_json("inventory.json", {
+            "rows": rows, "digest": bf.digest(rows), "converged": True, "cutoff": False,
+            "walks": 2, "started_at": 100, "completed_at": 200})
+        self.run.write_json("mapping.json", {"rows": mapping_rows,
+                                             "digest": bf.digest(mapping_rows)})
+        self.run.write_json("outcomes.json", {"rows": outcomes, "halted": False})
+
+    def test_the_processed_and_snapshot_sets_are_reported_separately(self):
+        self._write(snapshot_names=["a", "b", "c"],
+                    mapping_rows=[{"harness_name": "a", "reason": None},
+                                  {"harness_name": "b", "reason": "byte_mismatch",
+                                   "detail": "drifted"}],
+                    outcomes=[{"name": "a", "outcome": "live", "reason": None, "detail": "",
+                               "deployment_id": 3}])
+        summary = bf.build_report(self.run)
+        self.assertEqual(3, summary["snapshot"])
+        self.assertEqual(2, summary["processed"])
+        self.assertEqual(1, summary["not_attempted"])
+        self.assertEqual(3, summary["snapshot"])
+        self.assertIn("not_attempted", summary["markdown"])
+
+    def test_every_processed_row_must_have_ended_live_or_flagged(self):
+        self._write(snapshot_names=["a", "b"],
+                    mapping_rows=[{"harness_name": "a", "reason": None},
+                                  {"harness_name": "b", "reason": None}],
+                    outcomes=[{"name": "a", "outcome": "live", "reason": None, "detail": ""}])
+        with self.assertRaises(bf.Refused) as caught:
+            bf.build_report(self.run)
+        self.assertIn("b", str(caught.exception))
+
+    def test_totals_per_reason_add_up_to_the_processed_count(self):
+        self._write(snapshot_names=["a", "b", "c"],
+                    mapping_rows=[{"harness_name": n, "reason": None} for n in "abc"],
+                    outcomes=[{"name": "a", "outcome": "live", "reason": None, "detail": ""},
+                              {"name": "b", "outcome": "flagged", "reason": "byte_mismatch",
+                               "detail": "x"},
+                              {"name": "c", "outcome": "flagged", "reason": "cas_conflict",
+                               "detail": "y"}])
+        summary = bf.build_report(self.run)
+        self.assertEqual(1, summary["live"])
+        self.assertEqual(summary["processed"], summary["live"] + sum(summary["reasons"].values()))
+
+    def test_a_reason_outside_the_vocabulary_is_refused(self):
+        self._write(snapshot_names=["a"],
+                    mapping_rows=[{"harness_name": "a", "reason": None}],
+                    outcomes=[{"name": "a", "outcome": "flagged", "reason": "vibes",
+                               "detail": ""}])
+        with self.assertRaises(bf.Refused):
+            bf.build_report(self.run)
+
+    def test_leftover_staging_labels_are_listed(self):
+        self._write(snapshot_names=["a"],
+                    mapping_rows=[{"harness_name": "a", "reason": None}],
+                    outcomes=[{"name": "a", "outcome": "live", "reason": None, "detail": ""}])
+        self.run.journal("a", {"phase": "stage", "state": "published", "target": "bfr1-abc-1",
+                               "deployment_id": 4, "cache_warmed": True})
+        summary = bf.build_report(self.run)
+        self.assertIn("bfr1-abc-1", summary["markdown"])
+        self.assertIn("bfr1-abc-1", [s["label"] for s in summary["staging"]])
+
+    def test_a_cutoff_snapshot_is_reported_as_a_cutoff_with_both_instants(self):
+        rows = [{"id": "prj_a", "name": "a", "latestProductionUrl": "https://a/", "updatedAt": 1}]
+        self.run.write_json("inventory.json", {
+            "rows": rows, "digest": bf.digest(rows), "converged": False, "cutoff": True,
+            "walks": 3, "started_at": 100, "completed_at": 260})
+        self.run.write_json("mapping.json", {"rows": [], "digest": bf.digest([])})
+        self.run.write_json("outcomes.json", {"rows": [], "halted": False})
+        summary = bf.build_report(self.run)
+        self.assertTrue(summary["cutoff"])
+        self.assertIn("100", summary["markdown"])
+        self.assertIn("260", summary["markdown"])
+
+
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(unittest.main())

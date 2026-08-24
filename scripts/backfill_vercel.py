@@ -1010,6 +1010,127 @@ def _cmd_activate(args, run) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------------------------
+# T6 — the report. An assertion, not a summary.
+# --------------------------------------------------------------------------------------------
+
+
+def build_report(run: RunDir) -> dict:
+    """The outcome report, and the completeness check that gives it teeth.
+
+    The assertion is scoped to the PROCESSED set, and the snapshot set is reported beside it. A
+    sampled run cannot honestly assert over 181 rows it never touched, and forcing the untouched
+    ones into a flag reason would describe them wrongly — so `not_attempted` is counted, named, and
+    given its selection rule.
+    """
+    snapshot = run.read_json("inventory.json")
+    mapping = run.read_json("mapping.json")
+    outcomes = run.read_json("outcomes.json")
+
+    snapshot_names = [r.get("name") for r in snapshot.get("rows") or []]
+    mapped = {r.get("harness_name"): r for r in mapping.get("rows") or []}
+    activated = {r.get("name"): r for r in outcomes.get("rows") or []}
+
+    processed, missing, reasons, live_rows = [], [], {}, []
+    for name in mapped:
+        row = activated.get(name)
+        if row is not None:
+            outcome, reason, detail = row.get("outcome"), row.get("reason"), row.get("detail", "")
+        elif mapped[name].get("reason"):
+            outcome, reason, detail = FLAGGED, mapped[name]["reason"], mapped[name].get("detail", "")
+        else:
+            missing.append(name)
+            continue
+        if outcome == LIVE:
+            live_rows.append(name)
+        else:
+            if reason not in REASONS:
+                raise Refused(f"{name} carries the reason {reason!r}, which is not in the closed "
+                              "vocabulary; a report that invents a state is not evidence")
+            reasons[reason] = reasons.get(reason, 0) + 1
+        processed.append({"name": name, "outcome": outcome, "reason": reason,
+                          "detail": (detail or "")[:200]})
+    if missing:
+        raise Refused(
+            "the report refuses: these processed rows ended with no outcome at all — "
+            + ", ".join(sorted(missing))
+            + ". Every row that was attempted must end live or flagged, and this assertion is what "
+              "makes the acceptance criterion checkable rather than claimed.")
+
+    not_attempted = [n for n in snapshot_names if n not in mapped]
+    staging = []
+    for entry in run.journal_entries():
+        record = entry.get("record") or {}
+        if record.get("phase") == "stage" and record.get("state") == "published":
+            staging.append({"label": record.get("target"),
+                            "deployment_id": record.get("deployment_id"),
+                            "row": entry.get("row")})
+    summary = {
+        "snapshot": len(snapshot_names), "processed": len(processed),
+        "not_attempted": len(not_attempted), "live": len(live_rows),
+        "reasons": reasons, "staging": staging, "halted": bool(outcomes.get("halted")),
+        "cutoff": bool(snapshot.get("cutoff")),
+        "started_at": snapshot.get("started_at"), "completed_at": snapshot.get("completed_at"),
+        "rows": processed, "not_attempted_names": not_attempted,
+    }
+    summary["markdown"] = _render_report(summary)
+    run.write_json("report.json", {k: v for k, v in summary.items() if k != "markdown"})
+    return summary
+
+
+def _render_report(summary: dict) -> str:
+    lines = ["# Vercel-to-harness backfill — outcome report", ""]
+    if summary["cutoff"]:
+        lines += [f"**The inventory did NOT converge.** It is a cutoff snapshot bounded by two "
+                  f"instants — started {summary['started_at']}, completed "
+                  f"{summary['completed_at']} — because a paginated walk cannot establish an "
+                  f"atomic set at a moment. Rows created inside that window may fall on either "
+                  f"side of it, and this report does not claim to know which.", ""]
+    else:
+        lines += [f"Inventory converged: two agreeing walks, started {summary['started_at']}, "
+                  f"completed {summary['completed_at']}.", ""]
+    lines += ["| Count | What |", "| --- | --- |",
+              f"| {summary['snapshot']} | rows in the snapshot |",
+              f"| {summary['processed']} | rows PROCESSED by this run |",
+              f"| {summary['not_attempted']} | rows `not_attempted` (sampled out) |",
+              f"| {summary['live']} | rows now **live** on the harness |", ""]
+    if summary["halted"]:
+        lines += ["> **The campaign HALTED.** A row published bytes the harness did not then "
+                  "serve, so activation stopped rather than continuing with unverified bytes live "
+                  "under a trusted name.", ""]
+    if summary["reasons"]:
+        lines += ["## Flagged, by reason", "", "| Reason | Rows |", "| --- | --- |"]
+        lines += [f"| `{reason}` | {count} |" for reason, count in sorted(summary["reasons"].items())]
+        lines += [""]
+    lines += ["## Every processed row", "", "| Project | Outcome | Reason |", "| --- | --- | --- |"]
+    for row in summary["rows"]:
+        lines.append(f"| `{row['name']}` | {row['outcome']} | "
+                     f"{('`' + row['reason'] + '`') if row['reason'] else '—'} |")
+    lines += [""]
+    if summary["not_attempted_names"]:
+        lines += ["## Not attempted", "",
+                  "These rows were in the snapshot and this run did not touch them. They have NO "
+                  "outcome — not a flag — because no reason in the vocabulary would describe them "
+                  "truthfully. The selection rule was `--limit` over the snapshot in its recorded "
+                  "order.", "",
+                  ", ".join(f"`{n}`" for n in summary["not_attempted_names"]), ""]
+    if summary["staging"]:
+        lines += ["## Staging rows left in the registry", "",
+                  "Real registry rows, visible on the derived index, and the control API has no "
+                  "delete. Retiring them is a deliberate task.", "",
+                  "| Label | Deployment | For |", "| --- | --- | --- |"]
+        lines += [f"| `{s['label']}` | {s['deployment_id']} | `{s['row']}` |"
+                  for s in summary["staging"]]
+        lines += [""]
+    return "\n".join(lines)
+
+
+def _cmd_report(args, run) -> int:
+    summary = build_report(run)
+    print(summary["markdown"])
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="backfill_vercel.py",
@@ -1066,7 +1187,7 @@ COMMANDS = {
     "map": _cmd_map,
     "stage": _not_yet,
     "activate": _cmd_activate,
-    "report": _not_yet,
+    "report": _cmd_report,
 }
 
 
