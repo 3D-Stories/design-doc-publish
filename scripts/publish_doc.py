@@ -53,6 +53,7 @@ import tempfile
 import time
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from urllib.parse import unquote
@@ -154,6 +155,96 @@ class StageError(Exception):
         super().__init__(message)
         self.stage = stage
         self.message = message
+
+
+# --- #36: the declared states, and why they sit ABOVE the stage block ------------------
+#
+# `EXIT_BASE + stage` owns 11 through 17. A code inside that range cannot be told apart
+# from a stage FAILURE, and these two are not failures — they are states the operator
+# declared by leaving a variable unset. Putting them at 25 and 26 is what lets a caller
+# distinguish "you did not configure an endpoint" from "stage 5 tried and could not".
+
+EXIT_CONTROL_URL_UNSET = 25
+EXIT_EDGE_SKIPPED = 26
+
+
+class DeclaredStateError(Exception):
+    """Not a stage failure: a state the operator declared by leaving a variable unset.
+
+    Carries its own exit code rather than deriving one from a stage, because the whole
+    point is that no stage was reached.
+    """
+
+    def __init__(self, code: int, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def _normalized_origin(raw: str, *, stage: int, varname: str) -> str:
+    """`scheme://host[:port]`, or raise.
+
+    Step-4 finding N4: the previous rule was syntactic — https, or a host with no dot —
+    which still let the publish bearer reach ANY https host. Transport syntax does not
+    establish server identity. This function does the half that IS mechanical: it refuses
+    anything that is not exactly scheme, host and port, so a base URL can never smuggle
+    userinfo (which is a credential), a path, a query or a fragment past the allowlist
+    check that follows it.
+    """
+    parsed = urllib.parse.urlsplit(raw.strip())
+    if parsed.scheme not in ("http", "https"):
+        raise StageError(stage, f"{varname} must be an http or https URL, not {raw.strip()!r}")
+    if not parsed.hostname:
+        raise StageError(stage, f"{varname} carries no host: {raw.strip()!r}")
+    if parsed.username or parsed.password:
+        raise StageError(
+            stage, f"{varname} carries userinfo, which is a credential in a URL. "
+                   "Give scheme, host and port only.")
+    if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+        raise StageError(
+            stage, f"{varname} must be scheme, host and port only — no path, query or "
+                   f"fragment. Got {raw.strip()!r}")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def control_base(env) -> str:
+    """The control API base, or raise. **There is no default** (owner decision D21).
+
+    Revision 2 of the #36 design defaulted this to the compose-network address
+    ``http://harness:8080`` and called it reachable today. Measured on the harness host
+    2026-08-24: the host reaches a container's BRIDGE IP with no published port, and never
+    resolves a compose SERVICE name. `compose.yaml` states the harness publishes no host
+    port and never will. So there is no value that is right by default, and guessing one
+    is how a publish fails with a connection error instead of a sentence.
+    """
+    raw = (env.get("DOC_HARNESS_CONTROL_URL") or "").strip()
+    if not raw:
+        raise DeclaredStateError(
+            EXIT_CONTROL_URL_UNSET,
+            "DOC_HARNESS_CONTROL_URL is not set, and it has no default. Point it at the "
+            "harness control API. From the harness host that is the container's bridge "
+            "address: DOC_HARNESS_CONTROL_URL=http://$(docker compose ps -q harness | "
+            "xargs docker inspect -f "
+            "'{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'):8080")
+    return _normalized_origin(raw, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+
+
+def public_base(env) -> str | None:
+    """The public host pattern for stage 6's edge half, or ``None`` meaning SKIP.
+
+    Unset is a legitimate declared state, not an error: no harness hostname resolves yet.
+    The skip is visible and exits ``EXIT_EDGE_SKIPPED``; it never exits 0, because every
+    caller and script reads 0 as a pass.
+    """
+    raw = (env.get("DOC_HARNESS_PUBLIC_BASE") or "").strip()
+    if not raw:
+        return None
+    base = _normalized_origin(raw, stage=6, varname="DOC_HARNESS_PUBLIC_BASE")
+    if not base.startswith("https://"):
+        raise StageError(
+            6, "DOC_HARNESS_PUBLIC_BASE must be https: the Cloudflare Access service "
+               f"tokens are sent to this host, and plaintext would expose them. Got {base!r}")
+    return base
 
 
 # --- stage 1: render -----------------------------------------------------------------
