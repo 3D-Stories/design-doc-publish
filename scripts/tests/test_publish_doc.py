@@ -1087,16 +1087,65 @@ class TestARefusalReachesNothing:
 
 
 class TestGitStaysOut:
-    """AC6. Commits and PRs remain the workflows' business."""
+    """AC6. Commits and PRs remain the workflows' business.
 
-    def test_the_script_contains_no_version_control_invocation(self):
+    **Narrowed by #36, not deleted.** This class used to assert the script contained no
+    git invocation at all. #36 makes the harness fetch blobs from GitHub by commit sha, so
+    the publisher MUST read git state — the repository, the committed blob ids, and whether
+    HEAD is pushed — and must fetch before it can answer the last one.
+
+    The REASON behind the original guard is untouched and still enforced below: this script
+    never mutates the repository or its history. Reading is now in scope; committing,
+    staging, pushing, branching and opening pull requests are exactly as forbidden as they
+    were. A blanket ban would have been deleted here; a narrowed one keeps the protection
+    that mattered.
+    """
+
+    # `fetch` is deliberately absent: it updates remote-tracking refs and touches neither
+    # the working tree nor history, and the reachability check cannot be answered without
+    # it. `--dry-run` still skips it, so the offline promise holds (#36 finding N10).
+    FORBIDDEN = ("commit", "add", "push", "tag", "rebase", "merge", "reset", "checkout",
+                 "cherry-pick", "revert", "stash", "clean", "am", "apply", "restore")
+
+    def _git_argvs(self):
+        """Every list literal in the script whose first element is the string `git`."""
+        import ast
+        tree = ast.parse((SCRIPTS / "publish_doc.py").read_text(encoding="utf-8"))
+        out = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.List) or not node.elts:
+                continue
+            head = node.elts[0]
+            if isinstance(head, ast.Constant) and head.value == "git":
+                out.append([e.value if isinstance(e, ast.Constant) else None
+                            for e in node.elts])
+        return out
+
+    def test_no_git_subcommand_mutates_the_repository(self):
+        argvs = self._git_argvs()
+        assert argvs, "expected #36's git plumbing to be present"
+        offenders = [a for a in argvs
+                     if any(tok in self.FORBIDDEN for tok in a if isinstance(tok, str))]
+        assert offenders == [], offenders
+
+    def test_no_string_literal_shells_out_to_a_mutating_git_command(self):
+        """The AST check above sees list literals. This one catches a mutating command
+        smuggled into a plain string."""
         import ast
         tree = ast.parse((SCRIPTS / "publish_doc.py").read_text(encoding="utf-8"))
         literals = [n.value for n in ast.walk(tree)
                     if isinstance(n, ast.Constant) and isinstance(n.value, str)]
         offenders = [s for s in literals
-                     if s.strip() == "git" or s.strip().startswith("git ")]
+                     if any(s.strip().startswith(f"git {verb}") for verb in self.FORBIDDEN)]
         assert offenders == [], offenders
+
+    def test_the_script_never_invokes_the_github_cli(self):
+        """Pull requests were never this tool's business and still are not."""
+        import ast
+        tree = ast.parse((SCRIPTS / "publish_doc.py").read_text(encoding="utf-8"))
+        literals = [n.value for n in ast.walk(tree)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+        assert [s for s in literals if s.strip() == "gh" or s.strip().startswith("gh ")] == []
 
 
 # --------------------------------------------------------------------------- AC7

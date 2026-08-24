@@ -147,6 +147,10 @@ MAX_NAME = 100
 # refuses it: refusing before the deploy is cheaper than stage 6 discovering it after.
 MAX_ALIAS_LABEL = 35
 
+# Local plumbing, so a hung git cannot hang a publish. Generous: a first fetch on a big
+# repository is genuinely slow.
+_GIT_TIMEOUT = 120
+
 
 class StageError(Exception):
     """A stage refused. The process exits ``EXIT_BASE + stage``."""
@@ -245,6 +249,161 @@ def public_base(env) -> str | None:
             6, "DOC_HARNESS_PUBLIC_BASE must be https: the Cloudflare Access service "
                f"tokens are sent to this host, and plaintext would expose them. Got {base!r}")
     return base
+
+
+# --- #36 stage 4a: provenance, failing LOCALLY -----------------------------------------
+#
+# The harness does not accept rendered bytes. It takes a manifest naming a repo, a full
+# commit sha and, per asset, a repo path and a blob id, then fetches every blob FROM
+# GITHUB and refuses on any mismatch. So the page must be committed and pushed BEFORE the
+# publish, and the publish pins that commit.
+#
+# Each check below is a refusal the harness would eventually make anyway. Making it here
+# turns a 422 about a blob id into one clear local sentence.
+
+_GITHUB_SLUG = re.compile(
+    r"^(?:git@github\.com:|ssh://git@github\.com/|https?://(?:[^@/]+@)?github\.com/)"
+    r"(?P<slug>[^/\s]+/[^/\s]+?)(?:\.git)?/?$")
+
+
+def _git(argv: list[str], cwd: Path | None = None, *, runner=None):
+    """One git call. `runner` exists so the suite can script git without a real repository.
+
+    Looked up on the module at call time (never bound at import) so the existing
+    `monkeypatch.setattr(subprocess, "run", ...)` fixture keeps working unchanged.
+    """
+    run = runner if runner is not None else subprocess.run
+    full = ["git", *(["-C", str(cwd)] if cwd is not None else []), *argv]
+    return run(full, capture_output=True, text=True, check=False, timeout=_GIT_TIMEOUT)
+
+
+def github_slug(url: str) -> str | None:
+    """`owner/name` for a GitHub remote URL, else None. Normalizing here is what lets the
+    manifest's `repo` be DERIVED from the selected remote rather than configured beside it,
+    so the two can never disagree."""
+    m = _GITHUB_SLUG.match((url or "").strip())
+    return m.group("slug") if m else None
+
+
+def repo_root(path: Path, *, runner=None) -> str | None:
+    r = _git(["rev-parse", "--show-toplevel"], path, runner=runner)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def assert_one_repository(md: Path, out: Path, *, runner=None) -> str:
+    """Finding S1. `--md` and `--out` are arbitrary paths and this tool runs across a whole
+    workspace, so the document routinely lives in a different repository from the process's
+    cwd. Resolving via cwd pins the WRONG repo. The benign failure is a 422; the dangerous
+    one is that the path exists in the wrong repo and the harness serves a **different file
+    under the right name**, with every downstream check still passing."""
+    a = repo_root(md.resolve().parent, runner=runner)
+    b = repo_root(out.resolve().parent, runner=runner)
+    if a is None or b is None:
+        raise StageError(4, f"--md and --out must live inside a git repository; "
+                            f"{'--md' if a is None else '--out'} does not.")
+    if a != b:
+        raise StageError(
+            4, f"--md and --out resolve into different repositories ({a} and {b}). "
+               "The harness would serve a different file under the right name, and every "
+               "later check would still pass. Refusing.")
+    return a
+
+
+def assert_blob_committed(root: Path, repo_path: str, blob_id: str, *, runner=None) -> None:
+    """Finding A2. Compare against the COMMITTED blob, never against the file's own bytes.
+
+    `git hash-object <file>` hashes the working tree, so comparing it to itself proves
+    nothing about the commit being pinned. The real question is whether `HEAD:<repo_path>`
+    is that same blob.
+    """
+    r = _git(["rev-parse", f"HEAD:{repo_path}"], root, runner=runner)
+    if r.returncode != 0:
+        raise StageError(
+            4, f"{repo_path} is not committed at HEAD, so the harness cannot fetch it. "
+               "Commit and push the rendered page and its assets before publishing.")
+    committed = r.stdout.strip()
+    if committed != blob_id:
+        raise StageError(
+            4, f"{repo_path} in the working tree is not what HEAD holds "
+               f"(working tree {blob_id}, HEAD {committed}). The publish would pin a commit "
+               "that does not contain these bytes. Commit the change first.")
+
+
+def select_remote(root: Path, override: str | None, *, runner=None) -> tuple[str, str]:
+    """The remote to pin, and the `owner/name` derived FROM it. Findings M5 and N9.
+
+    Ordered, stopping at the first that resolves. The order matters: the first attempt at
+    this refused whenever two GitHub remotes existed, which is every ordinary
+    fork-plus-upstream checkout — it would have refused far more often than it caught
+    anything.
+    """
+    names = [n for n in _git(["remote"], root, runner=runner).stdout.split() if n]
+
+    def slug_of(name):
+        return github_slug(_git(["remote", "get-url", name], root, runner=runner).stdout)
+
+    # a. an explicit override always wins.
+    if override:
+        if override not in names:
+            raise StageError(4, f"--publish-remote {override!r} is not a remote here. "
+                                f"Remotes: {', '.join(names) or 'none'}")
+        slug = slug_of(override)
+        if slug is None:
+            raise StageError(4, f"--publish-remote {override!r} is not a GitHub remote. "
+                                "The harness fetches blobs from GitHub.")
+        return override, slug
+
+    # b. the branch's own upstream, when it is a GitHub remote.
+    up = _git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+              root, runner=runner)
+    if up.returncode == 0 and "/" in up.stdout.strip():
+        name = up.stdout.strip().split("/", 1)[0]
+        slug = slug_of(name)
+        if slug is not None:
+            return name, slug
+
+    # c. exactly one GitHub remote needs no upstream at all.
+    github = [(n, slug_of(n)) for n in names]
+    github = [(n, sl) for n, sl in github if sl is not None]
+    if len(github) == 1:
+        return github[0]
+    if not github:
+        raise StageError(
+            4, f"no GitHub remote here, and the harness fetches blobs from GitHub. "
+               f"Remotes: {', '.join(names) or 'none'}")
+    raise StageError(
+        4, "cannot tell which remote to pin: this branch has no upstream and there are "
+           f"several GitHub remotes ({', '.join(n for n, _ in github)}). "
+           "Pass --publish-remote <name>.")
+
+
+def assert_head_reachable(root: Path, remote: str, branch: str, *, fetch: bool,
+                          runner=None) -> None:
+    """Finding A6. "Is HEAD pushed" is NOT `ls-remote` succeeding, and it is NOT ref-tip
+    equality — a pushed commit that is no longer a tip is still perfectly reachable, and
+    tip-matching would falsely reject it. The rule is that nothing on HEAD is missing from
+    the remote-tracking ref.
+
+    `fetch` is False under `--dry-run` (finding N10, AC5): the fetch is new network access
+    and it mutates remote-tracking refs, so a flag whose whole point is touching nothing
+    must not perform it.
+    """
+    if fetch:
+        f = _git(["fetch", remote], root, runner=runner)
+        if f.returncode != 0:
+            raise StageError(4, f"git fetch {remote} failed, so reachability cannot be "
+                                f"established: {(f.stderr or f.stdout).strip()}")
+    ref = f"{remote}/{branch}"
+    r = _git(["rev-list", "--count", f"{ref}..HEAD"], root, runner=runner)
+    if r.returncode != 0:
+        raise StageError(4, f"cannot compare HEAD against {ref}: "
+                            f"{(r.stderr or r.stdout).strip()}")
+    if r.stdout.strip() != "0":
+        listing = _git(["rev-list", "--oneline", f"{ref}..HEAD"], root, runner=runner)
+        raise StageError(
+            4, f"HEAD is not reachable from {ref}: {r.stdout.strip()} commit(s) are not "
+               f"pushed. The harness fetches from GitHub and would not find them.\n"
+               + listing.stdout.rstrip())
 
 
 # --- stage 1: render -----------------------------------------------------------------
