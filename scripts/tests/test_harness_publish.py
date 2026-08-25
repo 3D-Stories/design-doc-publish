@@ -1943,3 +1943,53 @@ class TestOnlyTheDefaultTlsPortIsTheControlHost:
         publish_doc.assert_bearer_destination(
             "http://172.17.0.2:8080",
             env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.17.0.2:8080"})
+
+
+class TestAMalformedPortIsRefusedNotRaised:
+    """Caught by self-review of the port fix above, BEFORE the cross-model pass returned.
+
+    Requiring `parsed.port in (None, 443)` introduced the very defect this branch exists to fix:
+    `.port` RAISES ValueError on a non-integer port, so `https://docs-control.3dstories.ca:notaport`
+    made `assert_bearer_destination` throw a raw ValueError. `_normalized_origin` let it through
+    because it never touched `.port`.
+
+    Both are fixed. The normalizer validates the port, and the destination guard does not depend
+    on its caller having done so — the same reasoning as finding A4."""
+
+    BAD_PORT = "https://docs-control.3dstories.ca:notaport"
+
+    def test_the_normalizer_refuses_a_non_integer_port(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._normalized_origin(self.BAD_PORT, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+        assert e.value.stage == 5
+        assert "DOC_HARNESS_CONTROL_URL" in e.value.message
+
+    def test_the_destination_guard_refuses_it_on_its_own(self):
+        """Called directly, with no normalizer in front of it."""
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_bearer_destination(self.BAD_PORT, env={})
+
+    def test_the_edge_predicate_answers_false_rather_than_raising(self):
+        assert publish_doc._control_is_edge(self.BAD_PORT) is False
+
+    def test_the_guarded_builder_refuses_it_as_a_stage_5_failure(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                self.BAD_PORT, "/v1/deployments/x", "tok", method="GET", body=None,
+                env={"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+                     "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert e.value.stage == 5
+
+    def test_an_out_of_range_port_is_refused_too(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc._normalized_origin(
+                "https://docs-control.3dstories.ca:99999", stage=5, varname="X")
+
+    def test_the_parse_refusal_never_renders_the_url(self):
+        """Step-review finding 2. A base too malformed to parse can still carry userinfo, which
+        IS a credential — and the refusal was quoting the whole base back. The message names the
+        destination category, never the value."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_bearer_destination(
+                "https://user:SUPERSECRET@h:notaport", env={})
+        assert "SUPERSECRET" not in e.value.message

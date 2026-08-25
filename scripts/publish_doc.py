@@ -242,7 +242,13 @@ def _normalized_origin(raw: str, *, stage: int, varname: str) -> str:
     """
     try:
         parsed = urllib.parse.urlsplit(raw.strip())
-        parsed.hostname  # noqa: B018 - the property itself is what raises on a bad host
+        # BOTH properties, and both inside the try: each parses lazily and each raises on its
+        # own kind of malformed input. `.hostname` raises on a bad IPv6 literal; `.port` raises
+        # on a non-integer or out-of-range port, and NOTHING here touched `.port` until the
+        # allowlist began testing it — which is how requiring a default port introduced a raw
+        # ValueError into the very guard this function feeds.
+        parsed.hostname  # noqa: B018
+        parsed.port      # noqa: B018
     except ValueError as e:
         raise StageError(
             stage, f"{varname} is not a URL that can be parsed ({e.__class__.__name__}). "
@@ -1019,13 +1025,27 @@ def assert_bearer_destination(base: str, env=None, *, stage: int = 6) -> None:
     rather than a default they inherit.
     """
     env = os.environ if env is None else env
-    parsed = urllib.parse.urlsplit(base)
-    host = (parsed.hostname or "").lower()
+    # This guard does not depend on a caller having normalized first (finding A4), so it parses
+    # defensively: `.hostname` and `.port` each raise on their own kind of malformed input, and
+    # a raw ValueError out of a destination check is the failure mode this whole branch exists
+    # to remove.
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        host = (parsed.hostname or "").lower()
+        port = parsed.port
+    except ValueError as e:
+        # The base is NOT quoted back. Every other refusal in this function can safely name its
+        # destination, because by then the URL has parsed — but a base too malformed to parse
+        # can still carry userinfo, and userinfo in a URL is a credential.
+        raise StageError(
+            stage, "refusing to send the publish bearer to a destination that is not a URL "
+                   f"this can parse ({e.__class__.__name__}). Check the control URL: give "
+                   "scheme, host and port only.") from e
     # #54 follow-up 2: the TLS branch tested the hostname alone, so any port on the pinned name
     # was admitted. A port is part of an endpoint, and the allowlist names ONE endpoint. The
     # plaintext branches below are deliberately untouched — loopback and bridge endpoints are
     # ADDRESSED by port, and narrowing them would break the operations path.
-    if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS and parsed.port in (None, 443):
+    if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS and port in (None, 443):
         return
     if parsed.scheme == "http" and _LOOPBACK.match(host):
         return
