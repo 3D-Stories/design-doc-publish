@@ -1,30 +1,26 @@
-"""AC6: a stranger's path, proven rather than assumed (#9).
+"""AC6: a stranger's path, proven rather than assumed (#9, harness era since 5.0.0).
 
 Design: `docs/planning/2026-08-10-9-first-run-setup-flow.md` (revision 3).
 
 The acceptance criterion is "proven, not assumed", on a development machine that is the
-opposite of a stranger's: it has the author's workspace file, an authenticated Vercel CLI,
+opposite of a stranger's: it has the author's workspace file, a working harness environment,
 and a config directory. A test that merely hides `~/rawgentic/.rawgentic_workspace.json`
-while keeping the real XDG config, the real environment variables and the real `vercel`
-binary is not a first-run test — it is the same machine with one file moved.
+while keeping the real XDG config and the real environment variables is not a first-run test —
+it is the same machine with one file moved.
 
 So these run in a SUBPROCESS against a constructed machine state:
 
 * `HOME` and `XDG_CONFIG_HOME` under `tmp_path`;
-* every `DESIGN_DOC_PUBLISH_*` and `VERCEL_*` variable removed from the child environment;
-* a fake `vercel` first on `PATH`, driven by a state file, logging every argv it receives.
-
-The fake covers only the probes SETUP itself makes. It is deliberately not a Vercel
-emulator: making it carry a full publish through stages 4-7 would need `pagination.next`, a
-deploy log and a live URL for the stage-6 verifier, and the test would then pass because the
-emulator agrees with the code rather than because the code is right. The `--scope` invariant
-is asserted in `test_scope_threading.py` instead, in-process, the way this suite already
-asserts it.
+* every `DESIGN_DOC_PUBLISH_*`, `DOC_HARNESS_*` and `CF_ACCESS_*` variable absent from the
+  child environment;
+* where a harness is needed, a REAL local HTTP server started by the test, answering the
+  read-back contract — so the probe is proven over a real socket, not a monkeypatch.
 """
+import http.server
 import json
-import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -35,95 +31,63 @@ ROOT = SCRIPTS.parent
 SETUP = SCRIPTS / "setup.py"
 PUBLISH = SCRIPTS / "publish_doc.py"
 
-SCOPE = "example-team"
+TOKEN = "stranger-bearer"
 
-FAKE_VERCEL = '''#!/usr/bin/env python3
-"""A stand-in for the Vercel CLI, covering only the probes setup makes."""
-import json
-import os
-import sys
 
-log = os.environ["FAKE_VERCEL_LOG"]
-state = os.environ["FAKE_VERCEL_STATE"]
-context = os.environ.get("FAKE_VERCEL_CONTEXT", "%s")
-mode = os.environ.get("FAKE_VERCEL_MODE", "ok")
+class _ControlStub(http.server.BaseHTTPRequestHandler):
+    """The read-back route, over a real socket. 200 with the contract for the right bearer,
+    401 otherwise — which is exactly the split setup's probe must tell apart."""
 
-with open(log, "a") as handle:
-    handle.write(json.dumps(sys.argv[1:]) + "\\n")
+    def do_GET(self):
+        if self.headers.get("Authorization") != "Bearer " + TOKEN:
+            self.send_response(401)
+            self.end_headers()
+            return
+        body = json.dumps({"name": "setup-readiness-probe", "active_deployment_id": None,
+                           "commit_sha": None, "published_at": None}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-argv = sys.argv[1:]
+    def log_message(self, *a):
+        pass
 
-if argv[:1] == ["whoami"]:
-    if os.path.exists(state):
-        sys.stdout.write("a-person\\n")
-        raise SystemExit(0)
-    sys.stderr.write("Error: no existing credentials found\\n")
-    raise SystemExit(1)
 
-if argv[:3] == ["project", "ls", "--format"]:
-    if mode == "notjson":
-        sys.stdout.write("Vercel CLI 56.5.0\\nnot json at all\\n")
-        raise SystemExit(0)
-    if mode == "denied":
-        sys.stderr.write("Error: You are not authorized\\n")
-        raise SystemExit(1)
-    sys.stdout.write(json.dumps({
-        "projects": [], "pagination": {"next": None}, "contextName": context}))
-    raise SystemExit(0)
-
-raise SystemExit(0)
-''' % SCOPE
+@pytest.fixture
+def control_url():
+    server = http.server.HTTPServer(("127.0.0.1", 0), _ControlStub)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield "http://127.0.0.1:%d" % server.server_port
+    server.shutdown()
 
 
 @pytest.fixture
 def stranger(tmp_path):
-    """A machine that has never run setup, and a CLI we control."""
+    """A machine that has never run setup, with nothing configured at all."""
     home = tmp_path / "home"
     (home / ".config").mkdir(parents=True)
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-
-    fake = bindir / "vercel"
-    fake.write_text(FAKE_VERCEL, encoding="utf-8")
-    fake.chmod(0o755)
-
-    log = tmp_path / "argv.log"
-    state = tmp_path / "logged-in"
 
     env = {
         "HOME": str(home),
         "XDG_CONFIG_HOME": str(home / ".config"),
-        "PATH": f"{bindir}:/usr/bin:/bin",
-        "FAKE_VERCEL_LOG": str(log),
-        "FAKE_VERCEL_STATE": str(state),
+        "PATH": "/usr/bin:/bin",
         "LC_ALL": "C.UTF-8",
     }
-    # Nothing of this machine's own configuration may leak in. Removing only the workspace
-    # file would leave the real XDG config, the real variables and the real binary in place,
-    # which is not a first run.
-    for name in os.environ:
-        assert not name.startswith("DESIGN_DOC_PUBLISH_") or name not in env
 
     class Stranger:
         def __init__(self):
-            self.home, self.env, self.log, self.state = home, env, log, state
+            self.home, self.env = home, env
             self.tmp = tmp_path
 
         def run(self, script, *args, **overrides):
-            env = dict(self.env)
-            env.update(overrides)
+            child = dict(self.env)
+            child.update(overrides)
             return subprocess.run([sys.executable, str(script), *args],
                                   capture_output=True, text=True, cwd=str(self.tmp),
-                                  env=env, check=False)
-
-        def log_in(self):
-            self.state.write_text("yes", encoding="utf-8")
-
-        def argv(self):
-            if not self.log.exists():
-                return []
-            return [json.loads(line) for line in
-                    self.log.read_text(encoding="utf-8").splitlines() if line]
+                                  env=child, check=False)
 
     return Stranger()
 
@@ -134,9 +98,8 @@ class TestSetupOnAMachineWithNothing:
         assert proc.returncode == 0, proc.stderr
         state = json.loads(proc.stdout)
         assert state["first_run"] is True
-        assert state["authenticated"] is False
         assert state["can_proceed"] is False
-        assert state["status"] == "needs_login"
+        assert state["status"] == "needs_config"
         assert not (stranger.home / ".config" / "design-doc-publish").exists(), (
             "reporting must not create anything")
 
@@ -148,65 +111,63 @@ class TestSetupOnAMachineWithNothing:
         assert ROOT not in config.parents, f"{config} is inside the installed tree"
         assert str(config).startswith(str(stranger.home))
 
-    def test_with_no_vercel_at_all_it_says_so(self, stranger):
-        proc = stranger.run(SETUP, "--json", PATH="/usr/bin:/bin")
-        state = json.loads(proc.stdout)
-        assert state["status"] == "needs_vercel_cli"
-        assert state["vercel_cli"] is False
-
     def test_check_exits_non_zero_with_one_line(self, stranger):
         proc = stranger.run(SETUP, "--check")
-        assert proc.returncode == 3, proc.stderr
+        assert proc.returncode == 4, proc.stderr
         assert proc.stderr.count("\n") == 1
         assert proc.stdout == ""
 
-    def test_it_walks_an_unauthenticated_user_through_login_without_running_it(self,
-                                                                              stranger):
-        proc = stranger.run(SETUP)
-        assert "vercel login" in proc.stdout
-        assert ["login"] not in stranger.argv(), "login must never be run for the user"
+    def test_a_workspace_alone_still_names_the_missing_environment(self, stranger):
+        assert stranger.run(SETUP, "--init-workspace").returncode == 0
+        state = json.loads(stranger.run(SETUP, "--json").stdout)
+        assert state["status"] == "needs_harness_env"
+        assert state["can_proceed"] is False
 
-    def test_the_whole_flow_ends_ready(self, stranger):
-        stranger.log_in()
-        assert stranger.run(SETUP, "--set-scope", SCOPE).returncode == 0
+    def test_the_whole_flow_ends_ready(self, stranger, control_url):
         assert stranger.run(SETUP, "--init-workspace").returncode == 0
         assert stranger.run(SETUP, "--add-project", "payments-api").returncode == 0
 
-        state = json.loads(stranger.run(SETUP, "--json").stdout)
+        env = {"DOC_HARNESS_CONTROL_URL": control_url,
+               "DOC_HARNESS_PUBLISH_TOKEN": TOKEN}
+        state = json.loads(stranger.run(SETUP, "--json", **env).stdout)
         assert state["status"] == "ready"
         assert state["can_proceed"] is True
         assert state["project_count"] == 1
         assert state["first_run"] is False
-        assert stranger.run(SETUP, "--check").returncode == 0
+        assert state["harness_reachable"] is True
+        assert stranger.run(SETUP, "--check", **env).returncode == 0
 
-    def test_a_team_that_answers_for_someone_else_is_refused(self, stranger):
-        stranger.log_in()
-        proc = stranger.run(SETUP, "--set-scope", SCOPE, FAKE_VERCEL_CONTEXT="another-team")
-        assert proc.returncode != 0
-        assert "another-team" in proc.stderr
-        config = stranger.home / ".config" / "design-doc-publish" / "config.json"
-        assert not config.exists(), "nothing may be recorded when the team is not proved"
-
-    def test_a_probe_that_cannot_be_parsed_is_not_reported_as_a_denial(self, stranger):
-        stranger.log_in()
-        proc = stranger.run(SETUP, "--set-scope", SCOPE, FAKE_VERCEL_MODE="notjson")
-        assert proc.returncode != 0
-        assert "JSON" in proc.stderr or "json" in proc.stderr
-        assert "not authorized" not in proc.stderr.lower()
-
-    def test_no_credential_is_ever_written(self, stranger):
-        stranger.log_in()
-        stranger.run(SETUP, "--set-scope", SCOPE)
+    def test_a_wrong_bearer_is_a_denial_over_a_real_socket(self, stranger, control_url):
         stranger.run(SETUP, "--init-workspace")
+        proc = stranger.run(SETUP, "--check",
+                            DOC_HARNESS_CONTROL_URL=control_url,
+                            DOC_HARNESS_PUBLISH_TOKEN="the-wrong-one")
+        assert proc.returncode == 3, proc.stderr
+        assert "bearer" in proc.stderr.lower() or "TOKEN" in proc.stderr
+
+    def test_a_dead_endpoint_is_unreachable_not_a_denial(self, stranger):
+        stranger.run(SETUP, "--init-workspace")
+        proc = stranger.run(SETUP, "--check",
+                            DOC_HARNESS_CONTROL_URL="http://127.0.0.1:9",  # discard port
+                            DOC_HARNESS_PUBLISH_TOKEN=TOKEN)
+        assert proc.returncode == 5, proc.stderr
+        assert "bearer" not in proc.stderr.lower(), (
+            "a connection failure must not read as a credential problem")
+
+    def test_no_credential_is_ever_written(self, stranger, control_url):
+        stranger.run(SETUP, "--init-workspace",
+                     DOC_HARNESS_CONTROL_URL=control_url,
+                     DOC_HARNESS_PUBLISH_TOKEN=TOKEN)
         config = stranger.home / ".config" / "design-doc-publish" / "config.json"
-        stored = json.loads(config.read_text(encoding="utf-8"))
-        assert set(stored) <= {"version", "vercel_scope", "workspace_file",
-                               "owned_workspace_file"}
+        stored = config.read_text(encoding="utf-8")
+        assert TOKEN not in stored
+        assert set(json.loads(stored)) <= {"version", "workspace_file",
+                                           "owned_workspace_file"}
 
 
 class TestPublishingBeforeSetup:
     """AC5, by the path a stranger takes: stage 2 precedes every network call, so this is
-    fully hermetic and needs no `vercel` at all."""
+    fully hermetic and needs no harness at all."""
 
     def _doc(self, stranger):
         doc = stranger.tmp / "hello.md"
@@ -230,11 +191,10 @@ class TestPublishingBeforeSetup:
         assert "Traceback" not in proc.stderr, "a stranger must never see a traceback"
         assert "rawgentic" not in proc.stderr.replace(str(ROOT), ""), (
             "the message must not name a path only the author has")
-        assert stranger.argv() == [], "nothing may reach an account before stage 2 passes"
 
     def test_rendering_still_works_with_nothing_configured(self, stranger):
         """The shape that must not break: the README's first command needs no workspace, no
-        team and no network."""
+        harness and no network."""
         doc = stranger.tmp / "hello.md"
         doc.write_text("# Hello\n\nA first page.\n\n## A section\n\nSome prose.\n",
                        encoding="utf-8")
@@ -243,13 +203,10 @@ class TestPublishingBeforeSetup:
                             "--title", "Hello")
         assert proc.returncode == 0, proc.stderr
         assert out.is_file() and "<html" in out.read_text(encoding="utf-8")
-        assert stranger.argv() == []
 
     def test_after_setup_the_same_command_gets_past_stage_two(self, stranger):
         """The other half of the criterion: the refusal is not permanent, and following its
         instruction is what clears it."""
-        stranger.log_in()
-        stranger.run(SETUP, "--set-scope", SCOPE)
         stranger.run(SETUP, "--init-workspace")
         stranger.run(SETUP, "--add-project", "payments-api")
 
@@ -258,4 +215,3 @@ class TestPublishingBeforeSetup:
                             "--project", "payments-api", "--type", "design", "--ref", "1",
                             "--title", "Payments rollout design", "--dry-run")
         assert proc.returncode == 0, proc.stderr
-        assert "2/6 name payments-api-design-1" in proc.stdout

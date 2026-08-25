@@ -500,7 +500,7 @@ def _strip_duplicate_title(markdown: str, title: str) -> str:
     site for why that matters.
 
     #67: it used to remove the heading ONLY on a byte-for-byte match with `--title`, so
-    abbreviating the title for a browser tab or a Vercel project name silently produced a page
+    abbreviating the title for a browser tab or a page name silently produced a page
     with two `<h1>` elements — bad for a screen reader, and it reads as a duplicated title to
     everyone else. A live page shipped with exactly that.
 
@@ -565,7 +565,7 @@ def _headline(title: str, style: str) -> tuple[str, str]:
 def _same_heading(heading: str, title: str) -> bool:
     """Whether a leading `# ` restates the page title, abbreviation included.
 
-    Abbreviating the title for a browser tab or a Vercel project name is ordinary, and the
+    Abbreviating the title for a browser tab or a page name is ordinary, and the
     abbreviation is nearly always a prefix — "Backlog re-evaluation — epics E1 to E5" against a
     heading that continues "…, after the audit". Byte equality called those two different
     documents and shipped a duplicated title.

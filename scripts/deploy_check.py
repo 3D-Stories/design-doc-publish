@@ -6,23 +6,19 @@ the page is live. Three things, and the third is the one that silently gets skip
 nothing looks for it.
 
 **This warns. It has no publishing path, and that is the whole design** (owner decision
-2026-08-02, option (d) of the four the issue weighs). The reason is a property of the Vercel plan
-rather than a preference: production deploys here cannot be gated — Vercel Authentication is
-unavailable for production, team password protection is off, and `protection enable --sso`
-exempts the `<name>.vercel.app` alias. Only PREVIEW deploys gate. So anything that publishes
-automatically puts unreviewed HTML on a public, indexable URL with no possible gate, and a
-write-triggered hook would additionally invert the lint-before-deploy ordering `publish_doc.py`
-deliberately has.
+2026-08-02, option (d) of the four the issue weighs). Anything that publishes automatically
+puts unreviewed HTML on a live URL with no gate, and a write-triggered hook would additionally
+invert the lint-before-publish ordering `publish_doc.py` deliberately has.
 
 A warning closes the same failure mode with none of that exposure, and it cannot invert an
 ordering it never participates in.
 
-**What counts as evidence of a deploy, offline.** The convention this workspace already follows is
-that a design doc links its live page from the companion markdown — `· [live](https://….vercel.app)`
-appears in epic #77's own body. So each rendered `.html` is paired with its same-stem `.md` and
-searched for a `vercel.app` URL; a link inside the HTML itself counts too, for a page that has no
-companion. This is a heuristic over a CONVENTION, not a query against Vercel: a Stop hook has to be
-local, offline and fast, and it must not need a credential.
+**What counts as evidence of a live page, offline.** The convention this workspace already
+follows is that a design doc links its live page from the companion markdown —
+`· [live](https://<name>.3dstories.ca)`. So each rendered `.html` is paired with its same-stem
+`.md` and searched for a zone URL; a link inside the HTML itself counts too, for a page that has
+no companion. This is a heuristic over a CONVENTION, not a query against the harness: a Stop
+hook has to be local, offline and fast, and it must not need a credential.
 
 **Consequences of that choice, stated rather than discovered later.** A page deployed but never
 linked is reported as undeployed — a false alarm, and the fix is to link it, which the mandate
@@ -139,10 +135,10 @@ def _is_rendered(html: str) -> bool:
         return False
     return scanner.found
 
-_LIVE_MARK = "vercel.app"
+_LIVE_MARK = "3dstories.ca"
 
-# Derived build artifacts, not design docs. `index/index.html` is gitignored and rebuilt from
-# `vercel project ls`; warning about it forever would train the reader to ignore the warning.
+# Derived build artifacts, not design docs. The index is server-rendered by the harness;
+# warning about a build artifact forever would train the reader to ignore the warning.
 _SKIP_PARTS = {"index", "node_modules", ".git"}
 
 

@@ -1609,3 +1609,33 @@ class TestReachabilityUsesAPrunedFetch:
         publish_doc.assert_head_reachable(Path("."), "origin", "main", fetch=True, runner=git)
         assert any(c[:2] == ("fetch", "--prune") for c in git.calls), \
             f"expected a pruning fetch, saw {git.calls}"
+
+
+class TestControlHostHeader:
+    """The harness routes on the HOST header, and a loopback control call carries the wrong
+    one. Measured on the #36 live run: `publish_doc` could not publish to a local harness at
+    all, because `Host: 127.0.0.1:18081` is not inside the configured zone, and the run needed
+    a hand-written client. The origin half already solved this for SERVING requests by setting
+    the Host explicitly; the control call now does the same."""
+
+    def test_a_loopback_control_call_names_the_control_host(self):
+        req = publish_doc._control_request(
+            "http://127.0.0.1:18081", "/v1/deployments", "tok", method="GET", body=None,
+            env={"DOC_HARNESS_PUBLISH_TOKEN": "tok"})
+        assert req.get_header("Host") == "docs-control.3dstories.ca"
+
+    def test_a_bridge_address_control_call_names_it_too(self):
+        req = publish_doc._control_request(
+            "http://172.17.0.2:8080", "/v1/deployments", "tok", method="GET", body=None,
+            env={"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+                 # Plaintext to the docker bridge needs its explicit grant, naming the host.
+                 "DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.17.0.2:8080"})
+        assert req.get_header("Host") == "docs-control.3dstories.ca"
+
+    def test_the_tls_control_host_is_left_alone(self):
+        # Over the edge the URL already carries the right name, and an explicit override
+        # would mask a mismatch instead of failing on it.
+        req = publish_doc._control_request(
+            "https://docs-control.3dstories.ca", "/v1/deployments", "tok", method="GET",
+            body=None, env={"DOC_HARNESS_PUBLISH_TOKEN": "tok"})
+        assert req.get_header("Host") is None

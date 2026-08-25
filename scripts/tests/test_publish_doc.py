@@ -13,17 +13,11 @@ Three rules these tests exist to enforce:
   suite could not have caught a stale deployment — the exact defect Step 11 found. The
   fake now serves back the bytes the fake deploy received, keyed by project, and answers
   404 for a project that was never deployed.
-* **The Vercel CLI is never invoked.** `subprocess.run` and `urlopen` are patched on their
+* **No network is ever touched.** `subprocess.run` and `urlopen` are patched on their
   own modules, which catches `publish_doc` and `build_index` alike — both do a plain
   `import subprocess`, so the attribute is looked up at call time.
 
-The `vercel project ls` fixture is REAL output captured from this account
-(`fixtures/vercel_project_ls.json`, Vercel CLI 56.5.0, 2026-08-04). Since #125 the listing is
-read as JSON, which inverts the trap the old fixture pinned: `--format json` puts the payload on
-**stdout** and leaves only the banner on stderr, where the human table did the opposite. The
-retired table capture stays on disk as `fixtures/vercel_project_ls.txt` — `test_build_index.py`
-feeds it as the most likely thing to arrive if a CLI upgrade drops the flag, and documents the
-JSON fixture's one deviation from its raw capture (its row set is subset).
+The old hosted-CLI fixtures were removed with the rest of the vendor era in 5.0.0.
 """
 import json
 import os
@@ -43,29 +37,9 @@ sys.path.insert(0, str(SCRIPTS))
 
 import publish_doc  # noqa: E402
 
-FIXTURES = Path(__file__).resolve().parent / "fixtures"
-LS_OUTPUT = (FIXTURES / "vercel_project_ls.json").read_text(encoding="utf-8")
-
-# What the CLI leaves on stderr in --format json mode: the banner, and nothing else.
-LS_BANNER = "Vercel CLI 56.5.0 (Node.js 22.22.1)\nFetching projects in 3d-stories\n"
-
 # A project that IS in the captured output, and one that is not.
 EXISTING = "example-plan-786"
 ABSENT = "example-design-12"
-
-# RECONSTRUCTED, not captured: recording a real `vercel deploy` transcript would mean
-# publishing a page. The shape follows the CLI's documented output, and the parser under
-# test scans the whole log for a host belonging to this project rather than anchoring to
-# a line, so a layout change degrades to "found it somewhere" instead of a false refusal.
-DEPLOY_LOG = """Vercel CLI 56.5.0 (Node.js 22.22.1)
-Retrieving project&
-Deploying 3d-stories/{name}
-Uploading [====================] (1.2KB/1.2KB)
-Inspect: https://vercel.com/3d-stories/{name}/8Qk3nR2 [2s]
-Production: https://{name}-8qk3nr2-3d-stories.vercel.app [8s]
-Aliased to https://{name}.vercel.app
-"""
-
 
 def _page(title, body="body text"):
     """What the renderer really emits, so no assertion is a guess about its output."""
@@ -73,135 +47,6 @@ def _page(title, body="body text"):
 
 
 # --------------------------------------------------------------------------- fakes
-
-class FakeRun:
-    """Stands in for `subprocess.run`. Records every call, answers from recorded text,
-    and — crucially — remembers what each deploy actually shipped."""
-
-    def __init__(self, ls_output=LS_OUTPUT, deploy_rc=0, deploy_log=None,
-                 ls_rc=0, index_rc=0, link_rc=0, raises=None, index_rows=None):
-        self.calls = []
-        self.deployed = {}        # project -> the bytes that deploy received
-        self.shipped = {}         # project -> {relative path: bytes} for the whole deploy dir
-        self._linked = {}         # cwd -> project last linked there
-        self.ls_output, self.ls_rc = ls_output, ls_rc
-        self.deploy_rc, self.deploy_log = deploy_rc, deploy_log
-        self.index_rc, self.link_rc, self.raises = index_rc, link_rc, raises
-        self.index_rows = index_rows
-
-    def deploys(self):
-        """Every call that reaches the outside world or changes anything.
-
-        `calls` records every subprocess, and since #163 stage 3 also runs a LOCAL,
-        read-only `git show` to diff a republish against its last committed text. That is
-        not a deploy and not a network call, so the "nothing deployed" assertions below
-        filter it out — they were always about reaching the outside world, as their own
-        names say. `test_a_refusal_makes_no_vercel_call_at_all` pins the strict property
-        directly, so narrowing these does not lose it.
-        """
-        return [(c, cwd) for c, cwd in self.calls if c[:1] != ["git"]]
-
-    def cmds(self):
-        return [c for c, _ in self.calls]
-
-    def ran(self, *prefix):
-        return [(c, cwd) for c, cwd in self.calls if tuple(c[:len(prefix)]) == prefix]
-
-    def sequence(self):
-        """A coarse ordered trace, for asserting stage order rather than membership."""
-        out = []
-        for c, _ in self.calls:
-            if c[:3] == ["vercel", "project", "inspect"]:
-                out.append("inspect")
-            elif c[:3] == ["vercel", "project", "ls"]:
-                out.append("ls")
-            elif c[:2] == ["vercel", "link"]:
-                out.append(f"link:{c[c.index('--project') + 1]}")
-            elif c[:2] == ["vercel", "deploy"]:
-                out.append("deploy")
-            elif "build_index.py" in " ".join(c):
-                out.append("build_index")
-        return out
-
-    def __call__(self, cmd, **kw):
-        cmd = list(cmd)
-        cwd = kw.get("cwd")
-        self.calls.append((cmd, cwd))
-        if self.raises:
-            raise self.raises
-
-        if cmd[:3] == ["vercel", "project", "inspect"]:
-            # #9: stage 4 asks about ONE project instead of enumerating the account. Answered
-            # from the same recorded listing every test already sets, so what each test means
-            # by "this project exists" is unchanged. `ls_rc` still models a CLI that is
-            # failing, which must read as an ERROR rather than as absence.
-            if self.ls_rc != 0:
-                return subprocess.CompletedProcess(cmd, self.ls_rc, "", "the CLI is unwell\n")
-            name = cmd[3]
-            if name in self._ls_names():
-                return subprocess.CompletedProcess(
-                    cmd, 0, f"> Found Project team/{name}\n", LS_BANNER)
-            return subprocess.CompletedProcess(
-                cmd, 1, "", f'Error: There is no project for "{name}"\n')
-
-        if cmd[:3] == ["vercel", "project", "ls"]:
-            # The trap, reproduced — and it is the INVERSE of the table mode's: `--format json`
-            # puts the payload on STDOUT and leaves only the banner on stderr. A parser that
-            # kept reading both streams would concatenate the banner into the JSON.
-            return subprocess.CompletedProcess(cmd, self.ls_rc, self.ls_output, LS_BANNER)
-
-        if cmd[:2] == ["vercel", "link"]:
-            self._linked[cwd] = cmd[cmd.index("--project") + 1]
-            return subprocess.CompletedProcess(cmd, self.link_rc, "Linked\n", "")
-
-        if cmd[:2] == ["vercel", "deploy"]:
-            name = self._linked.get(cwd, "unlinked")
-            # Reading it here is the point: a deploy ships whatever is in the directory,
-            # so the fake must fail loudly if nothing was written.
-            self.deployed[name] = (Path(cwd) / "index.html").read_bytes()
-            # #121: the page is no longer the only thing in that directory. Snapshot the WHOLE
-            # tree, because "the asset never ships" is a claim about what the directory holds at
-            # this exact moment — the tempdir is gone by the time a test could look.
-            root = Path(cwd)
-            self.shipped[name] = {
-                p.relative_to(root).as_posix(): p.read_bytes()
-                for p in sorted(root.rglob("*")) if p.is_file()
-            }
-            log = self.deploy_log if self.deploy_log is not None else DEPLOY_LOG.format(name=name)
-            return subprocess.CompletedProcess(cmd, self.deploy_rc, log, "")
-
-        if "build_index.py" in " ".join(cmd):
-            out = cmd[cmd.index("--out") + 1]
-            if self.index_rc == 0:
-                # A real index carries one row per project. `index_rows=None` means
-                # "however many the CLI currently lists", which is the honest default;
-                # a number models a build that raced another publisher.
-                n = self.index_rows if self.index_rows is not None else self._ls_count()
-                rows = "".join(f'<li><a href="https://p{i}.vercel.app">p{i}</a></li>'
-                               for i in range(n))
-                Path(out).parent.mkdir(parents=True, exist_ok=True)
-                Path(out).write_text(f"<html><title>docs index</title>{rows}</html>",
-                                     encoding="utf-8")
-            return subprocess.CompletedProcess(cmd, self.index_rc, "wrote it\n", "")
-
-    def _ls_names(self):
-        """Every project name in the recorded listing, including the index's own."""
-        try:
-            return {p.get("name") for p in json.loads(self.ls_output)["projects"]}
-        except (ValueError, KeyError, TypeError):
-            return set()
-
-    def _ls_count(self):
-        """How many rows a real index would carry, counted the way the code under test counts:
-        from the JSON payload, minus the index's own project."""
-        try:
-            projects = json.loads(self.ls_output)["projects"]
-        except (ValueError, KeyError, TypeError):
-            return 0
-        return len([p for p in projects if p.get("name") != "docs-index"])
-
-        raise AssertionError(f"unexpected subprocess call: {cmd}")
-
 
 class FakeResponse:
     def __init__(self, body: bytes, status=200, final=None):
@@ -238,7 +83,7 @@ class FakeUrlopen:
 
     def _project(self, url):
         host = url.split("//", 1)[-1].split("/", 1)[0]
-        return host.split(".vercel.app")[0]
+        return host.split(".")[0]
 
     def __call__(self, req, timeout=None):
         url = req.full_url if hasattr(req, "full_url") else str(req)
@@ -260,7 +105,7 @@ class FakeUrlopen:
         return FakeResponse(body, self.status, final=self.redirect_to or url)
 
 
-# #9: the Vercel team is configuration now, not a constant. Every test that publishes states
+# #9: the account/tenant was configuration, never a constant. Every test that publishes states
 # the team it publishes to, which is also what proves the value reaching `--scope` is the
 # CONFIGURED one rather than something baked in.
 SCOPE = "example-team"
@@ -528,7 +373,7 @@ class TestTheNameIsDerivedFromValidatedComponents:
         assert publish_doc.derive_name(
             "workspace", "audit", "harness", workspace)[0] == "workspace-audit-harness"
 
-    def test_case_is_folded_because_vercel_folds_it(self, workspace):
+    def test_case_is_folded_because_hostnames_fold_it(self, workspace):
         """`Rawgentic` and `rawgentic` must not become two projects."""
         assert publish_doc.derive_name(
             "Rawgentic", "design", "735", workspace)[0] == "rawgentic-design-735"
@@ -555,7 +400,7 @@ class TestTheNameIsDerivedFromValidatedComponents:
 
     @pytest.mark.parametrize("ref", ["01", "007", "0"])
     def test_a_non_canonical_issue_number_is_refused(self, ref, workspace):
-        """`-01` and `-1` would be two Vercel projects for one issue."""
+        """`-01` and `-1` would be two page names for one issue."""
         with pytest.raises(publish_doc.StageError):
             publish_doc.derive_name("example", "design", ref, workspace)
 
@@ -572,15 +417,15 @@ class TestTheNameIsDerivedFromValidatedComponents:
         ws.write_text(json.dumps({"projects": [{"name": long_project}]}), encoding="utf-8")
         ref = "b" * 40
         assert len(f"{long_project}-design-{ref}") > publish_doc.MAX_NAME
-        with pytest.raises(publish_doc.StageError, match="not a usable Vercel"):
+        with pytest.raises(publish_doc.StageError, match="not a usable page"):
             publish_doc.derive_name(long_project, "design", ref, ws)
 
     def test_an_underscore_project_is_refused_by_the_assembled_name_rule(self, tmp_path):
-        """A real workspace holds `chorestory_business`; Vercel names cannot carry `_`."""
+        """A real workspace holds `chorestory_business`; a DNS label cannot carry `_`."""
         ws = tmp_path / "u.json"
         ws.write_text(json.dumps({"projects": [{"name": "chorestory_business"}]}),
                       encoding="utf-8")
-        with pytest.raises(publish_doc.StageError, match="not a usable Vercel"):
+        with pytest.raises(publish_doc.StageError, match="not a usable page"):
             publish_doc.derive_name("chorestory_business", "design", "5", ws)
 # --------------------------------------------------------------------------- #23, RETIRED by #36
 #
@@ -1001,7 +846,7 @@ class TestTheSkillCallsTheCommand:
             assert any(flag in b for b in blocks), flag
 
     def test_it_no_longer_carries_the_manual_recipe(self):
-        """A copy-pasteable `vercel link`/`deploy` is the prose the script replaces.
+        """A copy-pasteable deploy incantation is the prose the script replaces.
         Naming the commands is fine; a runnable line is not."""
         bad = [ln for ln in self._text().splitlines()
                if ln.strip().startswith(("vercel link", "vercel deploy"))]

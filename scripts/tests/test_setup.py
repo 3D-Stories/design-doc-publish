@@ -1,6 +1,4 @@
-"""The first-run setup entry point (#9).
-
-Design: `docs/planning/2026-08-10-9-first-run-setup-flow.md` (revision 3).
+"""The first-run setup entry point (#9), rebuilt around the harness (5.0.0).
 
 Setup's whole job is to be honest on a machine that has nothing. So the tests that matter
 here are the refusals and the state reporting, not the happy path:
@@ -9,20 +7,20 @@ here are the refusals and the state reporting, not the happy path:
   project list can still publish to the literal `workspace` bucket, so `can_proceed` is true
   while `status` still names something missing. A first run lacking only an optional thing is
   not reported as broken.
-* **Authentication is not authorization.** `vercel whoami` succeeding says nothing about
-  whether the recorded team is usable, so setup proves the team with the same scoped listing
-  the publisher itself makes and compares `contextName`.
-* **A probe that could not run is not a denial.** Reporting a network blip as `scope_denied`
-  sends the user to fix a permission they already hold.
+* **A probe that could not run is not a denial.** Reporting a network blip as `harness_denied`
+  sends the user to rotate a credential they already hold.
+* **The probe is read-only.** It uses the control API's read-back route, which proves the URL
+  and the bearer together while publishing nothing.
 * **`--add-project` never writes to a file this package did not create.** The resolved
   workspace may be someone else's, read by other tools.
-* **No credential is ever stored, and `vercel login` is never run** — it is interactive and
-  mutates machine-global state.
+* **No credential is ever stored.** The harness tokens live in the environment, and the config
+  file holds only the workspace pointer.
 """
+import io
 import json
-import shutil
-import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -33,9 +31,16 @@ sys.path.insert(0, str(SCRIPTS))
 import setup as setup_mod  # noqa: E402
 import user_config  # noqa: E402
 
-SCOPE = "example-team"
 ENV_VARS = ("DESIGN_DOC_PUBLISH_CONFIG", "DESIGN_DOC_PUBLISH_WORKSPACE_FILE",
-            "DESIGN_DOC_PUBLISH_VERCEL_SCOPE", "XDG_CONFIG_HOME")
+            "XDG_CONFIG_HOME", "DOC_HARNESS_CONTROL_URL", "DOC_HARNESS_PUBLISH_TOKEN",
+            "DOC_HARNESS_PUBLIC_BASE", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET")
+
+CONTROL = "http://127.0.0.1:18081"
+TOKEN = "test-bearer"
+
+#: What the read-back route answers for an ABSENT name (contract C9): 200 with a null id.
+CONTRACT_BODY = json.dumps({"name": "setup-readiness-probe", "active_deployment_id": None,
+                            "commit_sha": None, "published_at": None}).encode("utf-8")
 
 
 @pytest.fixture(autouse=True)
@@ -60,90 +65,127 @@ def _write(path, data):
     return path
 
 
-class FakeVercel:
-    """Stands in for the CLI. Records every argv so the tests can assert what was asked."""
+class _Resp:
+    def __init__(self, body):
+        self._body = io.BytesIO(body)
 
-    def __init__(self, *, installed=True, logged_in=True, listing=None, rc=0, raises=None):
-        self.installed = installed
-        self.logged_in = logged_in
-        self.listing = listing
-        self.rc = rc
+    def read(self, n=None):
+        return self._body.read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class FakeHarness:
+    """Stands in for the control API. Records every URL so the tests can assert what was
+    asked, and — the property that matters — that the probe only ever GETs."""
+
+    def __init__(self, *, body=CONTRACT_BODY, status=None, raises=None):
+        self.body = body
+        self.status = status          # an HTTP error code, or None for 200
         self.raises = raises
         self.calls = []
 
     def install(self, monkeypatch):
-        monkeypatch.setattr(shutil, "which",
-                            lambda name: "/usr/bin/vercel" if self.installed else None)
-        monkeypatch.setattr(subprocess, "run", self)
+        monkeypatch.setattr(urllib.request, "urlopen", self)
         return self
 
-    def __call__(self, cmd, **kw):
-        self.calls.append(list(cmd))
+    def __call__(self, req, timeout=None):
+        self.calls.append((req.get_method(), req.full_url, dict(req.headers)))
         if self.raises:
             raise self.raises
-        if "whoami" in cmd:
-            return subprocess.CompletedProcess(
-                cmd, 0 if self.logged_in else 1,
-                "someone\n" if self.logged_in else "", "" if self.logged_in else "no session")
-        if "ls" in cmd:
-            body = self.listing if self.listing is not None else json.dumps(
-                {"projects": [], "pagination": {"next": None}, "contextName": SCOPE})
-            return subprocess.CompletedProcess(cmd, self.rc, body, "")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
+        if self.status:
+            raise urllib.error.HTTPError(req.full_url, self.status, "refused", {}, None)
+        return _Resp(self.body)
 
 
-def _status(monkeypatch, fake, cfg, **kw):
+def _env(**extra):
+    base = {"DOC_HARNESS_CONTROL_URL": CONTROL, "DOC_HARNESS_PUBLISH_TOKEN": TOKEN}
+    base.update(extra)
+    return {k: v for k, v in base.items() if v is not None}
+
+
+def _status(monkeypatch, fake, cfg, env=None, **kw):
     fake.install(monkeypatch)
-    return setup_mod.status(config_path=cfg, **kw)
+    return setup_mod.status(config_path=cfg, env=env if env is not None else _env(), **kw)
+
+
+def _ready_files(cfg, tmp_path, projects=({"name": "widget"},)):
+    ws = _write(tmp_path / "ws.json", {"version": 1, "projects": list(projects)})
+    _write(cfg, {"version": 1, "workspace_file": str(ws)})
+    return ws
 
 
 # --------------------------------------------------------------------- the state table
 
 class TestTheStateTable:
-    def test_no_cli_installed(self, monkeypatch, cfg):
-        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
-        assert s["status"] == "needs_vercel_cli"
-        assert s["can_proceed"] is False
-        assert s["project_count"] is None
-        assert setup_mod.exit_code(s) == 2
-
-    def test_installed_but_not_authenticated(self, monkeypatch, cfg):
-        s = _status(monkeypatch, FakeVercel(logged_in=False), cfg)
-        assert s["status"] == "needs_login"
-        assert s["can_proceed"] is False
-        assert setup_mod.exit_code(s) == 3
-
-    def test_authenticated_but_nothing_configured(self, monkeypatch, cfg):
-        s = _status(monkeypatch, FakeVercel(), cfg)
+    def test_nothing_configured(self, monkeypatch, cfg):
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "needs_config"
         assert s["can_proceed"] is False
+        assert s["project_count"] is None
         assert setup_mod.exit_code(s) == 4
 
-    def test_a_probe_that_could_not_run_is_not_a_denial(self, monkeypatch, cfg, tmp_path):
-        """The distinction that keeps a network blip from telling someone to fix a
-        permission they already hold."""
-        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": [{"name": "widget"}]})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        s = _status(monkeypatch, FakeVercel(listing="not json at all"), cfg)
-        assert s["status"] == "vercel_probe_failed"
+    def test_a_workspace_but_no_harness_env(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg, env={})
+        assert s["status"] == "needs_harness_env"
         assert s["can_proceed"] is False
+        assert setup_mod.exit_code(s) == 2
+
+    def test_a_public_base_without_the_access_pair(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_PUBLIC_BASE="https://x.example"))
+        assert s["status"] == "edge_env_incomplete"
+        assert setup_mod.exit_code(s) == 2
+
+    def test_a_public_base_with_the_whole_pair_is_fine(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_PUBLIC_BASE="https://x.example",
+                             CF_ACCESS_CLIENT_ID="i", CF_ACCESS_CLIENT_SECRET="s"))
+        assert s["status"] == "ready"
+
+    def test_a_probe_that_could_not_run_is_not_a_denial(self, monkeypatch, cfg, tmp_path):
+        """The distinction that keeps a network blip from telling someone to rotate a
+        credential they already hold."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(raises=OSError("refused")), cfg)
+        assert s["status"] == "harness_unreachable"
+        assert s["harness_reachable"] is False
         assert setup_mod.exit_code(s) == 5
 
-    def test_a_listing_answering_for_another_team_is_a_denial(self, monkeypatch, cfg,
+    def test_garbage_from_the_endpoint_is_unreachable_not_denied(self, monkeypatch, cfg,
+                                                                 tmp_path):
+        """A non-JSON answer means this is not the control API, which says nothing about
+        the credential."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(body=b"<html>a login page</html>"), cfg)
+        assert s["status"] == "harness_unreachable"
+        assert setup_mod.exit_code(s) == 5
+
+    def test_a_contract_without_its_fields_is_unreachable_too(self, monkeypatch, cfg,
                                                               tmp_path):
-        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": [{"name": "widget"}]})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        other = json.dumps({"projects": [], "pagination": {"next": None},
-                            "contextName": "someone-else"})
-        s = _status(monkeypatch, FakeVercel(listing=other), cfg)
-        assert s["status"] == "scope_denied"
-        assert s["scope_list_accessible"] is False
+        """JSON alone is not the contract: an answer missing `active_deployment_id` is some
+        other service, and treating it as ready would fail at stage 5 instead."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(body=b'{"ok": true}'), cfg)
+        assert s["status"] == "harness_unreachable"
+
+    def test_a_401_is_a_denial(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(status=401), cfg)
+        assert s["status"] == "harness_denied"
+        assert s["harness_reachable"] is False
         assert setup_mod.exit_code(s) == 3
 
     def test_a_configured_workspace_that_is_gone(self, monkeypatch, cfg, tmp_path):
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE,
-                     "workspace_file": str(tmp_path / "gone.json")})
-        s = _status(monkeypatch, FakeVercel(), cfg)
+        _write(cfg, {"version": 1, "workspace_file": str(tmp_path / "gone.json")})
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "workspace_missing"
         assert s["project_count"] is None
         assert setup_mod.exit_code(s) == 4
@@ -153,83 +195,121 @@ class TestTheStateTable:
         project list — the two get different answers on purpose."""
         ws = tmp_path / "ws.json"
         ws.write_text("", encoding="utf-8")
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        s = _status(monkeypatch, FakeVercel(), cfg)
+        _write(cfg, {"version": 1, "workspace_file": str(ws)})
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "workspace_malformed"
         assert setup_mod.exit_code(s) == 4
 
     def test_an_empty_project_list_can_still_proceed(self, monkeypatch, cfg, tmp_path):
         """The row that proves `status` and `can_proceed` are different questions: the
         literal `workspace` bucket publishes without any registered project."""
-        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": []})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        s = _status(monkeypatch, FakeVercel(), cfg)
+        _ready_files(cfg, tmp_path, projects=())
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "ready_no_projects"
         assert s["can_proceed"] is True
         assert s["project_count"] == 0
         assert setup_mod.exit_code(s) == 0
 
     def test_fully_configured(self, monkeypatch, cfg, tmp_path):
-        ws = _write(tmp_path / "ws.json",
-                    {"version": 1, "projects": [{"name": "widget"}, {"name": "gadget"}]})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        s = _status(monkeypatch, FakeVercel(), cfg)
+        _ready_files(cfg, tmp_path, projects=({"name": "widget"}, {"name": "gadget"}))
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "ready"
         assert s["can_proceed"] is True
         assert s["project_count"] == 2
+        assert s["harness_reachable"] is True
         assert setup_mod.exit_code(s) == 0
 
     def test_an_unknown_config_version_is_reported_not_raised(self, monkeypatch, cfg):
         _write(cfg, {"version": 99})
-        s = _status(monkeypatch, FakeVercel(), cfg)
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "config_version_unsupported"
         assert setup_mod.exit_code(s) == 4
 
-    def test_first_run_is_about_the_config_file_alone(self, monkeypatch, cfg, tmp_path):
-        assert _status(monkeypatch, FakeVercel(), cfg)["first_run"] is True
+    def test_first_run_is_about_the_config_file_alone(self, monkeypatch, cfg):
+        assert _status(monkeypatch, FakeHarness(), cfg)["first_run"] is True
         _write(cfg, {"version": 1})
-        assert _status(monkeypatch, FakeVercel(), cfg)["first_run"] is False
+        assert _status(monkeypatch, FakeHarness(), cfg)["first_run"] is False
+
+
+class TestTheProbeItself:
+    def test_it_only_ever_GETs(self, monkeypatch, cfg, tmp_path):
+        """READ-ONLY is the probe's contract: it must prove the URL and the bearer without
+        being able to publish anything, ever."""
+        _ready_files(cfg, tmp_path)
+        fake = FakeHarness()
+        _status(monkeypatch, fake, cfg)
+        assert fake.calls, "the probe never ran"
+        for method, url, headers in fake.calls:
+            assert method == "GET"
+
+    def test_it_asks_the_read_back_route_with_the_bearer(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        fake = FakeHarness()
+        _status(monkeypatch, fake, cfg)
+        method, url, headers = fake.calls[0]
+        assert url.startswith(CONTROL + "/v1/deployments/")
+        assert headers.get("Authorization") == "Bearer " + TOKEN
+
+    def test_a_loopback_probe_names_the_control_host(self, monkeypatch, cfg, tmp_path):
+        """The harness routes on the HOST header, so `Host: 127.0.0.1` is refused by the
+        zone check and a working harness would read as unreachable."""
+        _ready_files(cfg, tmp_path)
+        fake = FakeHarness()
+        _status(monkeypatch, fake, cfg)
+        _, _, headers = fake.calls[0]
+        assert headers.get("Host") == "docs-control.3dstories.ca"
+
+    def test_no_env_means_no_call_at_all(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        fake = FakeHarness()
+        _status(monkeypatch, fake, cfg, env={})
+        assert fake.calls == []
 
 
 # ------------------------------------------------------------------------ the surfaces
 
 class TestTheJsonMode:
-    def test_it_emits_the_three_names_the_criterion_asks_for(self, monkeypatch, cfg, capsys):
-        FakeVercel().install(monkeypatch)
+    def test_it_emits_the_names_the_criterion_asks_for(self, monkeypatch, cfg, capsys):
+        FakeHarness().install(monkeypatch)
         rc = setup_mod.main(["--json", "--config", str(cfg)])
         assert rc == 0, "--json always exits 0; it reports rather than gates"
         payload = json.loads(capsys.readouterr().out)
         for key in ("status", "can_proceed", "first_run"):
             assert key in payload
-        for key in ("config_file", "workspace_file", "vercel_scope", "vercel_cli",
-                    "authenticated", "scope_list_accessible", "project_count"):
+        for key in ("config_file", "workspace_file", "project_count",
+                    "harness_control_url", "publish_token_set", "public_base_set",
+                    "edge_credentials_set", "harness_reachable"):
             assert key in payload
 
-    def test_it_never_leaks_captured_cli_output(self, monkeypatch, cfg, capsys, tmp_path):
-        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": []})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        FakeVercel(listing=json.dumps({"projects": [], "pagination": {"next": None},
-                                       "contextName": SCOPE,
-                                       "secret": "tok_abc123"})).install(monkeypatch)
+    def test_it_never_prints_the_token_value(self, monkeypatch, cfg, capsys, tmp_path):
+        """The report says `set`, never the value: a status object is something people
+        paste."""
+        _ready_files(cfg, tmp_path)
+        monkeypatch.setenv("DOC_HARNESS_CONTROL_URL", CONTROL)
+        monkeypatch.setenv("DOC_HARNESS_PUBLISH_TOKEN", "tok_abc123_secret")
+        FakeHarness().install(monkeypatch)
         setup_mod.main(["--json", "--config", str(cfg)])
-        assert "tok_abc123" not in capsys.readouterr().out
+        assert "tok_abc123_secret" not in capsys.readouterr().out
+        setup_mod.main(["--config", str(cfg)])
+        assert "tok_abc123_secret" not in capsys.readouterr().out
 
 
 class TestTheCheckMode:
     def test_it_is_silent_when_everything_is_ready(self, monkeypatch, cfg, capsys, tmp_path):
-        ws = _write(tmp_path / "ws.json", {"version": 1, "projects": [{"name": "widget"}]})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        FakeVercel().install(monkeypatch)
+        _ready_files(cfg, tmp_path)
+        monkeypatch.setenv("DOC_HARNESS_CONTROL_URL", CONTROL)
+        monkeypatch.setenv("DOC_HARNESS_PUBLISH_TOKEN", TOKEN)
+        FakeHarness().install(monkeypatch)
         rc = setup_mod.main(["--check", "--config", str(cfg)])
         captured = capsys.readouterr()
         assert rc == 0
         assert captured.out == "" and captured.err == ""
 
     def test_it_prints_one_actionable_line_otherwise(self, monkeypatch, cfg, capsys):
-        FakeVercel(installed=False).install(monkeypatch)
+        FakeHarness().install(monkeypatch)
         rc = setup_mod.main(["--check", "--config", str(cfg)])
         err = capsys.readouterr().err
-        assert rc == 2
+        assert rc == 4
         assert err.count("\n") == 1, f"one line, not a report: {err!r}"
 
 
@@ -252,8 +332,7 @@ class TestTheVersionGuard:
 # ------------------------------------------------------------------------- the setters
 
 class TestInitWorkspace:
-    def test_it_creates_one_and_records_that_we_own_it(self, monkeypatch, cfg, tmp_path):
-        FakeVercel().install(monkeypatch)
+    def test_it_creates_one_and_records_that_we_own_it(self, cfg, tmp_path):
         target = tmp_path / "mine.json"
         rc = setup_mod.main(["--init-workspace", str(target), "--config", str(cfg)])
         assert rc == 0
@@ -262,25 +341,22 @@ class TestInitWorkspace:
         assert stored["workspace_file"] == str(target)
         assert stored["owned_workspace_file"] == str(target)
 
-    def test_it_refuses_to_overwrite_an_existing_file(self, monkeypatch, cfg, tmp_path):
-        FakeVercel().install(monkeypatch)
+    def test_it_refuses_to_overwrite_an_existing_file(self, cfg, tmp_path):
         target = _write(tmp_path / "already.json", {"version": 1, "projects": [{"name": "x"}]})
         rc = setup_mod.main(["--init-workspace", str(target), "--config", str(cfg)])
         assert rc != 0
         assert json.loads(target.read_text(encoding="utf-8"))["projects"] == [{"name": "x"}]
 
-    def test_without_a_path_it_lands_beside_the_config(self, monkeypatch, cfg, tmp_path):
-        FakeVercel().install(monkeypatch)
+    def test_without_a_path_it_lands_beside_the_config(self, cfg, tmp_path):
         setup_mod.main(["--init-workspace", "--config", str(cfg)])
         stored = json.loads(cfg.read_text(encoding="utf-8"))
         assert Path(stored["workspace_file"]).parent == cfg.parent
 
 
 class TestSetWorkspace:
-    def test_it_stores_an_absolute_normalized_path(self, monkeypatch, cfg, tmp_path):
+    def test_it_stores_an_absolute_normalized_path(self, cfg, tmp_path):
         """Storing what the user typed would make resolution depend on whichever directory a
         later publish ran from, turning a configured workspace into a missing one."""
-        FakeVercel().install(monkeypatch)
         _write(tmp_path / "ws.json", {"version": 1, "projects": []})
         rc = setup_mod.main(["--set-workspace", "ws.json", "--config", str(cfg)])
         assert rc == 0
@@ -288,78 +364,38 @@ class TestSetWorkspace:
         assert Path(stored).is_absolute()
         assert Path(stored) == tmp_path / "ws.json"
 
-    def test_adopting_does_not_claim_ownership(self, monkeypatch, cfg, tmp_path):
-        FakeVercel().install(monkeypatch)
+    def test_adopting_does_not_claim_ownership(self, cfg, tmp_path):
         ws = _write(tmp_path / "theirs.json", {"version": 1, "projects": []})
         setup_mod.main(["--set-workspace", str(ws), "--config", str(cfg)])
         assert "owned_workspace_file" not in json.loads(cfg.read_text(encoding="utf-8"))
 
-    def test_it_refuses_a_path_that_is_not_there(self, monkeypatch, cfg, tmp_path):
-        FakeVercel().install(monkeypatch)
+    def test_it_refuses_a_path_that_is_not_there(self, cfg, tmp_path):
         rc = setup_mod.main(["--set-workspace", str(tmp_path / "nope.json"),
                              "--config", str(cfg)])
         assert rc != 0
 
 
-class TestSetScope:
-    def test_it_proves_access_before_recording(self, monkeypatch, cfg):
-        fake = FakeVercel().install(monkeypatch)
-        rc = setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)])
-        assert rc == 0
-        assert json.loads(cfg.read_text(encoding="utf-8"))["vercel_scope"] == SCOPE
-        listing = [c for c in fake.calls if "ls" in c]
-        assert listing, "the team must be proved with a real scoped read, not assumed"
-        assert listing[0][listing[0].index("--scope") + 1] == SCOPE
-
-    def test_it_refuses_a_team_the_listing_does_not_answer_for(self, monkeypatch, cfg):
-        other = json.dumps({"projects": [], "pagination": {"next": None},
-                            "contextName": "someone-else"})
-        FakeVercel(listing=other).install(monkeypatch)
-        rc = setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)])
-        assert rc != 0
-        assert not cfg.exists() or "vercel_scope" not in json.loads(
-            cfg.read_text(encoding="utf-8"))
-
-    def test_it_refuses_a_value_that_is_not_a_slug(self, monkeypatch, cfg):
-        FakeVercel().install(monkeypatch)
-        assert setup_mod.main(["--set-scope", "Not A Slug", "--config", str(cfg)]) != 0
-        assert not cfg.exists()
-
-    def test_an_option_like_value_cannot_become_a_team(self, monkeypatch, cfg):
-        """Two layers refuse this, and it is worth pinning both. argparse rejects a bare
-        `--set-scope --sneaky` outright, because it reads the second token as a flag. The
-        `=` form gets past argparse and is stopped by the validator, which is the layer that
-        matters — a leading dash reaching an argv is the injection."""
-        FakeVercel().install(monkeypatch)
-        with pytest.raises(SystemExit):
-            setup_mod.main(["--set-scope", "--sneaky", "--config", str(cfg)])
-        assert setup_mod.main(["--set-scope=--sneaky", "--config", str(cfg)]) != 0
-        assert not cfg.exists()
-
-
 class TestAddProject:
-    def _owned(self, monkeypatch, cfg, tmp_path):
-        FakeVercel().install(monkeypatch)
+    def _owned(self, cfg, tmp_path):
         setup_mod.main(["--init-workspace", str(tmp_path / "mine.json"),
                         "--config", str(cfg)])
         return tmp_path / "mine.json"
 
-    def test_it_adds_a_name(self, monkeypatch, cfg, tmp_path):
-        ws = self._owned(monkeypatch, cfg, tmp_path)
+    def test_it_adds_a_name(self, cfg, tmp_path):
+        ws = self._owned(cfg, tmp_path)
         assert setup_mod.main(["--add-project", "payments-api", "--config", str(cfg)]) == 0
         assert json.loads(ws.read_text(encoding="utf-8"))["projects"] == [
             {"name": "payments-api"}]
 
-    def test_adding_the_same_name_twice_is_idempotent(self, monkeypatch, cfg, tmp_path):
-        ws = self._owned(monkeypatch, cfg, tmp_path)
+    def test_adding_the_same_name_twice_is_idempotent(self, cfg, tmp_path):
+        ws = self._owned(cfg, tmp_path)
         setup_mod.main(["--add-project", "payments-api", "--config", str(cfg)])
         assert setup_mod.main(["--add-project", "payments-api", "--config", str(cfg)]) == 0
         assert json.loads(ws.read_text(encoding="utf-8"))["projects"] == [
             {"name": "payments-api"}]
 
-    def test_it_preserves_unknown_fields_and_existing_entries(self, monkeypatch, cfg,
-                                                              tmp_path):
-        ws = self._owned(monkeypatch, cfg, tmp_path)
+    def test_it_preserves_unknown_fields_and_existing_entries(self, cfg, tmp_path):
+        ws = self._owned(cfg, tmp_path)
         data = json.loads(ws.read_text(encoding="utf-8"))
         data["projects"] = [{"name": "old", "path": "./old", "extra": 1}]
         data["somethingElse"] = {"keep": True}
@@ -370,11 +406,9 @@ class TestAddProject:
         assert {"name": "old", "path": "./old", "extra": 1} in after["projects"]
         assert {"name": "new"} in after["projects"]
 
-    def test_it_REFUSES_a_workspace_this_package_did_not_create(self, monkeypatch, cfg,
-                                                               tmp_path, capsys):
+    def test_it_REFUSES_a_workspace_this_package_did_not_create(self, cfg, tmp_path, capsys):
         """The important one. The resolved workspace can be another tool's file, read by
         every concurrent session on the machine — writing there is out of the question."""
-        FakeVercel().install(monkeypatch)
         theirs = _write(tmp_path / "theirs.json", {"version": 1, "projects": []})
         setup_mod.main(["--set-workspace", str(theirs), "--config", str(cfg)])
         before = theirs.read_text(encoding="utf-8")
@@ -388,7 +422,7 @@ class TestAddProject:
     def test_ownership_is_a_stored_path_not_a_boolean(self, monkeypatch, cfg, tmp_path):
         """A boolean goes stale the moment an override selects a different file: the flag
         would still read true while resolution pointed somewhere else."""
-        ws = self._owned(monkeypatch, cfg, tmp_path)
+        ws = self._owned(cfg, tmp_path)
         elsewhere = _write(tmp_path / "elsewhere.json", {"version": 1, "projects": []})
         before = elsewhere.read_text(encoding="utf-8")
         monkeypatch.setenv("DESIGN_DOC_PUBLISH_WORKSPACE_FILE", str(elsewhere))
@@ -397,11 +431,15 @@ class TestAddProject:
         assert elsewhere.read_text(encoding="utf-8") == before
         assert json.loads(ws.read_text(encoding="utf-8"))["projects"] == []
 
-    def test_it_refuses_a_name_that_is_not_a_slug(self, monkeypatch, cfg, tmp_path):
-        self._owned(monkeypatch, cfg, tmp_path)
+    def test_it_refuses_a_name_that_is_not_a_slug(self, cfg, tmp_path):
+        self._owned(cfg, tmp_path)
         assert setup_mod.main(["--add-project", "Not A Slug", "--config", str(cfg)]) != 0
 
-    def test_the_write_is_serialized(self, monkeypatch, cfg, tmp_path):
+    def test_an_option_like_value_cannot_become_a_name(self, cfg, tmp_path):
+        self._owned(cfg, tmp_path)
+        assert setup_mod.main(["--add-project=--sneaky", "--config", str(cfg)]) != 0
+
+    def test_the_write_is_serialized(self):
         """Atomic replace keeps each write whole but does NOT make read-modify-write atomic:
         two runs can both read, both add, and the later replace erases the earlier addition.
         That is data loss, so the whole operation takes a lock."""
@@ -424,11 +462,8 @@ class TestNoSetterEverPrintsATraceback:
         ["--set-workspace", "WS"],
         ["--add-project", "widget"],
         ["--init-workspace", "NEW"],
-        ["--set-scope", SCOPE],
     ])
-    def test_an_unknown_config_version_is_a_sentence(self, monkeypatch, cfg, tmp_path,
-                                                     capsys, args):
-        FakeVercel().install(monkeypatch)
+    def test_an_unknown_config_version_is_a_sentence(self, cfg, tmp_path, capsys, args):
         _write(cfg, {"version": 99})
         ws = _write(tmp_path / "ws.json", {"version": 1, "projects": []})
         args = [a.replace("WS", str(ws)).replace("NEW", str(tmp_path / "new.json"))
@@ -442,56 +477,34 @@ class TestNoSetterEverPrintsATraceback:
 
 
 class TestItNeverTouchesCredentials:
-    def test_no_code_path_runs_vercel_login(self):
-        """It is interactive and mutates machine-global authentication state. Setup prints the
-        command and re-checks; an unattended run must never trigger it."""
-        import inspect
-        source = inspect.getsource(setup_mod)
-        for line in source.splitlines():
-            if "login" not in line:
-                continue
-            assert "subprocess" not in line and "run(" not in line, (
-                f"setup must never invoke login: {line.strip()!r}")
-
-    def test_it_tells_the_user_how_to_log_in(self, monkeypatch, cfg, capsys):
-        FakeVercel(logged_in=False).install(monkeypatch)
-        setup_mod.main(["--config", str(cfg)])
-        assert "vercel login" in capsys.readouterr().out
-
-    def test_the_config_it_writes_holds_no_credential(self, monkeypatch, cfg):
-        FakeVercel().install(monkeypatch)
-        setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)])
+    def test_the_config_it_writes_holds_no_credential(self, cfg, tmp_path):
+        setup_mod.main(["--init-workspace", str(tmp_path / "m.json"), "--config", str(cfg)])
         stored = json.loads(cfg.read_text(encoding="utf-8"))
-        assert set(stored) <= {"version", "workspace_file", "owned_workspace_file",
-                               "vercel_scope"}
+        assert set(stored) <= {"version", "workspace_file", "owned_workspace_file"}
 
-    def test_teams_are_printed_for_the_user_to_read_not_parsed(self):
-        """`build_index` establishes this package's rule: the JSON surface is read from
-        stdout and there is deliberately no fallback to the human table."""
+    def test_nothing_here_shells_out_at_all(self):
+        """The old setup drove a vendor CLI. The new one has nothing to drive: its one
+        network touch is the read-only urllib probe, so any subprocess use is a regression."""
         import inspect
         source = inspect.getsource(setup_mod)
-        assert "teams" in source
-        for line in source.splitlines():
-            if "teams" in line and ("split" in line or "regex" in line or "re." in line):
-                pytest.fail(f"the teams table must not be parsed: {line.strip()!r}")
+        assert "subprocess" not in source
 
 
 class TestTheStepEightAFindings:
-    """Six findings from the Step-8a cross-model review, each reproduced before it was fixed.
+    """Findings from the Step-8a cross-model review, each reproduced before it was fixed.
 
     They share a shape worth naming: every one is a place where the code was LENIENT about
     input in a context that mutates something. Leniency is right for reporting and wrong for
     writing, and the split had not been drawn.
     """
 
-    def test_a_malformed_config_is_never_overwritten_by_a_setter(self, monkeypatch, cfg,
-                                                                 tmp_path, capsys):
+    def test_a_malformed_config_is_never_overwritten_by_a_setter(self, cfg, tmp_path,
+                                                                 capsys):
         """`load()` reads a malformed config as absent so that STATUS can still report. A
         setter then merged into that empty mapping and atomically replaced the file, which
         destroyed whatever was recoverable in it."""
-        FakeVercel().install(monkeypatch)
         cfg.parent.mkdir(parents=True, exist_ok=True)
-        original = '{"version": 1, "vercel_scope": "acme"  <-- hand-edited badly'
+        original = '{"version": 1, "workspace_file": "x"  <-- hand-edited badly'
         cfg.write_text(original, encoding="utf-8")
         ws = _write(tmp_path / "ws.json", {"version": 1, "projects": []})
 
@@ -506,42 +519,24 @@ class TestTheStepEightAFindings:
         """`{}` is not an empty project list. Reading it as one made `--check` report
         can_proceed while `--project` refused every name."""
         ws = _write(tmp_path / "ws.json", {"version": 1})
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE, "workspace_file": str(ws)})
-        s = _status(monkeypatch, FakeVercel(), cfg)
+        _write(cfg, {"version": 1, "workspace_file": str(ws)})
+        s = _status(monkeypatch, FakeHarness(), cfg)
         assert s["status"] == "workspace_malformed"
         assert s["can_proceed"] is False
 
-    def test_the_publisher_agrees_that_it_is_malformed(self, tmp_path, monkeypatch):
+    def test_the_publisher_agrees_that_it_is_malformed(self, tmp_path):
         """The two must not disagree: setup saying ready while publish refuses is the
         confusion this closes."""
-        for name in ENV_VARS:
-            monkeypatch.delenv(name, raising=False)
         ws = _write(tmp_path / "ws.json", {"version": 1})
         cfg = _write(tmp_path / "config.json", {"version": 1, "workspace_file": str(ws)})
         with pytest.raises(user_config.ConfigError) as excinfo:
             user_config.require_workspace_file(config_path=cfg)
         assert "malformed" in str(excinfo.value).lower()
 
-    def test_a_truncated_listing_is_not_accepted_as_proof_of_access(self, monkeypatch, cfg):
-        """`{"contextName": ...}` alone passed, so setup recorded the team and reported
-        ready while the publisher's stricter parser would reject the same CLI surface."""
-        FakeVercel(listing=json.dumps({"contextName": SCOPE})).install(monkeypatch)
-        rc = setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)])
-        assert rc != 0
-        assert not cfg.exists()
-
-    def test_an_empty_account_still_passes_the_probe(self, monkeypatch, cfg):
-        """The counterpart, so the stricter check does not break the bootstrap case: an
-        account holding no projects yet is legitimate."""
-        FakeVercel(listing=json.dumps({"projects": [], "pagination": {"next": None},
-                                       "contextName": SCOPE})).install(monkeypatch)
-        assert setup_mod.main(["--set-scope", SCOPE, "--config", str(cfg)]) == 0
-
     def test_init_workspace_leaves_nothing_behind_when_it_cannot_record(self, monkeypatch,
-                                                                       cfg, tmp_path):
+                                                                        cfg, tmp_path):
         """A created-but-unrecorded workspace is a file the user did not ask for and this
         tool will not use."""
-        FakeVercel().install(monkeypatch)
         target = tmp_path / "mine.json"
 
         def explode(*a, **kw):
@@ -586,53 +581,39 @@ class TestTheEntryPointIsExecutable:
 
 
 class TestTheStateTableOrderIsTheDocumentedOne:
-    """Found by the Step-11 inline pass on the bug_logic lens.
+    """The design states an ORDER — `status` is the FIRST actionable fault — precisely so
+    that coexisting problems have one defined answer. A table nobody follows is not a
+    contract."""
 
-    The design states an ORDER — `status` is the FIRST actionable fault — precisely so that
-    coexisting problems have one defined answer. The implementation resolved configuration
-    before checking whether the CLI existed, so a machine with no `vercel` AND an invalid
-    configured team reported `needs_config` while the table says `needs_vercel_cli` comes
-    first. A table nobody follows is not a contract.
-    """
+    def test_a_missing_workspace_outranks_missing_harness_env(self, monkeypatch, cfg,
+                                                              tmp_path):
+        _write(cfg, {"version": 1, "workspace_file": str(tmp_path / "gone.json")})
+        s = _status(monkeypatch, FakeHarness(), cfg, env={})
+        assert s["status"] == "workspace_missing", (
+            "the workspace rows come before the environment rows")
 
-    def test_a_missing_cli_outranks_a_bad_configured_team(self, monkeypatch, cfg):
-        _write(cfg, {"version": 1, "vercel_scope": "Not A Slug"})
-        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
-        assert s["status"] == "needs_vercel_cli", (
-            "row 2 comes before row 4; a machine with no CLI is told about the CLI first")
-
-    def test_a_missing_cli_outranks_a_missing_workspace(self, monkeypatch, cfg, tmp_path):
-        _write(cfg, {"version": 1, "vercel_scope": SCOPE,
-                     "workspace_file": str(tmp_path / "gone.json")})
-        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
-        assert s["status"] == "needs_vercel_cli"
-
-    def test_not_being_signed_in_outranks_a_bad_configured_team(self, monkeypatch, cfg):
-        _write(cfg, {"version": 1, "vercel_scope": "Not A Slug"})
-        s = _status(monkeypatch, FakeVercel(logged_in=False), cfg)
-        assert s["status"] == "needs_login", "row 3 comes before row 4"
+    def test_missing_env_outranks_an_unreachable_harness(self, monkeypatch, cfg, tmp_path):
+        """With no env there is nothing to probe, so the report names the env and the probe
+        never runs — proven by the fake recording zero calls."""
+        _ready_files(cfg, tmp_path)
+        fake = FakeHarness(raises=OSError("never called anyway"))
+        s = _status(monkeypatch, fake, cfg, env={})
+        assert s["status"] == "needs_harness_env"
+        assert fake.calls == []
 
     def test_an_unknown_config_version_still_outranks_everything(self, monkeypatch, cfg):
         _write(cfg, {"version": 99})
-        s = _status(monkeypatch, FakeVercel(installed=False), cfg)
+        s = _status(monkeypatch, FakeHarness(raises=OSError("nope")), cfg, env={})
         assert s["status"] == "config_version_unsupported", "row 1 is row 1"
-
-    def test_an_invalid_configured_team_is_still_reported_when_it_is_the_only_fault(
-            self, monkeypatch, cfg):
-        _write(cfg, {"version": 1, "vercel_scope": "Not A Slug"})
-        s = _status(monkeypatch, FakeVercel(), cfg)
-        assert s["status"] == "needs_config"
-        assert s["can_proceed"] is False
 
 
 class TestTheStepElevenFindings:
     """Findings from the Step-11 cross-model review, each verified against the code first."""
 
-    def test_the_lock_refuses_to_write_through_a_symlink(self, monkeypatch, cfg, tmp_path):
+    def test_the_lock_refuses_to_write_through_a_symlink(self, cfg, tmp_path):
         """`open(path, "w")` follows a symlink and TRUNCATES the destination before any lock
         is taken, so a pre-created `.lock` symlink in a writable directory could destroy any
         file the invoking user can write."""
-        FakeVercel().install(monkeypatch)
         ws = tmp_path / "mine.json"
         setup_mod.main(["--init-workspace", str(ws), "--config", str(cfg)])
 
@@ -645,20 +626,17 @@ class TestTheStepElevenFindings:
         assert rc != 0, "a symlinked lock must be refused, not followed"
         assert victim.read_text(encoding="utf-8") == "do not truncate me"
 
-    def test_a_normal_lock_still_works(self, monkeypatch, cfg, tmp_path):
+    def test_a_normal_lock_still_works(self, cfg, tmp_path):
         """The counterpart, so the hardening does not simply break locking."""
-        FakeVercel().install(monkeypatch)
         ws = tmp_path / "mine.json"
         setup_mod.main(["--init-workspace", str(ws), "--config", str(cfg)])
         assert setup_mod.main(["--add-project", "widget", "--config", str(cfg)]) == 0
         assert Path(str(ws) + ".lock").is_file()
 
-    def test_adopting_a_workspace_clears_a_previous_ownership_claim(self, monkeypatch, cfg,
-                                                                    tmp_path):
+    def test_adopting_a_workspace_clears_a_previous_ownership_claim(self, cfg, tmp_path):
         """Leaving the old record intact is not the same as clearing it: a previously owned
         path stays authorized, so re-adopting it after it has been replaced by someone else's
         file would let --add-project write to that file."""
-        FakeVercel().install(monkeypatch)
         mine = tmp_path / "mine.json"
         setup_mod.main(["--init-workspace", str(mine), "--config", str(cfg)])
         assert json.loads(cfg.read_text(encoding="utf-8"))["owned_workspace_file"] == str(mine)
@@ -674,16 +652,14 @@ class TestTheStepElevenFindings:
         assert setup_mod.main(["--add-project", "widget", "--config", str(cfg)]) != 0
 
     def test_the_config_write_is_serialized_too(self):
-        """--set-scope and --init-workspace are two commands the documentation tells people
-        to run one after another. Run concurrently they could both read the old config and
-        the later writer would erase the other's setting."""
+        """Two setters run one after another in the documentation. Run concurrently they
+        could both read the old config and the later writer would erase the other's
+        setting."""
         import inspect
         source = inspect.getsource(setup_mod._store)
         assert "_locked(" in source, "the config read-modify-write must hold the lock too"
 
-    def test_a_none_update_removes_the_key_rather_than_storing_null(self, monkeypatch, cfg,
-                                                                    tmp_path):
-        FakeVercel().install(monkeypatch)
+    def test_a_none_update_removes_the_key_rather_than_storing_null(self, cfg, tmp_path):
         setup_mod.main(["--init-workspace", str(tmp_path / "m.json"), "--config", str(cfg)])
         setup_mod._store(cfg, owned_workspace_file=None)
         assert "owned_workspace_file" not in json.loads(cfg.read_text(encoding="utf-8"))
@@ -699,7 +675,6 @@ class TestTheStepElevenFindings:
 
     def test_a_platformless_host_refuses_instead_of_tracebacking(self, monkeypatch, cfg,
                                                                  tmp_path, capsys):
-        FakeVercel().install(monkeypatch)
         setup_mod.main(["--init-workspace", str(tmp_path / "m.json"), "--config", str(cfg)])
         monkeypatch.setattr(setup_mod, "fcntl", None)
         rc = setup_mod.main(["--add-project", "widget", "--config", str(cfg)])

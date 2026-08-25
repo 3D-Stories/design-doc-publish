@@ -82,8 +82,8 @@ template's full vocabulary.
   deck. Each picks a template; `--style` overrides it.
 - **Standard library only** — no third-party Python packages, on purpose.
 - **Rendering needs no setup** — no account, no config, no network. Setup is only for publishing.
-- **Publishes to Vercel in one command** — render, lint, deploy and verify, with the exit code as
-  the verdict.
+- **Publishes to the doc harness in one command** — render, lint, publish and verify, with the
+  exit code as the verdict. The harness serves the committed bytes, fetched from GitHub.
 
 ## Quick start
 
@@ -155,20 +155,18 @@ python3 scripts/render-doc --md hello.md --out hello.html --title "Hello"
 
 ## Publishing: the harness, and commit-before-publish
 
-> **Changed in 2.0.0, and it will break you if you skip this.** Publishing no longer goes to
-> Vercel. It goes to the self-hosted doc harness, which serves the bytes that are **in the
-> commit**, fetched from GitHub. The harness never receives the rendered file.
+> **Changed in 2.0.0, and it will break you if you skip this.** Publishing goes to the
+> self-hosted doc harness, which serves the bytes that are **in the commit**, fetched from
+> GitHub. The harness never receives the rendered file.
 >
-> So the order is now: render with `--dry-run`, commit the `.md` and the `.html` together, push,
+> So the order is: render with `--dry-run`, commit the `.md` and the `.html` together, push,
 > then publish. Publishing an uncommitted page refuses at stage 4 rather than shipping something
 > nobody can fetch.
 >
-> `--new-project`, `--vercel-scope` and `--limit` are gone. Two environment variables replace
-> them: `DOC_HARNESS_CONTROL_URL` (required, no default) and `DOC_HARNESS_PUBLISH_TOKEN`.
->
-> **And the honest part: the harness is not serving yet.** No `*.3dstories.ca` hostname resolves,
-> and the stack is not running. Until it is, this version renders and lints exactly as before but
-> cannot publish anywhere. If you need to publish today, stay on 1.4.0.
+> Two environment variables drive it: `DOC_HARNESS_CONTROL_URL` (required, no default) and
+> `DOC_HARNESS_PUBLISH_TOKEN`. Since 4.0.0 the harness also serves BY CONVENTION: a document
+> whose html file exists in a repository is reachable at its derived hostname with no publish
+> step at all — publishing remains the way to pin a page and to verify it end to end.
 
 Rendering needs nothing, and that has not changed. **Publishing needs a reachable harness and its
 publish token.** Nothing about your machine is assumed.
@@ -179,24 +177,22 @@ Inside Claude Code, run:
 /design-doc-publish:setup
 ```
 
-It reports what is missing rather than failing at it: whether the `vercel` CLI is installed, whether
-you are signed in, which team you publish to, and where your configuration lives. **It installs
-nothing and signs you into nothing** — where something must be installed, it shows you the command
-and waits for you to decide.
+It reports what is missing rather than failing at it: whether the harness variables are set,
+whether the harness answers the publish bearer, and where your configuration lives. **It installs
+nothing, stores no credential, and its harness probe is read-only.**
 
 <details>
 <summary><strong>Running setup from a shell instead</strong></summary>
 
 ```bash
 python3 "$DDP/scripts/setup.py"                              # the full report; only reads
-python3 "$DDP/scripts/setup.py" --set-scope <your-team>      # checks you can use it first
 python3 "$DDP/scripts/setup.py" --init-workspace             # creates a project list
 python3 "$DDP/scripts/setup.py" --add-project my-project     # a name you can publish under
 ```
 
-`vercel teams ls` lists the teams you belong to. If you are not signed in, setup prints the
-`vercel login` command for you to run — it never runs it for you, because that is interactive and
-changes your machine's sign-in for everything.
+The harness endpoint and tokens are read from the environment on every run — setup never
+records them. Export `DOC_HARNESS_CONTROL_URL` and `DOC_HARNESS_PUBLISH_TOKEN` in the shell
+that publishes.
 
 </details>
 
@@ -206,11 +202,11 @@ changes your machine's sign-in for everything.
 
 | Path | Holds |
 | --- | --- |
-| `~/.config/design-doc-publish/config.json` | which Vercel team to use, and which workspace file |
+| `~/.config/design-doc-publish/config.json` | which workspace file to use |
 | `~/.config/design-doc-publish/workspace.json` | the project names you may publish under |
 
 They live **outside** the plugin, so upgrading it does not lose them. **Neither ever holds a
-credential** — signing in stays entirely with the `vercel` CLI. `--check`, `--json` and the bare
+credential** — the harness tokens stay in the environment. `--check`, `--json` and the bare
 report only read.
 
 **To undo everything, delete those two files.** That returns the machine to never-configured.
@@ -310,15 +306,13 @@ auto-refresh as well as the ages.
 ## The doc harness (self-hosted serving)
 
 `harness/` is a small self-hosted service that serves rendered doc pages **straight from
-GitHub**, and as of 2.0.0 it IS the deploy target — Vercel is gone from the publish path. Pages live only in their source
-repositories; the harness keeps a registry of what is published and a blob cache, and nothing
-else. Full spec:
+GitHub**, and as of 2.0.0 it IS the publish target. Pages live only in their source
+repositories; the harness keeps a registry of what is published and a blob cache, and — since
+4.0.0 — resolves any hostname it does not recognise by CONVENTION, fetching the matching html
+file from its repository with no publish step at all. Full spec:
 [`docs/planning/2026-08-23-github-doc-harness-spec.md`](docs/planning/2026-08-23-github-doc-harness-spec.md).
 Design and its review history:
 [`docs/planning/2026-08-24-34-doc-harness-service.md`](docs/planning/2026-08-24-34-doc-harness-service.md).
-
-**Nothing in the existing render or publish path changed.** `publish_doc.py` still deploys to
-Vercel today; swapping it over is a separate issue.
 
 ### What it does
 
@@ -389,26 +383,12 @@ a server. `tests/harness/test_production_server.py` is the deliberate exception:
 entry point and drives raw sockets, and **skips visibly** when waitress is absent rather than
 quietly reporting coverage that did not run.
 
-## Migrating the old Vercel pages (#37)
+## Migrating pages from the previous host
 
-`scripts/backfill_vercel.py` moves documents that Vercel serves today onto the harness, one row at
-a time, without deleting anything from Vercel. Five phases, and the first three touch no registry:
-
-```bash
-python3 scripts/backfill_vercel.py --run-dir <run> inventory   # walk the Vercel listing, bounded
-python3 scripts/backfill_vercel.py --run-dir <run> map          # identify each page BY ITS BYTES
-#   ... then REVIEW the run's mapping.json by hand. That review is the point of the design.
-python3 scripts/backfill_vercel.py --run-dir <run> stage --execute <mapping digest>
-python3 scripts/backfill_vercel.py --run-dir <run> activate --execute <activation digest>
-python3 scripts/backfill_vercel.py --run-dir <run> report
-```
-
-Three things worth knowing before you run it. A page is identified by **hashing its live bytes
-against git history**, never by parsing its project name — a name can parse to a real but wrong
-project. The publish target is the **current** committed page, not the historical one that matches
-Vercel, so a drifted document is flagged rather than migrated stale. And `activate` is the one
-irreversible step: the control API has no deactivate, so undo is a forward repair. The runbook
-carries the detail: [`docs/runbooks/2026-08-24-37-vercel-backfill.md`](docs/runbooks/2026-08-24-37-vercel-backfill.md).
+The #37 migration tool and its runbook were removed in 5.0.0: convention resolution (4.0.0) made
+the backfill unnecessary, because a document whose html file exists in a repository is served
+without any migration. The tool, its tests and its runbook remain in git history and in the
+dated planning documents under `docs/`.
 
 ## Removing it
 

@@ -102,3 +102,11 @@ of an installed plugin — verified, because an install carries working-tree fil
 does not rewrite history. **If this repository is ever made public, its history still contains
 material with no redistribution grant.** That is the same question as
 3D-Stories/claude-skills#9, and it must be answered before publishing, not after.
+
+---
+
+**Addendum, 2026-08-24 (5.0.0):** the derived-index section above describes the retired hosting
+vendor's era. The index is now server-rendered by the doc harness from a walk of the GitHub
+repositories (`harness/convention.py`), the standalone builder CLI is gone, and no account of
+any hosting vendor is read by anything in this repository. The section stays as the record of
+why the artifact was never committed, which is still true.

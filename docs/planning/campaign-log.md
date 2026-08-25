@@ -193,3 +193,24 @@ drift surfaces as honest refusals, never silent wrongness. The exact-label branc
 tolerant of a future cap change by design — the paired High finding asking to harden it
 was declined for exactly that reason.
 ```
+
+## 2026-08-24 — the Vercel era ends (5.0.0)
+
+Owner instruction: rip every Vercel mention out of the plugin. What changed, in one entry:
+
+- **The #37 backfill tool is deleted** (`scripts/backfill_vercel.py`, its 105 tests, both
+  fixtures). Convention resolution (4.0.0) made the migration unnecessary; git history and the
+  dated #37 documents keep the record.
+- **`setup.py` checks the harness, not a vendor CLI**: workspace file, `DOC_HARNESS_CONTROL_URL`,
+  `DOC_HARNESS_PUBLISH_TOKEN`, the edge pair — and a READ-ONLY probe of the control API's
+  read-back route, proven over a real socket in `test_first_run.py`.
+- **`user_config` lost the account scope**; it owns the workspace pointer alone. A vendor-free
+  `validate_name` guards `--add-project`.
+- **`publish_doc` control calls carry `Host: docs-control.<zone>` over plaintext**, fixing the
+  measured #36 defect where a loopback publish was impossible and the live proof needed a
+  hand-written client.
+- **`build_index` is a pure renderer**: the standalone CLI that walked the vendor's project
+  list is gone; the harness walk is its only data source.
+- **`deploy_check` looks for a zone link**, not a vendor hostname.
+- Dated planning, review, runbook and measurement documents are HISTORY and keep their words;
+  this log gets entries appended, never rewritten.
