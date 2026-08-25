@@ -33,7 +33,7 @@ TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 
 from regen_docs_pages import (  # noqa: E402
-    PAGES, ROOT, pairs_on_disk, render_bytes, render_page, resolve_pack,
+    PAGES, ROOT, missing_sources, render_bytes, render_page, resolve_pack, undeclared_pairs,
 )
 
 sys.path.insert(0, str(TESTS.parent))
@@ -59,15 +59,28 @@ KNOWN_SOURCELESS = {
 }
 
 
-def test_the_manifest_and_the_committed_pairs_agree_exactly():
-    """Both directions. A new document must not skip the guard, and a deleted one must not
-    leave an entry behind claiming coverage."""
-    on_disk = pairs_on_disk()
-    declared = set(PAGES)
-    assert declared == on_disk, (
-        f"declared but not on disk: {sorted(declared - on_disk)}\n"
-        f"on disk but not declared: {sorted(on_disk - declared)}\n"
-        f"add or remove the entry in regen_docs_pages.py — an undeclared pair ships unguarded")
+def test_every_declared_page_has_a_markdown_source():
+    """A manifest entry whose `.md` is gone is an authoring mistake — nothing can be rendered
+    from nothing, and a deleted document must not leave an entry behind claiming coverage.
+
+    Deliberately NOT keyed on the `.html`. The HTML is the regenerator's OUTPUT, so requiring
+    it to pre-exist would make adding a document impossible — a conflation that cost a
+    self-inflicted refusal before it was split apart.
+    """
+    absent = missing_sources()
+    assert not absent, (
+        f"declared with no markdown: {sorted(absent)}\n"
+        f"remove the entry in regen_docs_pages.py, or restore the source")
+
+
+def test_every_rendered_pair_is_declared():
+    """The other direction, and the one that matters for coverage: a committed page with a
+    markdown sibling that nobody declared ships unguarded, which is the gap this module
+    exists to close."""
+    undeclared = undeclared_pairs()
+    assert not undeclared, (
+        f"rendered but not in the manifest: {sorted(undeclared)}\n"
+        f"add an entry in regen_docs_pages.py — an undeclared pair ships unguarded")
 
 
 @pytest.mark.parametrize("key", KEYS)

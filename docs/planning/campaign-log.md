@@ -4,9 +4,9 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 #23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-6 | issues on this log
-54 | newest: PR open, control calls through the edge
-2928/3001 | suite, baseline to this PR
+7 | issues on this log
+56 | newest: PR open, a committed page must re-render to itself
+3023/3079 | suite, baseline to this PR
 ```
 
 ```callout
@@ -15,6 +15,52 @@ One section per issue, refreshed inside that issue's own PR (a filed-but-unstart
 issue gets a backlog section at WF1 time). The stats above always describe the NEWEST
 state; older sections keep their text as historical record.
 ```
+
+## #56 — A committed page must re-render to itself
+
+`campaign-log.html` was committed missing a whole section of its own markdown, and
+re-rendering it with `--project design-doc-publish` also flipped the page accent from teal to
+green. Two independent defects wearing one symptom, and a census found the blast radius was
+**13 of 18** committed `docs/` pairs, not one.
+
+- **The accent was chosen by sha256.** `pack_for("design-doc-publish", …)` returned
+  `origin: fallback`. All three doors were shut in order: the configured workspace entry is
+  `{"name": "design-doc-publish"}` with **no `path`**, so `_project_config` returned `None`
+  silently (`vdl_packs.py:207-211`, the deliberate #9 case); the project was absent from
+  `SEEDS`; so `_fallback` hashed the name into `PALETTE`. The first of those reads
+  `~/.config/design-doc-publish/workspace.json`, which is not in git — so a public page's
+  branding depended on unversioned machine state.
+- **The chain is made to CONVERGE, not reordered.** `declared`-beats-`seed` is deliberate
+  (`vdl_packs.py:48-54` says so for chorestory), so instead the two reachable answers are made
+  identical: a `SEEDS` entry plus a matching `vdl` block in this repository's own committed
+  `.rawgentic.json`. Nine tests pin it in **both** directions — the agreement IS the fix, and
+  either half alone leaves the other free to drift the defect back.
+- **The colour is not a new choice.** `#4f7d15` / `#b7e87f` is `PALETTE[2]`, what the hash was
+  already handing out, so this declares what three committed pages already wear. Measured
+  rather than assumed: `css_layer` reads the pack only through `_colour` and `pack.get("tint")`
+  (`render/vdl.py:39-50`, `:53-83`) and never emits `origin`, so fallback→seed moves **zero
+  bytes** and both already-green planning pages stay byte-identical.
+- **Nothing had ever guarded this class of drift.** Every byte-identity guard in the repository
+  rendered with **no project pack** — `test_byte_identity.py:32` and
+  `regen_rendered_styles.py:48` both omit `vdl` — so the accent layer was invisible to all of
+  them, and `docs/examples/gallery/` and `docs/planning/` had no coverage at all.
+  `test_docs_pages_current.py` + `regen_docs_pages.py` close that, following the
+  `regen_rendered_styles.py` pattern: a committed manifest, packs resolved with
+  `workspace_file=None`, completeness in both directions, a can-it-fail test, and sentinels
+  the regenerator cannot rewrite.
+- **Twelve stale gallery pages re-rendered.** Eleven were missing `a{color:var(--accent)}`;
+  `roadmap` also missed the `.blk-ph-badge` wrap fix. Their stamps are unchanged — only the
+  renderer moved, and bumping a stamp would falsely claim the document was updated.
+- **The stamp is pinned in the manifest, and that has a cost stated rather than hidden.**
+  `publish_doc.py` re-renders with the wall clock, has no `--generated-at`, and writes the file
+  before its `--dry-run` check (`publish_doc.py:1289`), so publishing a covered page turns the
+  guard red until the manifest stamp is bumped. Deferred as a High with that rationale; the fix
+  changes a CLI surface and belongs in its own change.
+- Two known gaps, named rather than left to be found: the 14 gallery `.png` screenshots go
+  subtly stale once link colour changes (no test breaks — `test_example_gallery.py` asserts
+  existence, not currency — and regenerating them needs a browser), and
+  `docs/examples/example-roadmap.html` has no markdown source, so a pairs-based guard cannot
+  cover it.
 
 ## #54 — Control calls through the edge carry the Access service-token pair
 

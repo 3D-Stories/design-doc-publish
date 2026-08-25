@@ -143,10 +143,10 @@ PAGES = {
         title='Zone Access architecture — catch-all with exceptions',
         style='analysis', stamp='2026-08-25 11:21 MDT', project='design-doc-publish'),
     'docs/planning/2026-08-25-56-impl-plan': dict(
-        title='#56 — implementation plan',
+        title='Issue #56 — implementation plan',
         style='roadmap', stamp='2026-08-25 14:26 MDT', project='design-doc-publish'),
     'docs/planning/2026-08-25-56-render-determinism': dict(
-        title='#56 — a committed page must re-render to itself',
+        title='Issue #56 — a committed page must re-render to itself',
         style='design', stamp='2026-08-25 14:26 MDT', project='design-doc-publish'),
     # Re-rendered by #56 WITH the pack, joining its two dated siblings. Its previous committed
     # copy predated the #52 markdown entry entirely.
@@ -157,16 +157,41 @@ PAGES = {
 
 
 def pairs_on_disk() -> set:
-    """Every committed `docs/**` md+html pair, as manifest keys.
+    """Every ALREADY-RENDERED `docs/**` md+html pair, as manifest keys.
 
     A PAIR is the unit because the guarantee is about re-rendering a page from its own
     markdown, which a page with no markdown cannot satisfy either way. The sourceless
     committed pages are `docs/rendered-styles/*.html`, already guarded by
     `test_rendered_styles_current.py`, and `docs/examples/example-roadmap.html`, which is
     guarded by nothing — stated so it is a known gap rather than an unnoticed one.
+
+    Keyed on the HTML, so this answers "what is already rendered". That is the question the
+    undeclared-page check needs, and it is deliberately NOT the whole completeness answer —
+    see `missing_sources()`.
     """
     return {str(h.relative_to(ROOT).with_suffix(''))
             for h in ROOT.glob('docs/**/*.html') if h.with_suffix('.md').is_file()}
+
+
+def missing_sources() -> set:
+    """Declared pages whose MARKDOWN is absent — the only real authoring error.
+
+    Split out from `pairs_on_disk()` after this regenerator refused to create a page that did
+    not exist yet. Requiring the `.html` to be present before writing it is backwards: the
+    HTML is this script's OUTPUT, so treating it as a precondition made adding a document
+    impossible. The two questions are genuinely different, and conflating them cost a
+    self-inflicted refusal:
+
+    * a declared entry with no `.md` is a mistake — nothing can be rendered from nothing;
+    * a declared entry with no `.html` is a NEW page, which is how one is normally added.
+    """
+    return {key for key in PAGES if not (ROOT / f'{key}.md').is_file()}
+
+
+def undeclared_pairs() -> set:
+    """Rendered pairs with no manifest entry. Each one ships unguarded, which is the gap this
+    module exists to close, so this direction stays a hard error."""
+    return pairs_on_disk() - set(PAGES)
 
 
 def resolve_pack(project):
@@ -224,15 +249,20 @@ def main() -> int:
     # manifest is hand-maintained, so a mismatch is an authoring mistake, and deleting a
     # committed document on the strength of a mistake is not a courtesy. Name the difference
     # and stop.
-    on_disk, declared = pairs_on_disk(), set(PAGES)
-    if on_disk != declared:
-        for key in sorted(declared - on_disk):
-            print(f"  MISSING ON DISK   {key}.md / .html — remove the manifest entry, or "
-                  f"restore the pair", file=sys.stderr)
-        for key in sorted(on_disk - declared):
-            print(f"  NOT IN MANIFEST   {key}.md / .html — add an entry, or this page ships "
-                  f"unguarded", file=sys.stderr)
-        print("\nrefusing to write anything: the manifest and the committed pairs disagree",
+    #
+    # Two DIFFERENT faults, and only these two. A declared page whose `.html` is simply not
+    # written yet is neither: that is a new document, and writing it is this script's job.
+    faults = False
+    for key in sorted(missing_sources()):
+        print(f"  NO MARKDOWN       {key}.md is absent — nothing can be rendered from it. "
+              f"Remove the manifest entry, or restore the source.", file=sys.stderr)
+        faults = True
+    for key in sorted(undeclared_pairs()):
+        print(f"  NOT IN MANIFEST   {key}.md / .html — add an entry, or this page ships "
+              f"unguarded", file=sys.stderr)
+        faults = True
+    if faults:
+        print("\nrefusing to write anything: the manifest and the committed sources disagree",
               file=sys.stderr)
         return 1
 
