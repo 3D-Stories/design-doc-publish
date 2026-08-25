@@ -1637,5 +1637,152 @@ class TestControlHostHeader:
         # would mask a mismatch instead of failing on it.
         req = publish_doc._control_request(
             "https://docs-control.3dstories.ca", "/v1/deployments", "tok", method="GET",
-            body=None, env={"DOC_HARNESS_PUBLISH_TOKEN": "tok"})
+            body=None, env={"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+                            # Since #54 an edge control call also carries the Access pair, so
+                            # the env must hold it. What this test pins is unchanged: no Host
+                            # override on the TLS host.
+                            "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
         assert req.get_header("Host") is None
+
+
+# ------------------------------------------------------------------------ #54, AC1/AC2/AC3
+
+class TestTheEdgeControlPredicate:
+    """`_control_is_edge` decides whether Access credentials are attached, so it must agree
+    exactly with the rule `assert_bearer_destination` already applies to the TLS control host.
+    Two rules that mean the same thing in two places is how they drift apart."""
+
+    @pytest.mark.parametrize("base", [
+        "https://docs-control.3dstories.ca",
+        "https://DOCS-CONTROL.3dstories.ca",
+    ])
+    def test_the_tls_control_host_is_the_edge(self, base):
+        assert publish_doc._control_is_edge(base) is True
+
+    @pytest.mark.parametrize("base", [
+        "http://docs-control.3dstories.ca",      # the host, but in the clear
+        "http://127.0.0.1:18081",                # loopback
+        "http://172.17.0.2:8080",                # docker bridge
+        "https://docs-control.example.com",      # right label, wrong zone
+        "https://evil.docs-control.3dstories.ca",  # a prefix is not the host
+    ])
+    def test_everything_else_is_not(self, base):
+        assert publish_doc._control_is_edge(base) is False
+
+
+class TestTheAccessPairRidesEdgeControlCalls:
+    """Issue #54. Through the public edge, Cloudflare Access intercepts the control call first
+    and answers a login redirect, so the publish bearer alone never reaches the harness — and
+    `NO_REDIRECTS` rightly refuses to follow. The pair `build_verify_request` already sends for
+    the stage-6 page fetch has to ride the stage-5 control call too.
+
+    The attachment lives in `_control_request` for the same reason the destination check does
+    (finding A4): a guard, or a credential, that a caller must remember to add is neither."""
+
+    EDGE = "https://docs-control.3dstories.ca"
+    PAIR = {"CF_ACCESS_CLIENT_ID": "cid-value", "CF_ACCESS_CLIENT_SECRET": "secret-value"}
+
+    def _env(self, **extra):
+        return {"DOC_HARNESS_PUBLISH_TOKEN": "tok", **extra}
+
+    def test_an_edge_control_request_carries_both_access_headers(self):
+        req = publish_doc._control_request(
+            self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+            env=self._env(**self.PAIR))
+        assert req.get_header("Cf-access-client-id") == "cid-value"
+        assert req.get_header("Cf-access-client-secret") == "secret-value"
+
+    def test_the_bearer_still_rides_the_edge_control_request(self):
+        req = publish_doc._control_request(
+            self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+            env=self._env(**self.PAIR))
+        assert req.get_header("Authorization") == "Bearer tok"
+
+    def test_the_edge_control_request_still_sets_no_host_override(self):
+        # Unchanged from before #54: over TLS the URL already carries the right name, and an
+        # override would mask a mismatch instead of failing on it.
+        req = publish_doc._control_request(
+            self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+            env=self._env(**self.PAIR))
+        assert req.get_header("Host") is None
+
+    @pytest.mark.parametrize("base,grant", [
+        ("http://127.0.0.1:18081", {}),
+        ("http://172.17.0.2:8080", {"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.17.0.2:8080"}),
+    ])
+    def test_a_loopback_or_bridge_control_request_carries_no_access_headers(self, base, grant):
+        """AC3: loopback behavior is unchanged. The pair is a TLS-only credential and must not
+        be handed to a plaintext endpoint even when the environment happens to hold it."""
+        req = publish_doc._control_request(
+            base, "/v1/deployments/x", "tok", method="GET", body=None,
+            env=self._env(**self.PAIR, **grant))
+        assert req.get_header("Cf-access-client-id") is None
+        assert req.get_header("Cf-access-client-secret") is None
+        assert req.get_header("Host") == "docs-control.3dstories.ca"
+
+    @pytest.mark.parametrize("present,missing", [
+        ("CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"),
+        ("CF_ACCESS_CLIENT_SECRET", "CF_ACCESS_CLIENT_ID"),
+    ])
+    def test_a_half_present_pair_refuses_locally_and_names_the_missing_half(self, present, missing):
+        """AC2. The refusal happens while the request is being BUILT, so nothing is sent."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+                env=self._env(**{present: "x"}))
+        assert e.value.stage == 5
+        assert missing in e.value.message
+
+    def test_an_absent_pair_on_an_edge_control_call_refuses_and_names_both(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+                env=self._env())
+        assert e.value.stage == 5
+        assert "CF_ACCESS_CLIENT_ID" in e.value.message
+        assert "CF_ACCESS_CLIENT_SECRET" in e.value.message
+
+    def test_an_empty_string_is_missing_not_present(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc._control_request(
+                self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+                env=self._env(CF_ACCESS_CLIENT_ID="  ", CF_ACCESS_CLIENT_SECRET="s"))
+
+    def test_no_refusal_ever_prints_a_credential_value(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None,
+                env=self._env(CF_ACCESS_CLIENT_ID="SUPERSECRETVALUE"))
+        assert "SUPERSECRETVALUE" not in e.value.message
+
+    def test_the_pair_is_read_from_the_process_environment_when_no_env_is_passed(self, monkeypatch):
+        """`main()` calls `read_active`/`publish` without an `env`, so the default path is the
+        production path. A `None` env that reached `.get` would raise AttributeError into
+        `main()`'s bare `except Exception` — a traceback where the contract promises a sentence."""
+        monkeypatch.setenv("CF_ACCESS_CLIENT_ID", "from-os-environ")
+        monkeypatch.setenv("CF_ACCESS_CLIENT_SECRET", "also-from-os-environ")
+        req = publish_doc._control_request(
+            self.EDGE, "/v1/deployments/x", "tok", method="GET", body=None)
+        assert req.get_header("Cf-access-client-id") == "from-os-environ"
+
+    def test_the_destination_check_still_runs_before_the_pair_is_read(self):
+        """Ordering is load-bearing. An off-allowlist destination must be refused for BEING off
+        the allowlist — never read a credential on the way to somewhere unapproved."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                "https://evil.example", "/v1/deployments/x", "tok", method="GET", body=None,
+                env=self._env(**self.PAIR))
+        assert "allowlist" in e.value.message
+
+    def test_both_control_calls_go_through_the_guarded_builder(self):
+        """`read_active` and `publish` are the only two callers, and neither may hand-roll a
+        Request. Proven by the refusal reaching them, not by reading the source."""
+        for call in (
+            lambda: publish_doc.read_active(self.EDGE, "n", "tok", env=self._env()),
+            lambda: publish_doc.publish(self.EDGE, TestThePublishCall.MANIFEST, None, "tok",
+                                        env=self._env()),
+        ):
+            with pytest.raises(publish_doc.StageError) as e:
+                call()
+            assert e.value.stage == 5
+            assert "CF_ACCESS_CLIENT_ID" in e.value.message
