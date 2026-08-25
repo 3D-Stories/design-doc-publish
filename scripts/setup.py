@@ -19,9 +19,11 @@ is not reported as broken.
 
 What publishing needs, and therefore what this checks: a workspace file (stage 2 validates
 ``--project`` against it), ``DOC_HARNESS_CONTROL_URL`` and ``DOC_HARNESS_PUBLISH_TOKEN``
-(stage 5 publishes through the control API), and — only when ``DOC_HARNESS_PUBLIC_BASE``
-is set — the ``CF_ACCESS_CLIENT_ID``/``CF_ACCESS_CLIENT_SECRET`` pair the edge half sends.
-Rendering alone needs none of it.
+(stage 5 publishes through the control API), and the
+``CF_ACCESS_CLIENT_ID``/``CF_ACCESS_CLIENT_SECRET`` pair whenever something crosses the
+Cloudflare edge — either because ``DOC_HARNESS_PUBLIC_BASE`` requests the edge verify half, or
+because ``DOC_HARNESS_CONTROL_URL`` names the public control host, which is how a machine that
+is not the harness host publishes at all (#54). Rendering alone needs none of it.
 
 Two refusals here are deliberate:
 
@@ -127,7 +129,7 @@ _ADVICE = {
     "workspace_unreadable": "The configured workspace file cannot be read. Check its permissions.",
     "workspace_malformed": "The configured workspace file is not valid JSON. Fix it, or run --init-workspace elsewhere.",
     "needs_harness_env": "Publishing needs DOC_HARNESS_CONTROL_URL and DOC_HARNESS_PUBLISH_TOKEN in the environment. Rendering alone needs neither.",
-    "edge_env_incomplete": "DOC_HARNESS_PUBLIC_BASE is set, so the edge check needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET too — or unset DOC_HARNESS_PUBLIC_BASE to skip it.",
+    "edge_env_incomplete": "Something here goes through Cloudflare Access, which needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET. Either DOC_HARNESS_PUBLIC_BASE is set (the edge check — unset it to skip that half), or DOC_HARNESS_CONTROL_URL names the public control host (publishing from anywhere but the harness host — there is no skipping that one, set the pair).",
     "harness_unreachable": "The harness at DOC_HARNESS_CONTROL_URL did not answer. Check the URL, and that the harness is running.",
     "harness_denied": "The harness refused the publish bearer. Check DOC_HARNESS_PUBLISH_TOKEN.",
     "ready_no_projects": "Ready. No project names are registered, so publish with --project workspace, or add one with --add-project.",
@@ -355,7 +357,11 @@ def status(config_path=None, *, env=None, **_ignored):
 
     if not control or not token:
         return _finish(state, "needs_harness_env", None)
-    if public_base and not edge_pair:
+    # #54: two different things put a Cloudflare Access door in front of a publish. The edge
+    # VERIFY half, requested by DOC_HARNESS_PUBLIC_BASE, and — new — a control URL that is
+    # itself the public control host. Either one needs the pair, so reporting `ready` without
+    # it sends someone to a publish that can only come back as a login redirect.
+    if (public_base or _is_edge_control(control)) and not edge_pair:
         return _finish(state, "edge_env_incomplete", None)
 
     outcome, detail = probe_harness(control, token, env=env)

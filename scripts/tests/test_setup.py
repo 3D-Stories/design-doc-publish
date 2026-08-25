@@ -775,3 +775,46 @@ class TestTheProbeThroughTheEdge:
         outcome, detail = setup_mod.probe_harness(CONTROL, TOKEN, env={})
         assert outcome == "failed"
         assert "302" in detail
+
+
+class TestAnEdgeControlUrlNeedsThePairToo:
+    """Issue #54. Before this, an edge control URL with no Access pair reported `ready` — and
+    then every publish from that machine failed on a login redirect. The readiness answer has to
+    know about the same requirement the publisher enforces."""
+
+    def test_an_edge_control_url_without_the_pair_is_incomplete(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL))
+        assert s["status"] == "edge_env_incomplete"
+        assert s["can_proceed"] is False
+        assert setup_mod.exit_code(s) == 2
+
+    @pytest.mark.parametrize("half", ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"])
+    def test_an_edge_control_url_with_half_the_pair_is_incomplete(self, monkeypatch, cfg,
+                                                                  tmp_path, half):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL, **{half: "x"}))
+        assert s["status"] == "edge_env_incomplete"
+
+    def test_an_edge_control_url_with_the_whole_pair_is_ready(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL,
+                             CF_ACCESS_CLIENT_ID="i", CF_ACCESS_CLIENT_SECRET="s"))
+        assert s["status"] == "ready"
+
+    def test_a_loopback_control_url_without_the_pair_is_still_ready(self, monkeypatch, cfg,
+                                                                    tmp_path):
+        """The non-regression that matters: the pair is required by the DESTINATION, not by
+        publishing in general. Requiring it on loopback would break the harness host itself."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg, env=_env())
+        assert s["status"] == "ready"
+
+    def test_the_advice_names_both_triggers(self):
+        advice = setup_mod._ADVICE["edge_env_incomplete"]
+        assert "DOC_HARNESS_PUBLIC_BASE" in advice
+        assert "DOC_HARNESS_CONTROL_URL" in advice
+        assert "CF_ACCESS_CLIENT_ID" in advice and "CF_ACCESS_CLIENT_SECRET" in advice
