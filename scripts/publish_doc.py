@@ -232,8 +232,21 @@ def _normalized_origin(raw: str, *, stage: int, varname: str) -> str:
     anything that is not exactly scheme, host and port, so a base URL can never smuggle
     userinfo (which is a credential), a path, a query or a fragment past the allowlist
     check that follows it.
+
+    #54 follow-up 1: it PARSES before it validates, and `urlsplit` raises rather than returning
+    something refusable on input like `http://[::1`. That escaped as a ValueError into `main()`,
+    whose bare handler prints a traceback plus a stage line — where every other bad input gets
+    one sentence. `setup.py` had the same hole and it was closed during #54's review round. The
+    message names the VARIABLE and never the value, because a malformed URL can still carry
+    userinfo, which is a credential.
     """
-    parsed = urllib.parse.urlsplit(raw.strip())
+    try:
+        parsed = urllib.parse.urlsplit(raw.strip())
+        parsed.hostname  # noqa: B018 - the property itself is what raises on a bad host
+    except ValueError as e:
+        raise StageError(
+            stage, f"{varname} is not a URL that can be parsed ({e.__class__.__name__}). "
+                   "Give scheme, host and port only.") from e
     if parsed.scheme not in ("http", "https"):
         raise StageError(stage, f"{varname} must be an http or https URL, not {raw.strip()!r}")
     if not parsed.hostname:
@@ -925,11 +938,16 @@ def _control_is_edge(base: str) -> bool:
     try:
         parsed = urllib.parse.urlsplit(base)
         host = (parsed.hostname or "").lower()
+        port = parsed.port
     except ValueError:
         # A base this malformed is refused elsewhere with a sentence. Answering "not the edge"
         # here means "do not attach a credential", which is the safe direction.
         return False
-    return parsed.scheme == "https" and host in _ACCESS_CONTROL_HOSTS_TLS
+    # #54 follow-up 2: a port is part of an ENDPOINT. The pinned control host is one endpoint,
+    # not every port on that name, so only the default TLS port counts. `:443` written out is
+    # the same endpoint and is allowed.
+    return (parsed.scheme == "https" and host in _ACCESS_CONTROL_HOSTS_TLS
+            and port in (None, 443))
 
 
 def _access_pair(env=None, *, stage: int, remedy: str = "") -> tuple[str, str]:
@@ -1003,7 +1021,11 @@ def assert_bearer_destination(base: str, env=None, *, stage: int = 6) -> None:
     env = os.environ if env is None else env
     parsed = urllib.parse.urlsplit(base)
     host = (parsed.hostname or "").lower()
-    if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS:
+    # #54 follow-up 2: the TLS branch tested the hostname alone, so any port on the pinned name
+    # was admitted. A port is part of an endpoint, and the allowlist names ONE endpoint. The
+    # plaintext branches below are deliberately untouched — loopback and bridge endpoints are
+    # ADDRESSED by port, and narrowing them would break the operations path.
+    if parsed.scheme == "https" and host in _BEARER_HOSTS_TLS and parsed.port in (None, 443):
         return
     if parsed.scheme == "http" and _LOOPBACK.match(host):
         return

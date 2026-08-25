@@ -749,7 +749,10 @@ class TestTheProbeThroughTheEdge:
     def test_an_edge_probe_with_neither_half_sends_nothing_and_names_both(self, monkeypatch):
         h = FakeHarness().install(monkeypatch)
         outcome, detail = setup_mod.probe_harness(EDGE_CONTROL, TOKEN, env={})
-        assert outcome == "failed"
+        # `incomplete` since #54 follow-up 3 — see
+        # TestALocalCredentialRefusalIsNotAnUnreachableHarness. What this test pins is unchanged:
+        # nothing is sent, and both variables are named.
+        assert outcome == "incomplete"
         assert h.calls == [], "a credential-incomplete probe must not reach the network"
         assert "CF_ACCESS_CLIENT_ID" in detail and "CF_ACCESS_CLIENT_SECRET" in detail
 
@@ -765,7 +768,7 @@ class TestTheProbeThroughTheEdge:
         this message is the same sharp one on both paths."""
         h = FakeHarness().install(monkeypatch)
         outcome, detail = setup_mod.probe_harness(EDGE_CONTROL, TOKEN, env=env)
-        assert outcome == "failed"
+        assert outcome == "incomplete"      # `failed` before #54 follow-up 3
         assert h.calls == [], "a credential-incomplete probe must not reach the network"
         assert missing in detail
 
@@ -1096,3 +1099,47 @@ class TestTheDocsDoNotSayBothOrNeither:
         text = (self.ROOT / rel).read_text(encoding="utf-8")
         assert "CF_ACCESS_CLIENT_ID" in text and "CF_ACCESS_CLIENT_SECRET" in text, (
             f"{rel} must still document both variables (AC4)")
+
+
+class TestALocalCredentialRefusalIsNotAnUnreachableHarness:
+    """#54 follow-up 3. `probe_harness` returned "failed" when it refused locally for an
+    incomplete Access pair, and `status` maps "failed" to `harness_unreachable`, whose advice
+    says the harness did not answer. Nothing was asked of it. `status` gates the pair earlier so
+    only a direct caller could see this, but the outcome vocabulary was still wrong.
+
+    A new OUTCOME rather than a new STATE, deliberately: "the pair is incomplete" is exactly
+    `edge_env_incomplete`, which already exists. Adding a state would move the exit-code
+    surface for a condition the table already names."""
+
+    def test_the_probe_reports_an_incomplete_pair_as_incomplete(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(EDGE_CONTROL, TOKEN, env={})
+        assert outcome == "incomplete", "a local credential refusal is not a failed probe"
+        assert h.calls == []
+        assert "CF_ACCESS_CLIENT_ID" in detail
+
+    def test_status_maps_it_to_the_state_that_already_names_it(self, monkeypatch, cfg, tmp_path):
+        """Reached by forcing the probe to answer `incomplete`, since `status` normally refuses
+        the same condition one step earlier."""
+        _ready_files(cfg, tmp_path)
+        monkeypatch.setattr(setup_mod, "probe_harness",
+                            lambda *a, **k: ("incomplete", "CF_ACCESS_CLIENT_SECRET is not set"))
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(CF_ACCESS_CLIENT_ID="i", CF_ACCESS_CLIENT_SECRET="s"))
+        assert s["status"] == "edge_env_incomplete"
+        assert setup_mod.exit_code(s) == 2
+        assert s["harness_reachable"] is not True
+
+    def test_an_unreachable_harness_is_still_unreachable(self, monkeypatch, cfg, tmp_path):
+        """The non-regression: a real connection failure keeps its own state and message."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(raises=OSError("refused")), cfg)
+        assert s["status"] == "harness_unreachable"
+
+    def test_a_refused_destination_is_still_a_failed_probe(self, monkeypatch):
+        """Scope line: an off-allowlist destination genuinely is not reachable as configured, so
+        it keeps `failed`. Only the CREDENTIAL refusal changed."""
+        h = FakeHarness().install(monkeypatch)
+        outcome, _d = setup_mod.probe_harness("https://evil.example", TOKEN, env={})
+        assert outcome == "failed"
+        assert h.calls == []
