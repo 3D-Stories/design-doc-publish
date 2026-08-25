@@ -876,3 +876,41 @@ class TestTheEXECUTINGTreeOwnsItsOwnAccent:
         pack = vdl_packs.pack_for("design-doc-publish", None)
         assert pack["origin"] == "seed", "a malformed own-declaration must fall open to the seed"
         assert "design-doc-publish" in capsys.readouterr().err
+
+    def test_a_CORRUPT_own_config_warns_rather_than_silently_seeding(self, tmp_path,
+                                                                    monkeypatch, capsys):
+        """Found in my own Step 11 inline review, where the first draft's justification for
+        silence was checkable and wrong.
+
+        The `exists()` check returns early for a repository with no config of its own, so this
+        branch is reached ONLY by a config that exists and is broken. Silence there means a
+        corrupt config quietly downgrades to the seed — invisible today because the two colours
+        agree, and a silently wrong page the day they do not.
+        """
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        (tmp_path / ".rawgentic.json").write_text("{ not json at all", encoding="utf-8")
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+        pack = vdl_packs.pack_for("design-doc-publish", None)
+        assert pack["origin"] == "seed", "must still fall open to the seed, never the hash"
+        err = capsys.readouterr().err
+        assert "design-doc-publish" in err and "own repository config unusable" in err
+
+    def test_a_non_object_own_config_also_warns(self, tmp_path, monkeypatch, capsys):
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        (tmp_path / ".rawgentic.json").write_text('["a list, not an object"]', encoding="utf-8")
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+        assert vdl_packs.pack_for("design-doc-publish", None)["origin"] == "seed"
+        assert "not an object" in capsys.readouterr().err
+
+    def test_a_repository_with_NO_config_of_its_own_stays_silent(self, tmp_path, monkeypatch,
+                                                                capsys):
+        """The negative control. Absence is the ordinary state for most repositories and must
+        not warn — otherwise this prints on every render everywhere, which is the noise the
+        first draft was (wrongly) trying to avoid by swallowing corruption too."""
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+        assert vdl_packs.pack_for("design-doc-publish", None)["origin"] == "seed"
+        assert capsys.readouterr().err == ""

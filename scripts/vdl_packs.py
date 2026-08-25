@@ -289,17 +289,24 @@ def _own_repository_config(project: str) -> Path | None:
         return None                                   # silent: not a configured repository
     try:
         data = json.loads(config.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # Deliberately silent, and this is the one place that difference is right: `load_pack`
-        # warns about a config it was ASKED to read, whereas this one is speculative — it is
-        # consulted on every render of every project, so warning here would print on the
-        # ordinary path for anyone whose repository has no config of its own.
+    except (OSError, ValueError) as e:
+        # WARNS, and an earlier draft of this function did not. Its comment claimed silence was
+        # needed because this lookup is speculative and would print on the ordinary path — but
+        # the `exists()` check above already returns for a repository with no config of its own,
+        # so this branch is reached ONLY by a config that exists and is broken. That is exactly
+        # when a warning is worth having: a corrupt config here silently downgrades to the seed,
+        # and the day the declaration and the seed differ it would silently ship the wrong
+        # colour. Caught in my own inline Step 11 review, because the justification was
+        # checkable and wrong.
+        _warn(project, config, f"own repository config unusable ({e.__class__.__name__}: {e})")
         return None
     if not isinstance(data, dict):
+        _warn(project, config, f"own repository config root is {type(data).__name__}, "
+                               f"not an object")
         return None
     own = data.get("project")
     if not isinstance(own, dict):
-        return None
+        return None                                   # silent: no project block to match on
     name = own.get("name")
     if not isinstance(name, str) or name.strip().lower() != project:
         return None                                   # a different project: not our question
