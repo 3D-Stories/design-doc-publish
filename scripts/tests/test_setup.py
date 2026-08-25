@@ -79,6 +79,13 @@ class _Resp:
         return False
 
 
+class _FakeOpener:
+    """What a patched `build_opener` returns: something with `.open`, which is the fake."""
+
+    def __init__(self, fake):
+        self.open = fake
+
+
 class FakeHarness:
     """Stands in for the control API. Records every URL so the tests can assert what was
     asked, and — the property that matters — that the probe only ever GETs."""
@@ -88,10 +95,20 @@ class FakeHarness:
         self.status = status          # an HTTP error code, or None for 200
         self.raises = raises
         self.calls = []
+        self.handlers = ()
 
     def install(self, monkeypatch):
         monkeypatch.setattr(urllib.request, "urlopen", self)
+        # Since #54 the probe goes through an opener with the redirect handler neutered, so
+        # patching `urlopen` alone would stop intercepting and every status test would attempt a
+        # real network call. `build_opener` hands back this same fake, and records the handlers
+        # it was given so a test can assert the redirect refusal directly.
+        monkeypatch.setattr(urllib.request, "build_opener", self._build_opener)
         return self
+
+    def _build_opener(self, *handlers):
+        self.handlers = handlers
+        return _FakeOpener(self)
 
     def __call__(self, req, timeout=None):
         self.calls.append((req.get_method(), req.full_url, dict(req.headers)))
@@ -682,3 +699,79 @@ class TestTheStepElevenFindings:
         err = capsys.readouterr().err
         assert "POSIX" in err
         assert "Traceback" not in err
+
+
+# --------------------------------------------------------------------------------- #54
+
+EDGE_CONTROL = "https://docs-control.3dstories.ca"
+
+
+class TestTheProbeThroughTheEdge:
+    """Issue #54. The readiness probe is a CONTROL CALL, so everything the publisher's control
+    calls must do, it must do: carry the Cloudflare Access pair when the destination is behind
+    Access, and never follow a redirect while holding the publish bearer."""
+
+    def test_a_loopback_probe_is_unchanged(self, monkeypatch):
+        """AC3. The pair is a TLS-only credential: holding it in the environment must not put it
+        on a plaintext loopback request."""
+        h = FakeHarness().install(monkeypatch)
+        setup_mod.probe_harness(CONTROL, TOKEN, env={"CF_ACCESS_CLIENT_ID": "i",
+                                                     "CF_ACCESS_CLIENT_SECRET": "s"})
+        _method, _url, headers = h.calls[0]
+        assert headers.get("Host") == "docs-control.3dstories.ca"
+        assert "Cf-access-client-id" not in headers
+        assert "Cf-access-client-secret" not in headers
+
+    def test_an_edge_probe_carries_the_access_pair_beside_the_bearer(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, _detail = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN,
+            env={"CF_ACCESS_CLIENT_ID": "cid-value", "CF_ACCESS_CLIENT_SECRET": "secret-value"})
+        assert outcome == "ok"
+        _method, _url, headers = h.calls[0]
+        assert headers["Cf-access-client-id"] == "cid-value"
+        assert headers["Cf-access-client-secret"] == "secret-value"
+        assert headers["Authorization"] == "Bearer " + TOKEN
+        # Over TLS the URL already carries the right name; an override would mask a mismatch.
+        assert "Host" not in headers
+
+    @pytest.mark.parametrize("env", [
+        {},
+        {"CF_ACCESS_CLIENT_ID": "i"},
+        {"CF_ACCESS_CLIENT_SECRET": "s"},
+        {"CF_ACCESS_CLIENT_ID": "  ", "CF_ACCESS_CLIENT_SECRET": "s"},
+    ])
+    def test_an_edge_probe_without_the_whole_pair_sends_nothing(self, monkeypatch, env):
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(EDGE_CONTROL, TOKEN, env=env)
+        assert outcome == "failed"
+        assert h.calls == [], "a credential-incomplete probe must not reach the network"
+        assert "CF_ACCESS_CLIENT_ID" in detail and "CF_ACCESS_CLIENT_SECRET" in detail
+
+    def test_no_probe_refusal_prints_a_credential_value(self, monkeypatch):
+        FakeHarness().install(monkeypatch)
+        _outcome, detail = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN, env={"CF_ACCESS_CLIENT_ID": "SUPERSECRETVALUE"})
+        assert "SUPERSECRETVALUE" not in detail
+
+    def test_the_probe_opener_refuses_redirects(self, monkeypatch):
+        """Measured 2026-08-25 on CPython 3.12.3: `urllib.request.urlopen` forwards BOTH
+        `Authorization` and `CF-Access-Client-Id` across a cross-host 302. Cloudflare Access
+        answers exactly such a redirect, so following one hands the publish bearer to the login
+        host. The handler is asserted directly rather than through an outcome, because the
+        outcome is the same whether the redirect was refused or merely failed later."""
+        h = FakeHarness().install(monkeypatch)
+        setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert h.handlers, "the probe must build its own opener, not call urlopen"
+        redirectors = [x for x in h.handlers if hasattr(x, "redirect_request")]
+        assert redirectors, "no redirect handler was passed to build_opener"
+        assert all(r.redirect_request(None, None, 302, "Found", {}, EDGE_CONTROL) is None
+                   for r in redirectors)
+
+    def test_a_redirect_answer_is_reported_as_a_failed_probe_not_a_denial(self, monkeypatch):
+        """A 302 is the Access login. It is not a token refusal, and telling someone their
+        bearer was denied sends them to rotate a credential they already hold."""
+        _status_h = FakeHarness(status=302).install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert outcome == "failed"
+        assert "302" in detail

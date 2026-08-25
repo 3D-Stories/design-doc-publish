@@ -184,6 +184,9 @@ def _locked(target):
 #: Every call in this module is a STATUS probe, so it should answer quickly or not at all.
 #: Without a bound, a non-responsive harness stalls `--check` forever, and the one command
 #: meant to diagnose a machine becomes the thing that hangs on it.
+#: Pinned in committed source, never read from the environment — see `_is_edge_control`.
+_CONTROL_HOST = "docs-control.3dstories.ca"
+
 _PROBE_TIMEOUT = 10
 
 #: A valid deployment name that no real document is expected to hold. The read-back route
@@ -192,29 +195,79 @@ _PROBE_TIMEOUT = 10
 _PROBE_NAME = "setup-readiness-probe"
 
 
-def probe_harness(control_url, token):
+def _is_edge_control(control_url):
+    """True when the control URL is the public control host over TLS, so Cloudflare Access
+    stands in front of it (#54).
+
+    The host is pinned in source here for the same reason it is pinned below: validating a
+    destination against a value read from the same environment that supplied the destination
+    is not validation. This module deliberately does not import `publish_doc` — it stays
+    parseable and runnable on its own — so the one string is duplicated rather than shared,
+    and `publish_doc._control_is_edge` is its counterpart.
+    """
+    import urllib.parse
+    parsed = urllib.parse.urlsplit((control_url or "").strip())
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() == _CONTROL_HOST
+
+
+def probe_harness(control_url, token, env=None):
     """(outcome, detail) for the control API, using the read-back the publisher parses.
 
     Outcome is one of `ok`, `denied`, `failed`. The split is the point: a call that could
     not connect, timed out, or answered garbage is a FAILED probe, not a denial. Telling
     someone their token was refused when the network blipped sends them to rotate a
     credential they already hold. READ-ONLY by construction: GET, never POST.
+
+    #54: this is a CONTROL CALL, so it obeys the same two rules the publisher's control calls
+    obey. It carries the Cloudflare Access service-token pair when the destination is behind
+    Access, and it never follows a redirect.
     """
+    import os
     import urllib.error
     import urllib.request
+    if env is None:
+        env = os.environ
     url = control_url.rstrip("/") + "/v1/deployments/" + _PROBE_NAME
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     # The harness routes on the HOST header, so a loopback control URL needs the control
     # host named explicitly — the same rule `publish_doc._control_request` applies, against
     # the same pinned zone. Pinned in source, deliberately not read from the environment.
     if url.startswith("http://"):
-        req.add_header("Host", "docs-control.3dstories.ca")
+        req.add_header("Host", _CONTROL_HOST)
+    elif _is_edge_control(control_url):
+        # Through the edge, Access answers before the harness does. Without the pair the reply
+        # is a 302 to the login, which the opener below refuses — so the probe would report an
+        # unreachable harness when the real problem is two unset variables. `status` already
+        # refuses this combination earlier; the check is repeated here because a guard a caller
+        # must remember is not a guard. No message renders a VALUE, only a variable name.
+        cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
+        secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
+        if not (cid and secret):
+            return "failed", ("this control URL is behind Cloudflare Access and needs "
+                              "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET; nothing was sent")
+        req.add_header("CF-Access-Client-Id", cid)
+        req.add_header("CF-Access-Client-Secret", secret)
+
+    # `urlopen` follows a 302 silently. MEASURED on CPython 3.12.3, 2026-08-25: a cross-host
+    # redirect delivered both `Authorization` and `CF-Access-Client-Id` to the redirect target.
+    # An Access login IS such a redirect, so following one hands the publish bearer to the login
+    # host. `publish_doc.NO_REDIRECTS` is the same construction, for the same reason.
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with urllib.request.urlopen(req, timeout=_PROBE_TIMEOUT) as resp:
+        with opener.open(req, timeout=_PROBE_TIMEOUT) as resp:
             body = resp.read(4096)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return "denied", "the harness answered %d" % e.code
+        if 300 <= e.code < 400:
+            return "failed", ("the harness answered %d, a redirect, which is not followed "
+                              "because the request carries the publish bearer. Through "
+                              "Cloudflare Access that is the login page, so check "
+                              "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET." % e.code)
         return "failed", "the harness answered %d" % e.code
     except OSError as e:
         return "failed", "the harness could not be reached (%s)" % e.__class__.__name__
@@ -305,7 +358,7 @@ def status(config_path=None, *, env=None, **_ignored):
     if public_base and not edge_pair:
         return _finish(state, "edge_env_incomplete", None)
 
-    outcome, detail = probe_harness(control, token)
+    outcome, detail = probe_harness(control, token, env=env)
     state["harness_reachable"] = outcome == "ok"
     if outcome == "failed":
         return _finish(state, "harness_unreachable", detail)
