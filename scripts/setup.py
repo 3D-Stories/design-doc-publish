@@ -19,9 +19,11 @@ is not reported as broken.
 
 What publishing needs, and therefore what this checks: a workspace file (stage 2 validates
 ``--project`` against it), ``DOC_HARNESS_CONTROL_URL`` and ``DOC_HARNESS_PUBLISH_TOKEN``
-(stage 5 publishes through the control API), and — only when ``DOC_HARNESS_PUBLIC_BASE``
-is set — the ``CF_ACCESS_CLIENT_ID``/``CF_ACCESS_CLIENT_SECRET`` pair the edge half sends.
-Rendering alone needs none of it.
+(stage 5 publishes through the control API), and the
+``CF_ACCESS_CLIENT_ID``/``CF_ACCESS_CLIENT_SECRET`` pair whenever something crosses the
+Cloudflare edge — either because ``DOC_HARNESS_PUBLIC_BASE`` requests the edge verify half, or
+because ``DOC_HARNESS_CONTROL_URL`` names the public control host, which is how a machine that
+is not the harness host publishes at all (#54). Rendering alone needs none of it.
 
 Two refusals here are deliberate:
 
@@ -127,7 +129,7 @@ _ADVICE = {
     "workspace_unreadable": "The configured workspace file cannot be read. Check its permissions.",
     "workspace_malformed": "The configured workspace file is not valid JSON. Fix it, or run --init-workspace elsewhere.",
     "needs_harness_env": "Publishing needs DOC_HARNESS_CONTROL_URL and DOC_HARNESS_PUBLISH_TOKEN in the environment. Rendering alone needs neither.",
-    "edge_env_incomplete": "DOC_HARNESS_PUBLIC_BASE is set, so the edge check needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET too — or unset DOC_HARNESS_PUBLIC_BASE to skip it.",
+    "edge_env_incomplete": "Something here goes through Cloudflare Access, which needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET. Either DOC_HARNESS_PUBLIC_BASE is set (the edge check — unset it to skip that half), or DOC_HARNESS_CONTROL_URL names the public control host (publishing from anywhere but the harness host — there is no skipping that one, set the pair).",
     "harness_unreachable": "The harness at DOC_HARNESS_CONTROL_URL did not answer. Check the URL, and that the harness is running.",
     "harness_denied": "The harness refused the publish bearer. Check DOC_HARNESS_PUBLISH_TOKEN.",
     "ready_no_projects": "Ready. No project names are registered, so publish with --project workspace, or add one with --add-project.",
@@ -181,6 +183,11 @@ def _locked(target):
         os.close(fd)
 
 
+#: Pinned in committed source, never read from the environment. `publish_doc` holds the
+#: authoritative copy and every security decision that depends on it; this one serves the Host
+#: header and `status`'s reporting only.
+_CONTROL_HOST = "docs-control.3dstories.ca"
+
 #: Every call in this module is a STATUS probe, so it should answer quickly or not at all.
 #: Without a bound, a non-responsive harness stalls `--check` forever, and the one command
 #: meant to diagnose a machine becomes the thing that hangs on it.
@@ -192,29 +199,156 @@ _PROBE_TIMEOUT = 10
 _PROBE_NAME = "setup-readiness-probe"
 
 
-def probe_harness(control_url, token):
+def _control_origin(control_url):
+    """The NORMALIZED origin of the control URL, or None when it is not usable at all (#54).
+
+    `status` has to know whether Cloudflare Access stands in front of the control host, and
+    asking that of a RAW string was two separate defects, both caught at Step 11:
+
+    * `urllib.parse.urlsplit` RAISES on some malformed input — `http://[::1` gives
+      `ValueError: Invalid IPv6 URL` — so `setup --check`, the command people run when a machine
+      is already broken, exited with a traceback. This module's docstring promises a sentence.
+    * A URL that merely LOOKED like the edge host while carrying a path was reported as a missing
+      credential pair. Setting the pair would not have helped; the URL was the problem.
+
+    None means "cannot tell", which is the safe answer for a reporting predicate: `status` then
+    skips the pair gate and `probe_harness` produces the accurate refusal. Normalization is the
+    publisher's, so there is one definition of what a usable origin is; an unimportable publisher
+    also yields None, and the probe reports that too.
+    """
+    try:
+        import publish_doc
+        return publish_doc._normalized_origin(
+            control_url, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+    except Exception:                                   # noqa: BLE001 - fail SAFE, see above
+        return None
+
+
+def _is_edge_control(control_url):
+    """True when the control URL is the public control host over TLS, so Cloudflare Access
+    stands in front of it (#54).
+
+    **This is `status`'s REPORTING test, not a security control.** The authoritative rule is
+    `publish_doc._control_is_edge`, and `probe_harness` calls that one, because the decision to
+    attach a credential must have exactly one definition. This copy only decides whether
+    `status` says the Access pair is required, so a drift here mis-reports readiness and can
+    never let a credential out. It stays separate so that `--check` still answers on a machine
+    where `publish_doc` will not import.
+    """
+    import urllib.parse
+    parsed = urllib.parse.urlsplit((control_url or "").strip())
+    return parsed.scheme == "https" and (parsed.hostname or "").lower() == _CONTROL_HOST
+
+
+def probe_harness(control_url, token, env=None):
     """(outcome, detail) for the control API, using the read-back the publisher parses.
 
     Outcome is one of `ok`, `denied`, `failed`. The split is the point: a call that could
     not connect, timed out, or answered garbage is a FAILED probe, not a denial. Telling
     someone their token was refused when the network blipped sends them to rotate a
     credential they already hold. READ-ONLY by construction: GET, never POST.
+
+    #54: this is a CONTROL CALL, so it obeys the same two rules the publisher's control calls
+    obey. It carries the Cloudflare Access service-token pair when the destination is behind
+    Access, and it never follows a redirect.
     """
+    import os
     import urllib.error
     import urllib.request
-    url = control_url.rstrip("/") + "/v1/deployments/" + _PROBE_NAME
+    if env is None:
+        env = os.environ
+
+    # Step 8a finding F1, Critical. This function attaches the publish bearer and used to
+    # validate NOTHING about where that bearer went: whatever host DOC_HARNESS_CONTROL_URL
+    # named received the token. `publish_doc` closed this for the publisher in finding N4 and
+    # this module never got it, so #54 criterion 3 was false here.
+    #
+    # The allowlist is IMPORTED, never copied. Two copies of a destination allowlist drift, and
+    # the copy that drifts is the one that lets a credential out. The import is lazy — the
+    # interpreter-version guard at the top of this module has already run by the time any of
+    # this executes, which is what the module-level import ban is actually protecting.
+    #
+    # It fails CLOSED and says which way: setup is the tool people run when a machine is
+    # broken, so an unimportable publisher must produce a sentence, never a traceback and
+    # never a request.
+    try:
+        import publish_doc
+    except Exception as e:                              # noqa: BLE001
+        return "failed", ("the destination allowlist could not be loaded from publish_doc "
+                          "(%s), so nothing was sent" % e.__class__.__name__)
+    try:
+        # Normalizing FIRST is half the fix: `assert_bearer_destination` tests scheme and host,
+        # so on its own it would accept a base smuggling a path, a query, or userinfo — and
+        # userinfo in a URL is itself a credential.
+        origin = publish_doc._normalized_origin(
+            control_url, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+        publish_doc.assert_bearer_destination(origin, env=env, stage=5)
+    except publish_doc.StageError as e:
+        return "failed", e.message
+    except ValueError as e:
+        # `_normalized_origin` PARSES before it validates, and `urlsplit` raises on some
+        # malformed input instead of returning something refusable. Catching only StageError
+        # left that as a traceback out of `--check` (#54 Step-11 finding J1, measured).
+        return "failed", ("DOC_HARNESS_CONTROL_URL is not a URL this can parse (%s), so "
+                          "nothing was sent" % e.__class__.__name__)
+
+    url = origin + "/v1/deployments/" + _PROBE_NAME
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     # The harness routes on the HOST header, so a loopback control URL needs the control
     # host named explicitly — the same rule `publish_doc._control_request` applies, against
     # the same pinned zone. Pinned in source, deliberately not read from the environment.
-    if url.startswith("http://"):
-        req.add_header("Host", "docs-control.3dstories.ca")
+    if origin.startswith("http://"):
+        req.add_header("Host", _CONTROL_HOST)
+    elif publish_doc._control_is_edge(origin):
+        # Through the edge, Access answers before the harness does. Without the pair the reply
+        # is a 302 to the login, which the opener below refuses — so the probe would report an
+        # unreachable harness when the real problem is two unset variables. `status` already
+        # refuses this combination earlier; the check is repeated here because a guard a caller
+        # must remember is not a guard.
+        #
+        # The pair reader is the publisher's, for the same reason the allowlist is: one
+        # definition. It names the MISSING half specifically rather than both, and no message
+        # it produces ever renders a value.
+        try:
+            cid, secret = publish_doc._access_pair(env, stage=5)
+        except publish_doc.StageError as e:
+            return "failed", e.message
+        req.add_header("CF-Access-Client-Id", cid)
+        req.add_header("CF-Access-Client-Secret", secret)
+
+    # `urlopen` follows a 302 silently. MEASURED on CPython 3.12.3, 2026-08-25: a cross-host
+    # redirect delivered both `Authorization` and `CF-Access-Client-Id` to the redirect target.
+    # An Access login IS such a redirect, so following one hands the publish bearer to the login
+    # host. `publish_doc.NO_REDIRECTS` is the same construction, for the same reason.
+    class _NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *a, **kw):
+            return None
+
+    opener = urllib.request.build_opener(_NoRedirect())
     try:
-        with urllib.request.urlopen(req, timeout=_PROBE_TIMEOUT) as resp:
+        with opener.open(req, timeout=_PROBE_TIMEOUT) as resp:
             body = resp.read(4096)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
+            # #54 Step-11 findings F1 and A2, raised independently by both passes. Through the
+            # edge, Cloudflare Access answers 401/403 BEFORE the harness does, and nothing in the
+            # response reliably says which one replied. Calling it a harness denial there sends
+            # the operator to rotate the publish bearer when the Access pair is what was refused.
+            # Loopback keeps the precise message: no Access layer stands in front of it, so there
+            # is nothing else it could be, and widening it everywhere would make the accurate
+            # case vaguer.
+            if publish_doc._control_is_edge(origin):
+                return "denied", (
+                    "the endpoint answered %d, and through Cloudflare Access either credential "
+                    "can produce that: check CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET as "
+                    "well as DOC_HARNESS_PUBLISH_TOKEN. Nothing in the response says which one "
+                    "was refused." % e.code)
             return "denied", "the harness answered %d" % e.code
+        if 300 <= e.code < 400:
+            return "failed", ("the harness answered %d, a redirect, which is not followed "
+                              "because the request carries the publish bearer. Through "
+                              "Cloudflare Access that is the login page, so check "
+                              "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET." % e.code)
         return "failed", "the harness answered %d" % e.code
     except OSError as e:
         return "failed", "the harness could not be reached (%s)" % e.__class__.__name__
@@ -302,10 +436,18 @@ def status(config_path=None, *, env=None, **_ignored):
 
     if not control or not token:
         return _finish(state, "needs_harness_env", None)
-    if public_base and not edge_pair:
+    # #54: two different things put a Cloudflare Access door in front of a publish. The edge
+    # VERIFY half, requested by DOC_HARNESS_PUBLIC_BASE, and — new — a control URL that is
+    # itself the public control host. Either one needs the pair, so reporting `ready` without
+    # it sends someone to a publish that can only come back as a login redirect.
+    # The edge test runs on the NORMALIZED origin, never the raw string (#54 Step-11 J1/A1).
+    # A `None` here means the URL is unusable, so the pair is not what is wrong with it — the
+    # probe below says what is.
+    control_origin = _control_origin(control)
+    if (public_base or (control_origin and _is_edge_control(control_origin))) and not edge_pair:
         return _finish(state, "edge_env_incomplete", None)
 
-    outcome, detail = probe_harness(control, token)
+    outcome, detail = probe_harness(control, token, env=env)
     state["harness_reachable"] = outcome == "ok"
     if outcome == "failed":
         return _finish(state, "harness_unreachable", detail)

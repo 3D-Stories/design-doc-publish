@@ -4,9 +4,9 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 #23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-5 | issues on this log
-37 | newest: PR open, the Vercel backfill
-2943/3043 | suite, baseline to this PR
+6 | issues on this log
+54 | newest: PR open, control calls through the edge
+2928/3001 | suite, baseline to this PR
 ```
 
 ```callout
@@ -15,6 +15,42 @@ One section per issue, refreshed inside that issue's own PR (a filed-but-unstart
 issue gets a backlog section at WF1 time). The stats above always describe the NEWEST
 state; older sections keep their text as historical record.
 ```
+
+## #54 — Control calls through the edge carry the Access service-token pair
+
+PR open 2026-08-25. Publishing worked from the harness host and nowhere else. Through the
+public edge, Cloudflare Access answers a control call before the harness sees it, and a request
+carrying only the publish bearer gets a 302 to the login — which `NO_REDIRECTS` rightly refuses.
+`_control_request` now attaches `CF-Access-Client-Id` and `CF-Access-Client-Secret` when the
+destination is the pinned TLS control host, the same pair stage 6 already sends for the page
+fetch. A missing or half-present pair refuses locally, naming the variable, before a request
+object exists. Loopback and bridge behaviour are unchanged.
+
+Three review passes ran over it — inline, cross-model, and an adversarial refutation of eight
+explicit claims — and between them they turned up more than the feature did.
+
+```callout
+warning | The readiness probe was leaking the publish bearer, two ways
+`setup.probe_harness` validated NOTHING about its destination, so any host named in
+`DOC_HARNESS_CONTROL_URL` received the publish bearer. It also followed redirects: measured
+on CPython 3.12.3, a cross-host 302 delivered both `Authorization` and `CF-Access-Client-Id`
+to the redirect target, and a Cloudflare Access login IS such a redirect. Both are fixed. The
+allowlist is now imported from `publish_doc` rather than copied, because two copies of a
+destination allowlist drift and the copy that drifts is the one that lets a credential out.
+```
+
+```phases
+edge control calls | the Access pair rides stage 5, refused locally when incomplete | merged
+probe hardening | destination allowlist + redirect refusal in setup.py, both found by review | merged
+Access boundary | a dedicated `_ACCESS_CONTROL_HOSTS_TLS`, pinned equal to the bearer set by a test | merged
+AC1 live proof | deferred to target: no credentials here, and the dedicated Access application is still pending in the gateway repo | blocked
+```
+
+The one acceptance criterion this PR cannot prove is the live round trip. Everything shipped is
+publisher-side. The zone still has no dedicated docs-control Access application — the consult
+records `service token isolated | pending` — so the server half stays unverified until the
+gateway repo lands it. That is written into the PR body as a deferred verification with its
+exact target check, never as a pass.
 
 ## #38 — Epic: replace the Vercel deploy target with the GitHub-doc harness
 

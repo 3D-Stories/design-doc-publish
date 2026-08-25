@@ -637,9 +637,27 @@ def _control_request(base: str, path: str, token: str, *, method: str, body: byt
     already in the test suite: it called `read_active` and `publish` directly, with no
     guard, and they worked. A guard a caller must remember is not a guard.
     """
+    # Step 11 finding A4. This function's own docstring says a guard a caller must remember is
+    # not a guard — and it was remembering nothing while trusting the caller to have normalized.
+    # `assert_bearer_destination` tests scheme and host only, so a base carrying userinfo, a
+    # path, a query or a fragment passed it, passed `_control_is_edge`, and had both credentials
+    # attached to a URL nobody validated. `main()` normalizes via `control_base()`, so production
+    # was never exposed; the builder no longer depends on that being true of every caller.
+    base = _normalized_origin(base, stage=5, varname="the control base")
     assert_bearer_destination(base, env=env, stage=5)
+    # Issue #54. Through the PUBLIC edge, Cloudflare Access answers the control call before the
+    # harness ever sees it: a request carrying only the publish bearer gets a 302 to the login,
+    # which `NO_REDIRECTS` then rightly refuses. So publishing worked from the harness host over
+    # loopback and nowhere else. The fix is the pair stage 6 already sends, attached here — in
+    # the one function that builds a control request, for the same reason the destination check
+    # moved here (finding A4). Read BEFORE the Request is constructed, so a missing credential
+    # refuses with no request object in existence, not merely with none sent.
+    access = _access_pair(env, stage=5) if _control_is_edge(base) else None
     req = urllib.request.Request(f"{base}{path}", data=body, method=method)
     req.add_header("Authorization", f"Bearer {token}")
+    if access is not None:
+        req.add_header("CF-Access-Client-Id", access[0])
+        req.add_header("CF-Access-Client-Secret", access[1])
     # The harness routes on the HOST header, so a loopback or bridge address needs the
     # control host named explicitly — `Host: 127.0.0.1:18081` is not inside the zone and
     # the harness rightly refuses it. Measured on the #36 live run, which needed a
@@ -877,11 +895,73 @@ _BEARER_HOSTS_PLAINTEXT = re.compile(
 CONTROL_HOST = f"docs-control.{PINNED_ZONE}"
 _BEARER_HOSTS_TLS = frozenset({CONTROL_HOST})
 
+# Step 11 finding F2. "May this host receive the publish BEARER" and "may this host receive the
+# Cloudflare ACCESS SECRET" are two different questions, and answering the second with the first
+# set means any TLS host added for the bearer silently gains the Access pair too. The sets are
+# equal today and a test asserts exactly that, so a future divergence is a decision somebody
+# makes and sees fail, rather than a drift nobody notices.
+_ACCESS_CONTROL_HOSTS_TLS = frozenset({CONTROL_HOST})
+
 # `urlopen` follows a 302 silently, which would send the Access service tokens to whatever
 # login host the redirect names. An opener with no redirect handler cannot.
 NO_REDIRECTS = urllib.request.build_opener(_NoRedirect := type(
     "_NoRedirect", (urllib.request.HTTPRedirectHandler,),
     {"redirect_request": lambda self, *a, **kw: None})())
+
+
+def _control_is_edge(base: str) -> bool:
+    """True when this control base is the public edge control host, over TLS (issue #54).
+
+    Tested against `_ACCESS_CONTROL_HOSTS_TLS`, NOT the bearer allowlist (Step 11 finding F2).
+    The first revision used `_BEARER_HOSTS_TLS` on the reasoning that one definition cannot
+    drift, which conflated two different permissions: a host cleared to receive the publish
+    bearer is not thereby cleared to receive the Access secret. The two sets are equal today and
+    a test pins that, so the no-drift property survives while the boundary stays narrow.
+
+    `urlsplit().hostname` is already lowercased and port-free. Callers are NOT trusted to have
+    normalized — `_control_request` does it itself now — but this predicate is conservative
+    either way: an unparseable base yields no hostname and answers False.
+    """
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        # A base this malformed is refused elsewhere with a sentence. Answering "not the edge"
+        # here means "do not attach a credential", which is the safe direction.
+        return False
+    return parsed.scheme == "https" and host in _ACCESS_CONTROL_HOSTS_TLS
+
+
+def _access_pair(env=None, *, stage: int, remedy: str = "") -> tuple[str, str]:
+    """The Cloudflare Access service-token pair, or raise. Finding N6, now at BOTH call sites.
+
+    `stage` is a parameter because the same missing pair means different things: stage 5 when a
+    control call cannot be built, stage 6 when the page fetch cannot run. The exit code is the
+    verdict, so reporting the wrong one claims a stage ran that never did — the same reasoning
+    as finding R7.
+
+    `env` defaults to the process environment exactly as `assert_bearer_destination` does.
+    `main()` calls `read_active` and `publish` without an `env`, so that default IS the
+    production path; a `None` reaching `.get` would raise AttributeError into `main()`'s bare
+    handler, printing a traceback where the exit-code contract promises one sentence.
+
+    **No message here ever renders a value**, only a variable name.
+    """
+    env = os.environ if env is None else env
+    cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
+    secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
+    if bool(cid) != bool(secret):
+        missing = "CF_ACCESS_CLIENT_SECRET" if cid else "CF_ACCESS_CLIENT_ID"
+        raise StageError(
+            stage, f"the Cloudflare Access service token is a PAIR and {missing} is not set. "
+                   "One half alone produces a login redirect that looks like a server fault."
+                   + remedy)
+    if not cid:
+        raise StageError(
+            stage, "this destination sits behind Cloudflare Access and needs "
+                   "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, and neither is set."
+                   + remedy)
+    return cid, secret
 
 
 def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
@@ -898,18 +978,12 @@ def assert_credentials(env, *, edge: bool) -> tuple[str, str] | None:
                             "bearer, and refusing here is clearer than a 401 later.")
     if not edge:
         return None
-    cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
-    secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
-    if bool(cid) != bool(secret):
-        missing = "CF_ACCESS_CLIENT_SECRET" if cid else "CF_ACCESS_CLIENT_ID"
-        raise StageError(
-            6, f"the Cloudflare Access service token is a PAIR and {missing} is not set. "
-               "One half alone produces a login redirect that looks like a server fault.")
-    if not cid:
-        raise StageError(
-            6, "the edge half needs CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET, and "
-               "neither is set. Unset DOC_HARNESS_PUBLIC_BASE to skip the edge half instead.")
-    return cid, secret
+    # The pair check itself is shared with the stage-5 control call (issue #54). Only the stage
+    # and the remedy differ: unsetting DOC_HARNESS_PUBLIC_BASE skips the EDGE HALF, and says
+    # nothing about a control URL that is itself behind Access.
+    return _access_pair(
+        env, stage=6,
+        remedy=" Unset DOC_HARNESS_PUBLIC_BASE to skip the edge half instead.")
 
 
 _LOOPBACK = re.compile(r"^(?:localhost|127\.\d+\.\d+\.\d+|::1)$")

@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Render design and architecture documents from markdown to standalone HTML pages",
-    "version": "5.0.0"
+    "version": "5.1.0"
   },
   "plugins": [
     {

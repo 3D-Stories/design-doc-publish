@@ -31,6 +31,17 @@ sys.path.insert(0, str(SCRIPTS))
 import setup as setup_mod  # noqa: E402
 import user_config  # noqa: E402
 
+# Imported HERE, at module scope, and never lazily inside a test.
+#
+# Since #54 `setup.probe_harness` imports `publish_doc` on demand to reuse its destination
+# allowlist, and `FakeHarness` below patches `urllib.request.build_opener`. `publish_doc` builds
+# its `NO_REDIRECTS` opener AT IMPORT TIME with that same function — so if its first import ever
+# landed inside a patched window, `publish_doc.NO_REDIRECTS` would become a dead test double for
+# the rest of the session, silently disabling the redirect refusal that keeps the publish bearer
+# away from the Cloudflare Access login host. Measured: it does exactly that. Importing before
+# any fixture runs closes the window, and `test_the_real_opener_survived_the_fakes` pins it.
+import publish_doc  # noqa: E402,F401
+
 ENV_VARS = ("DESIGN_DOC_PUBLISH_CONFIG", "DESIGN_DOC_PUBLISH_WORKSPACE_FILE",
             "XDG_CONFIG_HOME", "DOC_HARNESS_CONTROL_URL", "DOC_HARNESS_PUBLISH_TOKEN",
             "DOC_HARNESS_PUBLIC_BASE", "CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET")
@@ -79,6 +90,13 @@ class _Resp:
         return False
 
 
+class _FakeOpener:
+    """What a patched `build_opener` returns: something with `.open`, which is the fake."""
+
+    def __init__(self, fake):
+        self.open = fake
+
+
 class FakeHarness:
     """Stands in for the control API. Records every URL so the tests can assert what was
     asked, and — the property that matters — that the probe only ever GETs."""
@@ -88,10 +106,20 @@ class FakeHarness:
         self.status = status          # an HTTP error code, or None for 200
         self.raises = raises
         self.calls = []
+        self.handlers = ()
 
     def install(self, monkeypatch):
         monkeypatch.setattr(urllib.request, "urlopen", self)
+        # Since #54 the probe goes through an opener with the redirect handler neutered, so
+        # patching `urlopen` alone would stop intercepting and every status test would attempt a
+        # real network call. `build_opener` hands back this same fake, and records the handlers
+        # it was given so a test can assert the redirect refusal directly.
+        monkeypatch.setattr(urllib.request, "build_opener", self._build_opener)
         return self
+
+    def _build_opener(self, *handlers):
+        self.handlers = handlers
+        return _FakeOpener(self)
 
     def __call__(self, req, timeout=None):
         self.calls.append((req.get_method(), req.full_url, dict(req.headers)))
@@ -682,3 +710,389 @@ class TestTheStepElevenFindings:
         err = capsys.readouterr().err
         assert "POSIX" in err
         assert "Traceback" not in err
+
+
+# --------------------------------------------------------------------------------- #54
+
+EDGE_CONTROL = "https://docs-control.3dstories.ca"
+
+
+class TestTheProbeThroughTheEdge:
+    """Issue #54. The readiness probe is a CONTROL CALL, so everything the publisher's control
+    calls must do, it must do: carry the Cloudflare Access pair when the destination is behind
+    Access, and never follow a redirect while holding the publish bearer."""
+
+    def test_a_loopback_probe_is_unchanged(self, monkeypatch):
+        """AC3. The pair is a TLS-only credential: holding it in the environment must not put it
+        on a plaintext loopback request."""
+        h = FakeHarness().install(monkeypatch)
+        setup_mod.probe_harness(CONTROL, TOKEN, env={"CF_ACCESS_CLIENT_ID": "i",
+                                                     "CF_ACCESS_CLIENT_SECRET": "s"})
+        _method, _url, headers = h.calls[0]
+        assert headers.get("Host") == "docs-control.3dstories.ca"
+        assert "Cf-access-client-id" not in headers
+        assert "Cf-access-client-secret" not in headers
+
+    def test_an_edge_probe_carries_the_access_pair_beside_the_bearer(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, _detail = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN,
+            env={"CF_ACCESS_CLIENT_ID": "cid-value", "CF_ACCESS_CLIENT_SECRET": "secret-value"})
+        assert outcome == "ok"
+        _method, _url, headers = h.calls[0]
+        assert headers["Cf-access-client-id"] == "cid-value"
+        assert headers["Cf-access-client-secret"] == "secret-value"
+        assert headers["Authorization"] == "Bearer " + TOKEN
+        # Over TLS the URL already carries the right name; an override would mask a mismatch.
+        assert "Host" not in headers
+
+    def test_an_edge_probe_with_neither_half_sends_nothing_and_names_both(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(EDGE_CONTROL, TOKEN, env={})
+        assert outcome == "failed"
+        assert h.calls == [], "a credential-incomplete probe must not reach the network"
+        assert "CF_ACCESS_CLIENT_ID" in detail and "CF_ACCESS_CLIENT_SECRET" in detail
+
+    @pytest.mark.parametrize("env,missing", [
+        ({"CF_ACCESS_CLIENT_ID": "i"}, "CF_ACCESS_CLIENT_SECRET"),
+        ({"CF_ACCESS_CLIENT_SECRET": "s"}, "CF_ACCESS_CLIENT_ID"),
+        ({"CF_ACCESS_CLIENT_ID": "  ", "CF_ACCESS_CLIENT_SECRET": "s"}, "CF_ACCESS_CLIENT_ID"),
+    ])
+    def test_an_edge_probe_with_half_the_pair_names_the_MISSING_half(self, monkeypatch, env,
+                                                                     missing):
+        """AC2 asks for the variable to be named. Naming both when one is already set sends
+        somebody to check a value they have. The publisher's reader is shared here precisely so
+        this message is the same sharp one on both paths."""
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(EDGE_CONTROL, TOKEN, env=env)
+        assert outcome == "failed"
+        assert h.calls == [], "a credential-incomplete probe must not reach the network"
+        assert missing in detail
+
+    def test_no_probe_refusal_prints_a_credential_value(self, monkeypatch):
+        FakeHarness().install(monkeypatch)
+        _outcome, detail = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN, env={"CF_ACCESS_CLIENT_ID": "SUPERSECRETVALUE"})
+        assert "SUPERSECRETVALUE" not in detail
+
+    def test_the_probe_opener_refuses_redirects(self, monkeypatch):
+        """Measured 2026-08-25 on CPython 3.12.3: `urllib.request.urlopen` forwards BOTH
+        `Authorization` and `CF-Access-Client-Id` across a cross-host 302. Cloudflare Access
+        answers exactly such a redirect, so following one hands the publish bearer to the login
+        host. The handler is asserted directly rather than through an outcome, because the
+        outcome is the same whether the redirect was refused or merely failed later."""
+        h = FakeHarness().install(monkeypatch)
+        setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert h.handlers, "the probe must build its own opener, not call urlopen"
+        redirectors = [x for x in h.handlers if hasattr(x, "redirect_request")]
+        assert redirectors, "no redirect handler was passed to build_opener"
+        assert all(r.redirect_request(None, None, 302, "Found", {}, EDGE_CONTROL) is None
+                   for r in redirectors)
+
+    def test_a_redirect_answer_is_reported_as_a_failed_probe_not_a_denial(self, monkeypatch):
+        """A 302 is the Access login. It is not a token refusal, and telling someone their
+        bearer was denied sends them to rotate a credential they already hold."""
+        _status_h = FakeHarness(status=302).install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert outcome == "failed"
+        assert "302" in detail
+
+
+class TestAnEdgeControlUrlNeedsThePairToo:
+    """Issue #54. Before this, an edge control URL with no Access pair reported `ready` — and
+    then every publish from that machine failed on a login redirect. The readiness answer has to
+    know about the same requirement the publisher enforces."""
+
+    def test_an_edge_control_url_without_the_pair_is_incomplete(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL))
+        assert s["status"] == "edge_env_incomplete"
+        assert s["can_proceed"] is False
+        assert setup_mod.exit_code(s) == 2
+
+    @pytest.mark.parametrize("half", ["CF_ACCESS_CLIENT_ID", "CF_ACCESS_CLIENT_SECRET"])
+    def test_an_edge_control_url_with_half_the_pair_is_incomplete(self, monkeypatch, cfg,
+                                                                  tmp_path, half):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL, **{half: "x"}))
+        assert s["status"] == "edge_env_incomplete"
+
+    def test_an_edge_control_url_with_the_whole_pair_is_ready(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL,
+                             CF_ACCESS_CLIENT_ID="i", CF_ACCESS_CLIENT_SECRET="s"))
+        assert s["status"] == "ready"
+
+    def test_a_loopback_control_url_without_the_pair_is_still_ready(self, monkeypatch, cfg,
+                                                                    tmp_path):
+        """The non-regression that matters: the pair is required by the DESTINATION, not by
+        publishing in general. Requiring it on loopback would break the harness host itself."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg, env=_env())
+        assert s["status"] == "ready"
+
+    def test_the_advice_names_both_triggers(self):
+        advice = setup_mod._ADVICE["edge_env_incomplete"]
+        assert "DOC_HARNESS_PUBLIC_BASE" in advice
+        assert "DOC_HARNESS_CONTROL_URL" in advice
+        assert "CF_ACCESS_CLIENT_ID" in advice and "CF_ACCESS_CLIENT_SECRET" in advice
+
+
+class TestTheProbeNeverSendsTheBearerOffTheAllowlist:
+    """Step 8a finding F1, Critical, raised by the cross-model pass.
+
+    `probe_harness` attaches the publish bearer and validated NOTHING about where it went, so
+    whatever host `DOC_HARNESS_CONTROL_URL` named received the token. `publish_doc` fixed this
+    class for the publisher in finding N4; this module never got it. Criterion 3 of #54 says no
+    bearer reaches a destination outside `assert_bearer_destination`'s allowlist, and the probe
+    is a bearer-carrying request like any other.
+
+    The allowlist is IMPORTED from `publish_doc`, not copied: two copies drift, and the copy
+    that drifts is the one that lets a credential out."""
+
+    @pytest.mark.parametrize("bad", [
+        "https://evil.example",                       # any https host is not sufficient
+        "https://docs-control.3dstories.ca.evil.com",  # the pinned host as a prefix
+        "http://10.0.0.5:8080",                       # a corporate LAN; removed by finding R2
+        "http://192.168.1.9:8080",                    # likewise
+        "http://172.17.0.2:8080",                     # the bridge, with NO explicit grant
+        "http://example.com",                         # plaintext, not loopback
+    ])
+    def test_an_off_allowlist_destination_sends_nothing(self, monkeypatch, bad):
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(bad, TOKEN, env={})
+        assert outcome == "failed"
+        assert h.calls == [], "the publish bearer must not reach an unvalidated destination"
+        assert detail
+
+    @pytest.mark.parametrize("smuggled", [
+        "https://docs-control.3dstories.ca/evil",
+        "https://docs-control.3dstories.ca/?x=1",
+        "https://docs-control.3dstories.ca/#f",
+        "https://user:pw@docs-control.3dstories.ca",   # userinfo IS a credential in a URL
+    ])
+    def test_a_base_carrying_more_than_scheme_host_and_port_sends_nothing(self, monkeypatch,
+                                                                          smuggled):
+        h = FakeHarness().install(monkeypatch)
+        outcome, _detail = setup_mod.probe_harness(
+            smuggled, TOKEN,
+            env={"CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert outcome == "failed"
+        assert h.calls == []
+
+    def test_loopback_is_still_allowed(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, _detail = setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert outcome == "ok"
+        assert len(h.calls) == 1
+
+    def test_the_bridge_is_allowed_only_with_its_explicit_grant(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, _d = setup_mod.probe_harness(
+            "http://172.17.0.2:8080", TOKEN,
+            env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.17.0.2:8080"})
+        assert outcome == "ok"
+        assert len(h.calls) == 1
+
+    def test_the_edge_control_host_is_still_allowed(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, _d = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN,
+            env={"CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert outcome == "ok"
+        assert len(h.calls) == 1
+
+
+class TestTheRedirectRefusalIsProvenAgainstARealSocket:
+    """Step 8a finding I1, High, raised by the inline pass.
+
+    The redirect refusal is the single control between the publish bearer and the Cloudflare
+    Access login host, and every test around it asserted something other than the behavior. The
+    publisher's own `test_the_opener_never_follows_redirects_on_its_own` asserted
+    `NO_REDIRECTS is not None`. This module's `test_the_probe_opener_refuses_redirects` patches
+    `build_opener`, so it proves the handler it hands in refuses, never that a real
+    `build_opener` honors the override.
+
+    So this one uses real sockets on loopback. It is the only test here that does, and it earns
+    it: what it proves is that a sentinel bearer does not arrive at a redirect target."""
+
+    @staticmethod
+    def _servers():
+        """(url_of_redirector, list_that_records_what_the_target_received, stop_callable)."""
+        import http.server
+        import threading
+
+        received = []
+
+        class Target(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                received.append({k.lower(): v for k, v in self.headers.items()})
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"active_deployment_id": null}')
+
+            def log_message(self, *a):
+                pass
+
+        target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+        target_port = target.server_address[1]
+
+        class Redirector(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", "http://127.0.0.1:%d/login" % target_port)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        redirector = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+        for srv in (target, redirector):
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        def stop():
+            for srv in (target, redirector):
+                srv.shutdown()
+                srv.server_close()
+
+        return "http://127.0.0.1:%d" % redirector.server_address[1], received, stop
+
+    def test_the_probe_does_not_deliver_the_bearer_to_a_redirect_target(self):
+        url, received, stop = self._servers()
+        try:
+            outcome, detail = setup_mod.probe_harness(url, "SENTINEL-BEARER", env={})
+        finally:
+            stop()
+        assert received == [], (
+            "the redirect target received a request; the bearer followed the 302")
+        assert outcome == "failed"
+        assert "302" in detail
+
+    def test_the_publisher_opener_does_not_follow_either(self):
+        """The same construction, in the module that already relied on it."""
+        import urllib.error
+        import urllib.request
+
+        url, received, stop = self._servers()
+        req = urllib.request.Request(url + "/v1/deployments/x")
+        req.add_header("Authorization", "Bearer SENTINEL-BEARER")
+        try:
+            with pytest.raises(urllib.error.HTTPError) as e:
+                publish_doc.NO_REDIRECTS.open(req, timeout=5)
+        finally:
+            stop()
+        assert e.value.code == 302
+        assert received == [], "publish_doc.NO_REDIRECTS followed a redirect"
+
+    def test_the_real_opener_survived_the_fakes(self):
+        """A guard on the guard. If `publish_doc` is ever first imported inside a window where
+        `urllib.request.build_opener` is patched, `NO_REDIRECTS` becomes a dead test double and
+        every redirect test above passes vacuously. This asserts it is the real thing."""
+        import urllib.request
+        assert isinstance(publish_doc.NO_REDIRECTS, urllib.request.OpenerDirector), (
+            "publish_doc.NO_REDIRECTS is %s, not a real opener — it was built while "
+            "build_opener was patched" % type(publish_doc.NO_REDIRECTS).__name__)
+
+
+class TestAMalformedControlUrlGetsASentenceNotATraceback:
+    """Step 11 findings J1 (inline) and A1 (adversarial), both against code THIS change added.
+
+    Before #54 `status` never parsed DOC_HARNESS_CONTROL_URL, so a malformed value reported an
+    unreachable harness. The new edge gate parses it, and `urllib.parse.urlsplit` raises on some
+    inputs — so `setup --check`, the tool people run when a machine is already broken, exited
+    with a ValueError traceback. This module's docstring promises a sentence instead."""
+
+    MALFORMED = "http://[::1"
+
+    def test_status_returns_a_state_and_does_not_raise(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=self.MALFORMED))
+        assert s["status"] in setup_mod._BY_NAME, "status must be a declared state"
+        assert s["status"] == "harness_unreachable"
+        assert s["detail"]
+
+    def test_the_probe_returns_a_sentence_and_sends_nothing(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(self.MALFORMED, TOKEN, env={})
+        assert outcome == "failed"
+        assert h.calls == []
+        assert detail and "DOC_HARNESS_CONTROL_URL" in detail
+
+    def test_an_edge_host_carrying_a_path_is_not_reported_as_a_missing_pair(self, monkeypatch,
+                                                                           cfg, tmp_path):
+        """A1: the pair gate ran on the RAW url, so an invalid destination that merely LOOKED
+        like the edge host was reported as `edge_env_incomplete`. Setting the pair would not have
+        helped — the URL is the problem."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL="https://docs-control.3dstories.ca/evil"))
+        assert s["status"] != "edge_env_incomplete"
+        assert s["status"] == "harness_unreachable"
+
+    def test_a_well_formed_edge_url_without_the_pair_is_still_incomplete(self, monkeypatch, cfg,
+                                                                        tmp_path):
+        """The non-regression beside it: a VALID edge URL with no pair must still report the
+        pair, not be swallowed by the new validation."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL))
+        assert s["status"] == "edge_env_incomplete"
+
+
+class TestADenialThroughTheEdgeNamesTheRightCredential:
+    """Step 11 findings F1 and A2 — the same defect, found independently by both passes.
+
+    Through the edge, Cloudflare Access answers 401/403 BEFORE the harness does. Reporting every
+    one of those as a harness denial sends the operator to rotate the publish bearer when the
+    Access pair is what was refused."""
+
+    @pytest.mark.parametrize("code", [401, 403])
+    def test_an_edge_denial_names_both_credentials(self, monkeypatch, code):
+        FakeHarness(status=code).install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN,
+            env={"CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert outcome == "denied"
+        assert "CF_ACCESS_CLIENT_ID" in detail
+        assert "DOC_HARNESS_PUBLISH_TOKEN" in detail
+
+    @pytest.mark.parametrize("code", [401, 403])
+    def test_a_loopback_denial_still_names_only_the_bearer(self, monkeypatch, code):
+        """No Access layer stands in front of loopback, so there is nothing else it could be.
+        Widening this message everywhere would make the accurate case vaguer."""
+        FakeHarness(status=code).install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert outcome == "denied"
+        assert "CF_ACCESS_CLIENT_ID" not in detail
+
+
+class TestTheDocsDoNotSayBothOrNeither:
+    """Step 11 finding F3/A3, raised by both cross-model passes.
+
+    "Both or neither" reads as though omitting both is a valid configuration. For the public
+    control host it is not: `_access_pair` refuses the neither-set case exactly as firmly as the
+    half-set one. An off-host publisher following that phrasing would hit a stage-5 refusal the
+    prerequisites table told them was fine.
+
+    Pinned as a test rather than a one-time edit because the phrase reappeared in three files
+    from one careless sentence, and prose has no other guard here."""
+
+    ROOT = SCRIPTS.parent
+    DOCS = ("README.md", "skills/setup/SKILL.md", "skills/design-doc-publish/SKILL.md")
+
+    @pytest.mark.parametrize("rel", DOCS)
+    def test_the_misleading_phrase_is_absent(self, rel):
+        text = (self.ROOT / rel).read_text(encoding="utf-8").lower()
+        assert "both or neither" not in text, (
+            f"{rel} says 'both or neither', but omitting both is refused for the public "
+            "control host")
+
+    @pytest.mark.parametrize("rel", DOCS)
+    def test_each_doc_still_names_both_variables(self, rel):
+        text = (self.ROOT / rel).read_text(encoding="utf-8")
+        assert "CF_ACCESS_CLIENT_ID" in text and "CF_ACCESS_CLIENT_SECRET" in text, (
+            f"{rel} must still document both variables (AC4)")
