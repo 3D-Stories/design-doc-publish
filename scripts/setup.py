@@ -199,6 +199,31 @@ _PROBE_TIMEOUT = 10
 _PROBE_NAME = "setup-readiness-probe"
 
 
+def _control_origin(control_url):
+    """The NORMALIZED origin of the control URL, or None when it is not usable at all (#54).
+
+    `status` has to know whether Cloudflare Access stands in front of the control host, and
+    asking that of a RAW string was two separate defects, both caught at Step 11:
+
+    * `urllib.parse.urlsplit` RAISES on some malformed input — `http://[::1` gives
+      `ValueError: Invalid IPv6 URL` — so `setup --check`, the command people run when a machine
+      is already broken, exited with a traceback. This module's docstring promises a sentence.
+    * A URL that merely LOOKED like the edge host while carrying a path was reported as a missing
+      credential pair. Setting the pair would not have helped; the URL was the problem.
+
+    None means "cannot tell", which is the safe answer for a reporting predicate: `status` then
+    skips the pair gate and `probe_harness` produces the accurate refusal. Normalization is the
+    publisher's, so there is one definition of what a usable origin is; an unimportable publisher
+    also yields None, and the probe reports that too.
+    """
+    try:
+        import publish_doc
+        return publish_doc._normalized_origin(
+            control_url, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+    except Exception:                                   # noqa: BLE001 - fail SAFE, see above
+        return None
+
+
 def _is_edge_control(control_url):
     """True when the control URL is the public control host over TLS, so Cloudflare Access
     stands in front of it (#54).
@@ -260,6 +285,12 @@ def probe_harness(control_url, token, env=None):
         publish_doc.assert_bearer_destination(origin, env=env, stage=5)
     except publish_doc.StageError as e:
         return "failed", e.message
+    except ValueError as e:
+        # `_normalized_origin` PARSES before it validates, and `urlsplit` raises on some
+        # malformed input instead of returning something refusable. Catching only StageError
+        # left that as a traceback out of `--check` (#54 Step-11 finding J1, measured).
+        return "failed", ("DOC_HARNESS_CONTROL_URL is not a URL this can parse (%s), so "
+                          "nothing was sent" % e.__class__.__name__)
 
     url = origin + "/v1/deployments/" + _PROBE_NAME
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
@@ -299,6 +330,19 @@ def probe_harness(control_url, token, env=None):
             body = resp.read(4096)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
+            # #54 Step-11 findings F1 and A2, raised independently by both passes. Through the
+            # edge, Cloudflare Access answers 401/403 BEFORE the harness does, and nothing in the
+            # response reliably says which one replied. Calling it a harness denial there sends
+            # the operator to rotate the publish bearer when the Access pair is what was refused.
+            # Loopback keeps the precise message: no Access layer stands in front of it, so there
+            # is nothing else it could be, and widening it everywhere would make the accurate
+            # case vaguer.
+            if publish_doc._control_is_edge(origin):
+                return "denied", (
+                    "the endpoint answered %d, and through Cloudflare Access either credential "
+                    "can produce that: check CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET as "
+                    "well as DOC_HARNESS_PUBLISH_TOKEN. Nothing in the response says which one "
+                    "was refused." % e.code)
             return "denied", "the harness answered %d" % e.code
         if 300 <= e.code < 400:
             return "failed", ("the harness answered %d, a redirect, which is not followed "
@@ -396,7 +440,11 @@ def status(config_path=None, *, env=None, **_ignored):
     # VERIFY half, requested by DOC_HARNESS_PUBLIC_BASE, and — new — a control URL that is
     # itself the public control host. Either one needs the pair, so reporting `ready` without
     # it sends someone to a publish that can only come back as a login redirect.
-    if (public_base or _is_edge_control(control)) and not edge_pair:
+    # The edge test runs on the NORMALIZED origin, never the raw string (#54 Step-11 J1/A1).
+    # A `None` here means the URL is unusable, so the pair is not what is wrong with it — the
+    # probe below says what is.
+    control_origin = _control_origin(control)
+    if (public_base or (control_origin and _is_edge_control(control_origin))) and not edge_pair:
         return _finish(state, "edge_env_incomplete", None)
 
     outcome, detail = probe_harness(control, token, env=env)

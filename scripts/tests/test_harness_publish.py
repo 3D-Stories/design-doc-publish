@@ -1797,3 +1797,68 @@ class TestTheAccessPairRidesEdgeControlCalls:
                 call()
             assert e.value.stage == 5
             assert "CF_ACCESS_CLIENT_ID" in e.value.message
+
+
+class TestTheAccessSecretHasItsOwnDestinationBoundary:
+    """Step 11 finding F2, raised by the cross-model pass and settled by the owner.
+
+    `_control_is_edge` used to test `_BEARER_HOSTS_TLS` — the set that answers "may this host
+    receive the publish BEARER?" — to decide "may this host receive the ACCESS SECRET?". Those
+    are two different permissions. The sets are equal today, so nothing was exposed, but adding
+    a bearer-approved TLS host later would have silently handed it the Access pair.
+
+    The two properties are kept together: a dedicated set gives the narrow boundary, and the
+    equality test below means a future divergence FAILS LOUDLY instead of drifting quietly."""
+
+    def test_the_access_host_set_exists_and_is_its_own_thing(self):
+        assert publish_doc._ACCESS_CONTROL_HOSTS_TLS == frozenset({"docs-control.3dstories.ca"})
+
+    def test_it_equals_the_bearer_tls_set_today(self):
+        """A divergence here is a real decision, not an accident. If this fails, somebody added
+        a TLS host to one set and not the other — decide deliberately which, then update this."""
+        assert set(publish_doc._ACCESS_CONTROL_HOSTS_TLS) == set(publish_doc._BEARER_HOSTS_TLS)
+
+    def test_a_bearer_only_tls_host_is_not_an_access_destination(self, monkeypatch):
+        """The whole point of the split, exercised: a host the bearer allowlist admits but the
+        Access set does not must receive NO Access headers."""
+        monkeypatch.setattr(publish_doc, "_BEARER_HOSTS_TLS",
+                            frozenset({"docs-control.3dstories.ca", "other-control.3dstories.ca"}))
+        other = "https://other-control.3dstories.ca"
+        assert publish_doc._control_is_edge(other) is False
+        req = publish_doc._control_request(
+            other, "/v1/deployments/x", "tok", method="GET", body=None,
+            env={"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+                 "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert req.get_header("Cf-access-client-id") is None
+        assert req.get_header("Cf-access-client-secret") is None
+
+
+class TestTheGuardedBuilderNormalizesItsOwnBase:
+    """Step 11 finding A4, raised by the adversarial pass, refuting claim 1.
+
+    `_control_request`'s own docstring says a guard a caller must remember is not a guard — and
+    it was relying on the caller to have normalized. `assert_bearer_destination` tests scheme and
+    host only, so a base carrying userinfo, a path, a query or a fragment passed it AND passed
+    `_control_is_edge`, and the credentials went out attached to a URL nobody validated.
+    `main()` normalizes, so production was safe; the builder now does not depend on that."""
+
+    PAIR = {"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+            "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"}
+
+    @pytest.mark.parametrize("smuggled", [
+        "https://docs-control.3dstories.ca/evil",
+        "https://docs-control.3dstories.ca/?x=1",
+        "https://docs-control.3dstories.ca/#f",
+        "https://user:pw@docs-control.3dstories.ca",
+    ])
+    def test_a_base_carrying_more_than_scheme_host_and_port_refuses(self, smuggled):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                smuggled, "/v1/deployments/x", "tok", method="GET", body=None, env=self.PAIR)
+        assert e.value.stage == 5
+
+    def test_a_trailing_slash_is_still_fine_and_does_not_double_up(self):
+        req = publish_doc._control_request(
+            "https://docs-control.3dstories.ca/", "/v1/deployments/x", "tok", method="GET",
+            body=None, env=self.PAIR)
+        assert req.full_url == "https://docs-control.3dstories.ca/v1/deployments/x"

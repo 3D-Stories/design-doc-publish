@@ -637,6 +637,13 @@ def _control_request(base: str, path: str, token: str, *, method: str, body: byt
     already in the test suite: it called `read_active` and `publish` directly, with no
     guard, and they worked. A guard a caller must remember is not a guard.
     """
+    # Step 11 finding A4. This function's own docstring says a guard a caller must remember is
+    # not a guard — and it was remembering nothing while trusting the caller to have normalized.
+    # `assert_bearer_destination` tests scheme and host only, so a base carrying userinfo, a
+    # path, a query or a fragment passed it, passed `_control_is_edge`, and had both credentials
+    # attached to a URL nobody validated. `main()` normalizes via `control_base()`, so production
+    # was never exposed; the builder no longer depends on that being true of every caller.
+    base = _normalized_origin(base, stage=5, varname="the control base")
     assert_bearer_destination(base, env=env, stage=5)
     # Issue #54. Through the PUBLIC edge, Cloudflare Access answers the control call before the
     # harness ever sees it: a request carrying only the publish bearer gets a 302 to the login,
@@ -888,6 +895,13 @@ _BEARER_HOSTS_PLAINTEXT = re.compile(
 CONTROL_HOST = f"docs-control.{PINNED_ZONE}"
 _BEARER_HOSTS_TLS = frozenset({CONTROL_HOST})
 
+# Step 11 finding F2. "May this host receive the publish BEARER" and "may this host receive the
+# Cloudflare ACCESS SECRET" are two different questions, and answering the second with the first
+# set means any TLS host added for the bearer silently gains the Access pair too. The sets are
+# equal today and a test asserts exactly that, so a future divergence is a decision somebody
+# makes and sees fail, rather than a drift nobody notices.
+_ACCESS_CONTROL_HOSTS_TLS = frozenset({CONTROL_HOST})
+
 # `urlopen` follows a 302 silently, which would send the Access service tokens to whatever
 # login host the redirect names. An opener with no redirect handler cannot.
 NO_REDIRECTS = urllib.request.build_opener(_NoRedirect := type(
@@ -898,15 +912,24 @@ NO_REDIRECTS = urllib.request.build_opener(_NoRedirect := type(
 def _control_is_edge(base: str) -> bool:
     """True when this control base is the public edge control host, over TLS (issue #54).
 
-    Expressed against the SAME `_BEARER_HOSTS_TLS` set `assert_bearer_destination` tests, so
-    "which destination is the edge" has exactly one definition in this file. Two copies of that
-    rule would drift, and the copy that drifted would be the one deciding whether a credential
-    gets attached. `urlsplit().hostname` is already lowercased and port-free, and
-    `_normalized_origin` has already refused userinfo, a path, a query and a fragment, so an
-    exact set membership is the whole test.
+    Tested against `_ACCESS_CONTROL_HOSTS_TLS`, NOT the bearer allowlist (Step 11 finding F2).
+    The first revision used `_BEARER_HOSTS_TLS` on the reasoning that one definition cannot
+    drift, which conflated two different permissions: a host cleared to receive the publish
+    bearer is not thereby cleared to receive the Access secret. The two sets are equal today and
+    a test pins that, so the no-drift property survives while the boundary stays narrow.
+
+    `urlsplit().hostname` is already lowercased and port-free. Callers are NOT trusted to have
+    normalized — `_control_request` does it itself now — but this predicate is conservative
+    either way: an unparseable base yields no hostname and answers False.
     """
-    parsed = urllib.parse.urlsplit(base)
-    return parsed.scheme == "https" and (parsed.hostname or "").lower() in _BEARER_HOSTS_TLS
+    try:
+        parsed = urllib.parse.urlsplit(base)
+        host = (parsed.hostname or "").lower()
+    except ValueError:
+        # A base this malformed is refused elsewhere with a sentence. Answering "not the edge"
+        # here means "do not attach a credential", which is the safe direction.
+        return False
+    return parsed.scheme == "https" and host in _ACCESS_CONTROL_HOSTS_TLS
 
 
 def _access_pair(env=None, *, stage: int, remedy: str = "") -> tuple[str, str]:

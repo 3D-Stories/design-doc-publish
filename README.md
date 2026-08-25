@@ -240,7 +240,7 @@ code is the verdict.
 | A POSIX system | `setup.py` serializes its writes with `fcntl`, which Windows does not have. Rendering itself is platform-neutral | setup refuses with a sentence rather than a traceback where locking is unavailable |
 | `git` | only for publishing, not for rendering | needed from stage 4: the manifest pins a commit, and the harness fetches its blobs from GitHub |
 | A reachable doc harness | only for publishing | `DOC_HARNESS_CONTROL_URL`, required with no default. See the harness section below |
-| A Cloudflare Access service token | only for publishing from a machine that is not the harness host | `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`, both or neither. Off the harness host the control URL is the public control host, and Access answers before the harness does |
+| A Cloudflare Access service token | only for publishing from a machine that is not the harness host | `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. **Both are required** whenever the control URL is the public control host, or `DOC_HARNESS_PUBLIC_BASE` is set; setting only one is refused locally, by name. Off the harness host the control URL IS the public control host, and Access answers before the harness does |
 | A GitHub remote | only for publishing | the manifest's `repo` is derived from it, never configured beside it |
 
 ## Choosing a `--type`

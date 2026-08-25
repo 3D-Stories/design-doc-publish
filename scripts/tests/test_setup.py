@@ -995,3 +995,104 @@ class TestTheRedirectRefusalIsProvenAgainstARealSocket:
         assert isinstance(publish_doc.NO_REDIRECTS, urllib.request.OpenerDirector), (
             "publish_doc.NO_REDIRECTS is %s, not a real opener — it was built while "
             "build_opener was patched" % type(publish_doc.NO_REDIRECTS).__name__)
+
+
+class TestAMalformedControlUrlGetsASentenceNotATraceback:
+    """Step 11 findings J1 (inline) and A1 (adversarial), both against code THIS change added.
+
+    Before #54 `status` never parsed DOC_HARNESS_CONTROL_URL, so a malformed value reported an
+    unreachable harness. The new edge gate parses it, and `urllib.parse.urlsplit` raises on some
+    inputs — so `setup --check`, the tool people run when a machine is already broken, exited
+    with a ValueError traceback. This module's docstring promises a sentence instead."""
+
+    MALFORMED = "http://[::1"
+
+    def test_status_returns_a_state_and_does_not_raise(self, monkeypatch, cfg, tmp_path):
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=self.MALFORMED))
+        assert s["status"] in setup_mod._BY_NAME, "status must be a declared state"
+        assert s["status"] == "harness_unreachable"
+        assert s["detail"]
+
+    def test_the_probe_returns_a_sentence_and_sends_nothing(self, monkeypatch):
+        h = FakeHarness().install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(self.MALFORMED, TOKEN, env={})
+        assert outcome == "failed"
+        assert h.calls == []
+        assert detail and "DOC_HARNESS_CONTROL_URL" in detail
+
+    def test_an_edge_host_carrying_a_path_is_not_reported_as_a_missing_pair(self, monkeypatch,
+                                                                           cfg, tmp_path):
+        """A1: the pair gate ran on the RAW url, so an invalid destination that merely LOOKED
+        like the edge host was reported as `edge_env_incomplete`. Setting the pair would not have
+        helped — the URL is the problem."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL="https://docs-control.3dstories.ca/evil"))
+        assert s["status"] != "edge_env_incomplete"
+        assert s["status"] == "harness_unreachable"
+
+    def test_a_well_formed_edge_url_without_the_pair_is_still_incomplete(self, monkeypatch, cfg,
+                                                                        tmp_path):
+        """The non-regression beside it: a VALID edge URL with no pair must still report the
+        pair, not be swallowed by the new validation."""
+        _ready_files(cfg, tmp_path)
+        s = _status(monkeypatch, FakeHarness(), cfg,
+                    env=_env(DOC_HARNESS_CONTROL_URL=EDGE_CONTROL))
+        assert s["status"] == "edge_env_incomplete"
+
+
+class TestADenialThroughTheEdgeNamesTheRightCredential:
+    """Step 11 findings F1 and A2 — the same defect, found independently by both passes.
+
+    Through the edge, Cloudflare Access answers 401/403 BEFORE the harness does. Reporting every
+    one of those as a harness denial sends the operator to rotate the publish bearer when the
+    Access pair is what was refused."""
+
+    @pytest.mark.parametrize("code", [401, 403])
+    def test_an_edge_denial_names_both_credentials(self, monkeypatch, code):
+        FakeHarness(status=code).install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(
+            EDGE_CONTROL, TOKEN,
+            env={"CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert outcome == "denied"
+        assert "CF_ACCESS_CLIENT_ID" in detail
+        assert "DOC_HARNESS_PUBLISH_TOKEN" in detail
+
+    @pytest.mark.parametrize("code", [401, 403])
+    def test_a_loopback_denial_still_names_only_the_bearer(self, monkeypatch, code):
+        """No Access layer stands in front of loopback, so there is nothing else it could be.
+        Widening this message everywhere would make the accurate case vaguer."""
+        FakeHarness(status=code).install(monkeypatch)
+        outcome, detail = setup_mod.probe_harness(CONTROL, TOKEN, env={})
+        assert outcome == "denied"
+        assert "CF_ACCESS_CLIENT_ID" not in detail
+
+
+class TestTheDocsDoNotSayBothOrNeither:
+    """Step 11 finding F3/A3, raised by both cross-model passes.
+
+    "Both or neither" reads as though omitting both is a valid configuration. For the public
+    control host it is not: `_access_pair` refuses the neither-set case exactly as firmly as the
+    half-set one. An off-host publisher following that phrasing would hit a stage-5 refusal the
+    prerequisites table told them was fine.
+
+    Pinned as a test rather than a one-time edit because the phrase reappeared in three files
+    from one careless sentence, and prose has no other guard here."""
+
+    ROOT = SCRIPTS.parent
+    DOCS = ("README.md", "skills/setup/SKILL.md", "skills/design-doc-publish/SKILL.md")
+
+    @pytest.mark.parametrize("rel", DOCS)
+    def test_the_misleading_phrase_is_absent(self, rel):
+        text = (self.ROOT / rel).read_text(encoding="utf-8").lower()
+        assert "both or neither" not in text, (
+            f"{rel} says 'both or neither', but omitting both is refused for the public "
+            "control host")
+
+    @pytest.mark.parametrize("rel", DOCS)
+    def test_each_doc_still_names_both_variables(self, rel):
+        text = (self.ROOT / rel).read_text(encoding="utf-8")
+        assert "CF_ACCESS_CLIENT_ID" in text and "CF_ACCESS_CLIENT_SECRET" in text, (
+            f"{rel} must still document both variables (AC4)")

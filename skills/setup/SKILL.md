@@ -28,7 +28,7 @@ endpoint and its tokens are read from the environment on every run:
 | `DOC_HARNESS_CONTROL_URL` | publishing | where the harness control API answers. On the harness host that is a loopback or bridge address; anywhere else it is `https://docs-control.<zone>`, which puts Cloudflare Access in front of it |
 | `DOC_HARNESS_PUBLISH_TOKEN` | publishing | the publish bearer |
 | `DOC_HARNESS_PUBLIC_BASE` | optional | enables the public-edge verification half |
-| `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | with a public base, **or** whenever `DOC_HARNESS_CONTROL_URL` is the public control host | the Cloudflare Access service-token pair. Both or neither — half a pair is refused locally, by name, before anything is sent |
+| `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | with a public base, **or** whenever `DOC_HARNESS_CONTROL_URL` is the public control host | the Cloudflare Access service-token pair. **Both are required** in either of those cases — omitting both is refused just as firmly as setting one, locally and by name, before anything is sent |
 
 **Undo, at any time:** delete those two files. That returns the machine to never-configured.
 
