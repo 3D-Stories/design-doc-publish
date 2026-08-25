@@ -1,6 +1,6 @@
 """The doc-harness service.
 
-Serves design-doc pages straight from GitHub, replacing Vercel as the deploy target.
+Serves design-doc pages straight from GitHub, with no hosted platform in front of them.
 Pages live only in the source repositories; this service keeps a registry and a cache and
 nothing else.
 

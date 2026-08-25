@@ -38,11 +38,12 @@ class TestItNeverInstallsWithoutAsking:
                 ("this line reads as an order and an agent will execute it, installing "
                  f"software globally without consent: {sentence.strip()!r}")
 
-    def test_it_says_the_install_is_global(self):
+    def test_no_install_command_appears_at_all(self):
+        """Since 5.0.0 nothing needs installing: the harness is probed over HTTP with the
+        standard library. The strongest form of the incident guard is that no install
+        command exists to be executed."""
         body = _body().lower()
-        assert "global" in body, (
-            "the skill must say that installing the vercel CLI changes the machine "
-            "globally — that is the fact a user needs before agreeing")
+        assert "npm i" not in body and "pip install" not in body
 
     def test_it_names_asking_before_installing_as_a_rule(self):
         body = _body().lower()
@@ -82,8 +83,8 @@ class TestItStillDoesItsJob:
         body = _body()
         assert "--check" in body and "--json" in body
 
-    def test_it_still_refuses_to_run_vercel_login_for_you(self):
+    def test_it_declares_the_probe_read_only(self):
+        """The one network touch left. A skill that does not say the probe is read-only
+        invites an agent to "verify" by publishing something."""
         body = _body().lower()
-        assert "vercel login" in body
-        assert "never" in body or "yourself" in body, (
-            "signing in is interactive and global; the skill must not offer to do it")
+        assert "read-only" in body or "read only" in body

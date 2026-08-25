@@ -172,26 +172,14 @@ PURPOSE_STYLE = {
     "deck": "slide-deck",
 }
 
-# Every Vercel call is still pinned to a team — that has not changed and must not. Ambient
-# scope is whatever the last `vercel switch` left behind, so an unpinned deploy can land in a
-# personal account. Raised by the security lane on #12 and again on #19.
-#
-# What #9 changed is WHERE the team comes from. It used to be the string "3d-stories" written
-# here, which meant this tool worked for exactly one account. It is now resolved from the
-# user's own configuration, ONCE in `main`, and threaded through every stage — including the
-# index-refresh CHILD PROCESS, which would otherwise be free to resolve a different account
-# halfway through a single publish. There is deliberately no fallback: `require_vercel_scope`
-# raises rather than returning anything a caller could pass to `--scope`.
-
 WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic project
 INDEX_PROJECT = "docs-index"
 MAX_NAME = 100
 
-# #36 AC3: 35 -> 63. The old cap was VERCEL's, not a naming preference — Vercel cuts the
-# auto-assigned `<name>.vercel.app` label at 35 and strips a trailing hyphen left by the
-# cut (#23; measured 2026-08-13 across the 20 live projects), so an over-cap name deployed
-# fine and then 404d at its conventional URL forever. The harness truncates nothing. Its
-# limit is the DNS label limit itself, enforced by `harness/routing.py:is_valid_label`.
+# #36 AC3: 35 -> 63. The old 35-character cap came from the retired hosting vendor, which
+# truncated over-cap names so a page deployed fine and then 404d at its conventional URL
+# forever (#23). The harness truncates nothing. Its limit is the DNS label limit itself,
+# enforced by `harness/routing.py:is_valid_label`.
 #
 # So the refusal moves out to 63, where it is still a refusal because the harness would
 # refuse too, and 36-63 becomes a WARNING: publishable, just long.
@@ -652,6 +640,13 @@ def _control_request(base: str, path: str, token: str, *, method: str, body: byt
     assert_bearer_destination(base, env=env, stage=5)
     req = urllib.request.Request(f"{base}{path}", data=body, method=method)
     req.add_header("Authorization", f"Bearer {token}")
+    # The harness routes on the HOST header, so a loopback or bridge address needs the
+    # control host named explicitly — `Host: 127.0.0.1:18081` is not inside the zone and
+    # the harness rightly refuses it. Measured on the #36 live run, which needed a
+    # hand-written client for exactly this reason. The TLS host is left alone: its URL
+    # already carries the right name, and overriding would mask a mismatch.
+    if urllib.parse.urlsplit(base).scheme == "http":
+        req.add_header("Host", f"{CONTROL_HOST}")
     if body is not None:
         req.add_header("Content-Type", "application/json")
     return req
@@ -879,7 +874,8 @@ PINNED_ZONE = "3dstories.ca"
 _BEARER_HOSTS_PLAINTEXT = re.compile(
     r"^(?:localhost|127\.\d+\.\d+\.\d+|::1|"
     r"172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)$")
-_BEARER_HOSTS_TLS = frozenset({f"docs-control.{PINNED_ZONE}"})
+CONTROL_HOST = f"docs-control.{PINNED_ZONE}"
+_BEARER_HOSTS_TLS = frozenset({CONTROL_HOST})
 
 # `urlopen` follows a 302 silently, which would send the Access service tokens to whatever
 # login host the redirect names. An opener with no redirect handler cannot.
@@ -1190,7 +1186,7 @@ _NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> str:
     """`{project}-{purpose}-{ref}` from components each checked against a source of truth.
 
-    Lowercased before assembly because Vercel lowercases anyway, so `Rawgentic` and
+    Lowercased before assembly because a DNS label is case-insensitive, so `Rawgentic` and
     `rawgentic` must not become two projects. There is deliberately no flag that accepts
     a name.
     """
@@ -1216,7 +1212,7 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
                             f"the name would read as two purposes and no subject")
     # An issue number has its own rule. Under the slug rule alone, issue 1 was
     # unpublishable (one character) while `01` was accepted — and `-01` and `-1` are two
-    # Vercel projects for one issue, which is the duplication this whole convention exists
+    # page names for one issue, which is the duplication this whole convention exists
     # to prevent.
     if ref.isdigit():
         if not _REF_ISSUE.match(ref):
@@ -1229,12 +1225,12 @@ def derive_name(project: str, purpose: str, ref: str, workspace_file: Path) -> s
 
     name = f"{project}-{purpose}-{ref}"
     if len(name) > MAX_NAME or not _NAME.match(name):
-        raise StageError(2, f"the derived name {name!r} is not a usable Vercel project "
+        raise StageError(2, f"the derived name {name!r} is not a usable page "
                             f"name (lowercase letters, digits and hyphens, "
                             f"{MAX_NAME} chars max)")
     # The alias cap comes AFTER name validity so the two limits stay distinguishable: an
     # unusable name gets the message above; a usable one that cannot round-trip to its
-    # own `.vercel.app` domain gets this one (#23).
+    # own hostname gets this one (#23).
     # Finding S6: the note was COMPUTED and thrown away, so the CLI printed nothing while
     # the acceptance mapping claimed a 40-character name warns and passes. Returned now,
     # and stage 2 prints it.
@@ -1261,7 +1257,7 @@ def check_name_length(name: str) -> list[str]:
     if len(name) > _NAME_WARN_AT:
         return [f"note: the derived name is {len(name)} characters. That publishes fine on "
                 f"the harness, which truncates nothing — it would have been refused under "
-                f"the old {_NAME_WARN_AT}-character Vercel cap."]
+                f"the legacy {_NAME_WARN_AT}-character cap."]
     return []
 
 
@@ -1354,76 +1350,6 @@ def gate(page: str, *, skip_component_checks: bool = False) -> None:
     if findings:
         raise StageError(3, "the page did not pass the pre-publish lint gate, so "
                             "nothing was deployed:\n  - " + "\n  - ".join(findings))
-
-
-# --- the Vercel CLI ------------------------------------------------------------------
-
-#: A publish call uploads, so it gets more room than a status probe — but it still gets a
-#: bound. Unbounded, a non-responsive CLI hangs the whole publish instead of failing it.
-_VERCEL_TIMEOUT = 300
-
-
-
-
-#: Vercel's own wording for a permission refusal, matched loosely on purpose: this only
-#: chooses which of two messages a failed deploy prints, so a miss costs a less specific
-#: diagnostic and never a wrong outcome. Both paths still fail the stage.
-_DENIED = ("not authorized", "not a member", "forbidden", "do not have permission",
-           "does not have permission", "access denied")
-
-
-def _looks_like_denied(log: str) -> bool:
-    lowered = log.lower()
-    return any(marker in lowered for marker in _DENIED)
-
-
-def _log(proc: subprocess.CompletedProcess) -> str:
-    """The CLI splits output across both streams, so every consumer here reads the pair.
-
-    `project ls` used to be the example named here. Since #125 it is requested with
-    `--format json` and read from stdout ALONE, by `build_index.vercel_projects` — never through
-    this helper. `link` and `deploy` still come through it, and concatenating both streams is
-    what saves this file from having to know which one each of them picks.
-    """
-    return (proc.stdout or "") + (proc.stderr or "")
-
-
-# --- stage 4: reuse or create --------------------------------------------------------
-
-def _says_no_such_project(proc, name: str) -> bool:
-    """True only for the CLI's authoritative "no project named THIS", on stderr.
-
-    Absence is the reading that mints a duplicate project under a new URL, so it is the
-    narrowest branch in this file, and two things narrow it:
-
-    * **stderr only.** That is where the CLI puts its error. Accepting the phrase from stdout
-      widens what can trigger absence for no gain.
-    * **It must name THIS project.** A bare substring test read a not-found about a DIFFERENT
-      project as absence for the one being asked about — and then `--new-project` would mint
-      a duplicate of a project that already existed.
-
-    Verified live against Vercel CLI 56.5.0: `Error: There is no project for "<name>"`.
-    """
-    needle = 'there is no project for "%s"' % name.lower()
-    return needle in (proc.stderr or "").lower()
-
-
-
-
-# --- stage 5: the deploy -------------------------------------------------------------
-
-# A line that STARTS the Aliased verdict: optional non-alphanumeric marker glyphs
-# (the CLI's `▲`), then the word. `Error: … was not aliased …` starts with `Error`,
-# so it can never match (#23, Step 11 finding).
-_ALIASED_LINE = re.compile(r"^[^A-Za-z0-9]*aliased\b", re.I)
-
-# A COMPLETE host token: the lookahead is what stops `https://old.vercel.app.evil/x`
-# from reading as a vercel.app host, which a trailing `\S*` happily accepted.
-_URL_HOST = re.compile(r"https://([a-z0-9][a-z0-9.-]*\.vercel\.app)(?=[/\s]|$)", re.I)
-
-
-
-
 
 
 # A reference is only shippable if it names one of these. Step 11 found the real hole: with
@@ -1529,54 +1455,15 @@ def stage_assets(page: str, base: Path, workdir: Path) -> list[str]:
     return staged
 
 
-
-
-# --- stage 6: verification -----------------------------------------------------------
-
-_TITLE = re.compile(r"<title>(.*?)</title>", re.S | re.I)
-
-
 def _title_of(body: str) -> str:
     m = _TITLE.search(body)
     return html.unescape(m.group(1)).strip() if m else ""
 
 
+# The hosted-deploy path is gone. #36 replaced deploying with publishing through the
+# harness control API, and the leftover CLI helpers were removed with the rest of the
+# vendor era in 5.0.0; git history holds both, and the #36 PR maps where each old risk went.
 
-
-# A fresh deploy is not instantly live at its alias. `vercel deploy` prints "Aliased" as
-# its LAST line, and the pipeline's first real run fetched the URL before that alias was
-# serving the new page: the deploy was perfect and stage 6 refused. Measured on that run —
-# the same check passed on a manual retry moments later.
-VERIFY_ATTEMPTS = 6
-VERIFY_DELAY = 5.0
-
-
-
-
-# --- stage 7: the docs index ---------------------------------------------------------
-
-
-
-# --- RETIRED by #36: the whole Vercel path ----------------------------------------------
-#
-# `_vercel`, `resolve_project`, `deploy`, `deployed_hosts`, `aliased_host`, `verify_live`,
-# `_verify_once` and `refresh_index` lived here. AC1 retires the deploy path, AC4 retires
-# the index refresh. Where each risk went:
-#
-# * `deploy` / `_vercel`          -> `publish()`, the control-API POST.
-# * `resolve_project`             -> nothing. The harness has no project to create or reuse;
-#                                    a name is a registry row, minted by publishing.
-# * `deployed_hosts`/`aliased_host` -> the risk LEFT with Vercel. It existed because Vercel
-#                                    TRUNCATED the domain, so the served host could differ
-#                                    from the name. The harness truncates nothing.
-# * `verify_live` / `_verify_once` -> `build_verify_request`, `fetch_for_verify` and
-#                                    `check_verify_response`, which additionally pin the
-#                                    deployment id and each asset's own content type.
-# * `refresh_index`               -> the harness server-renders the index from its registry
-#                                    snapshot (#34, spec D3). **`index/build_index.py`
-#                                    SURVIVES** as the harness's shared renderer (finding
-#                                    S5); only this invocation and the index's own Vercel
-#                                    deploy go.
 
 # --- the CLI -------------------------------------------------------------------------
 
@@ -1807,7 +1694,7 @@ def main(argv=None) -> int:
         print(f"publish_doc: FAILED at stage {e.stage}: {e.message}", file=sys.stderr)
         return EXIT_BASE + e.stage
     except Exception:
-        # A missing `vercel` binary raises FileNotFoundError, not SystemExit. Without
+        # A missing binary raises FileNotFoundError, not SystemExit. Without
         # this the process exits 1 with a traceback and no stage — the one thing the
         # exit-code contract promises never to do. The traceback is still printed,
         # because an unexpected error is a bug here, not a verdict.

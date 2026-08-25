@@ -5,7 +5,7 @@ the document any way to say **what the phases are, which order they come in, or 
 inside each one**. Issue #68 names all three, and its title names the first: *"phases, tracks
 and composition meters"*.
 
-Read off the reference page the owner liked (`saystory-hardware-milestones.vercel.app`), the
+Read off the reference page the owner liked (the saystory hardware-milestones page), the
 three missing capabilities were: tracks as first-class containers each with its own state badge;
 a segmented bar per track; and work items **nested inside** their track rather than laid out
 flat and related only by document order.

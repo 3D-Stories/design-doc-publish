@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
-"""Derive the docs-index page from Vercel, instead of hand-editing it.
+"""Render the docs-index page from a derived listing, instead of hand-editing it.
 
-Why derived rather than edited (owner decision 2026-08-01): the index is already a pure
-function of the Vercel project list — verified live, 37 projects vs 36 rows, the set
-difference being exactly {docs-index} one way and empty the other. Hand-editing carried a
-real lost-row race: two concurrent publishes both fetch version N, each appends its own row,
-and the second deploy silently overwrites the first with no conflict and no error. This
-workspace runs concurrent sessions and hit that race class on another file the same week.
-Deriving removes the shared mutable file entirely, so there is nothing to race on.
+Why derived rather than edited (owner decision 2026-08-01): hand-editing carried a real
+lost-row race — two concurrent publishes both fetch version N, each appends its own row, and
+the second silently overwrites the first with no conflict and no error. This workspace runs
+concurrent sessions and hit that race class on another file the same week. Deriving removes
+the shared mutable file entirely, so there is nothing to race on.
 
-The generated page is NOT committed: it is a build artifact, gitignored, rebuilt on demand.
-
-Usage:
-    python3 build_index.py --out /tmp/index/index.html
-    python3 build_index.py --out - --no-titles      # fast, for diffing the row set
+The harness is the one caller: `harness/indexpage.py` builds the row snapshot by walking the
+GitHub repositories (`harness/convention.py:ConventionIndex`) and this module renders it.
+The standalone CLI that used to walk the retired hosting vendor's project list is gone.
 
 Every count on the page is computed here. None may be hand-edited.
 """
@@ -35,24 +31,6 @@ from zoneinfo import ZoneInfo
 
 # The index groups by rawgentic project. `workspace-` is the cross-project bucket.
 WORKSPACE_GROUP = "workspace"
-SELF_PROJECT = "docs-index"  # the index never lists itself
-
-# #9: `VERCEL_SCOPE` used to live here as a hardcoded team name, which meant this builder
-# only ever worked for one account. The scope is now resolved from the user's own
-# configuration and THREADED through — `main()` resolves it once and passes it down, so a
-# child process cannot re-resolve to a different account halfway through a publish. Every
-# call that targets an account still carries `--scope`; the pin was never the problem.
-
-# Runaway backstop for the #171 pagination loop, not a capacity limit: at the default
-# `--limit 100` this allows 2,500 projects, far past any real account here. It exists so a
-# cursor that never clears fails loudly instead of spawning subprocesses forever.
-_MAX_PAGES = 25
-
-# Purpose vocabulary from the {project}-{purpose}-{ref} naming convention. "review" is
-# included because it is part of the same established template vocabulary
-# (rawgentic render_artifact styles: plain|roadmap|report|design|dashboard|review|spec).
-# Names that predate the convention carry no purpose token and honestly render as "doc"
-# rather than being guessed at — renaming them to the convention is the real fix.
 PURPOSES = ("design", "plan", "uat", "audit", "report", "runbook", "analysis", "spec", "review")
 DEFAULT_PURPOSE = "doc"
 
@@ -82,7 +60,7 @@ def _user_config():
 
     Containment duplicated here on purpose, exactly as the comment above says: a shared
     helper would itself have to be loaded this way, so the guard cannot live behind the
-    thing it guards. This module decides which Vercel account a public page reaches, which
+    thing it guards. This module used to decide which account a public page reaches, which
     makes a `sys.path` hijack of it worse than most.
     """
     import importlib.util
@@ -112,276 +90,6 @@ def group_colors(group: str, workspace_file: Path | None = None) -> tuple[str, s
 # changes this shape: `--format json` is UNDOCUMENTED for `project ls` (it is documented on
 # `integration`, `skills` and `deploy-hooks ls`), so an upgrade is free to drop or rename it.
 # Exiting loudly is the whole point — guessing is what shipped #125.
-_UPGRADE_HINT = (
-    "`vercel project ls --format json` did not return the payload this expects. That flag is "
-    "undocumented for this subcommand, so a CLI upgrade may have dropped or renamed it — check "
-    "`vercel --version` against the release notes. Refusing to guess at project names: a wrong "
-    "name makes publish stage 4 disown a live project and offer --new-project, which changes "
-    "the doc's URL (#125)."
-)
-
-
-def _refuse(detail: str, blob: str = "") -> None:
-    """Exit with a diagnostic that names both the specific defect and its likely cause."""
-    sys.exit(f"build_index: {detail}\n{_UPGRADE_HINT}" + (f"\n{blob[:500]}" if blob else ""))
-
-
-def _skip_row(detail: str) -> None:
-    """Drop ONE untrustworthy row, loudly, and keep building the index.
-
-    Why this is not `_refuse`. A row-level defect used to abort the whole rebuild, so a
-    single project whose reported domain was not its own froze the entire docs index and
-    every doc published afterwards went unlisted. Measured live 2026-08-13:
-    `rawgentic-analysis-713` reported `deploy-713.vercel.app`, the index stopped rebuilding
-    at 07:37, and two already-deployed docs were stranded off it with no signal on the page
-    itself. The guard was right about the row and wrong about the blast radius.
-
-    What is preserved: the untrustworthy value is still NEVER emitted as an href, which is
-    the security property #23 bought. It is dropped rather than guessed at. A listing where
-    EVERY row is skipped still refuses, because `main()` refuses an empty row set.
-
-    Payload-level defects — unparseable stdout, the wrong account, a missing `projects`
-    array — stay fatal. Those describe the response, not one project in it.
-    """
-    print(f"build_index: skipped {detail}", file=sys.stderr)
-
-
-def _clean_name(value: object) -> bool:
-    r"""A project name is a non-empty, fully printable string with no surrounding whitespace.
-
-    The printability clause is not paranoia. `\x1b[1mthewanderinginn-design-11\x1b[22m` is what
-    #125 actually fed into the membership test, and escape bytes inside a JSON *string* keep the
-    document perfectly valid — so `json.loads` alone would hand that back as a name and
-    reproduce the same silent false absence in JSON clothing.
-
-    `str.isprintable()` rather than a hand-rolled codepoint range, because the hand-rolled
-    version covered only C0 and DEL: it accepted the single-character C1 CSI (U+009B), accepted
-    zero-width format characters, and accepted a name that was nothing but spaces. Space itself
-    IS printable, so the strip comparison is what rejects padded and blank names.
-
-    (This docstring is raw for the same reason it exists: unescaped, `\x1b` would put a real
-    escape byte into the module's own help text.)
-    """
-    return (isinstance(value, str) and bool(value)
-            and value.isprintable() and value == value.strip())
-
-
-# The shape of a reported production URL (#23): https, a single vercel.app host, nothing
-# after it. Anchored at BOTH ends — `https://x.vercel.app.evil.com` carries the suffix
-# mid-host and must not read as a Vercel domain (the same lookahead lesson publish_doc's
-# `_URL_HOST` documents). The index emits this value verbatim as an href, so the check is
-# also what keeps a hostile payload from injecting a foreign link target.
-_PROD_URL = re.compile(r"^https://[a-z0-9][a-z0-9-]*\.vercel\.app$")
-
-# Vercel's auto-alias label cap (#23) — mirrors publish_doc.MAX_ALIAS_LABEL, restated
-# because the two files deliberately do not import each other. Truncation exists only
-# for names PAST this cap, and a truncated label lands at cap or cap-minus-one (the cut
-# strips a trailing hyphen).
-_ALIAS_CAP = 35
-
-
-# Vercel reports `updatedAt` in epoch MILLISECONDS. The magnitude window rejects a value in the
-# wrong unit rather than believing it: epoch SECONDS would divide down to a 1970 date and then be
-# displayed AND hashed into the change signature as though it were real, which is exactly the
-# silently-wrong value this whole change exists to stop. 10**11 ms is 1973; 10**14 is the year 5138.
-_MS_MIN, _MS_MAX = 10**11, 10**14
-
-
-def _instant(value: object) -> datetime | None:
-    """Vercel's `updatedAt` (epoch milliseconds) as an absolute instant, or None.
-
-    Never raises: the age is the ONE field allowed to go missing (see `_parse_projects_json`).
-    """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if not _MS_MIN <= value < _MS_MAX:   # also False for NaN, which fails every comparison
-        return None
-    try:
-        return datetime.fromtimestamp(value / 1000, tz=_TZ)
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def _parse_projects_json(blob: str, scope: str) -> tuple[list[dict], object]:
-    """One `--format json` payload in; validated rows plus the next cursor out — or a loud exit.
-
-    Returns the cursor VALUE rather than a more-pages flag (#171). A boolean could only answer
-    "is there more", which was enough to refuse and is not enough to fetch. The value is what
-    `--next` needs.
-
-    Strictness is asymmetric on purpose, and the asymmetry is the design:
-
-    * a wrong **name** is refused, because that is the #125 failure — stage 4 stops
-      recognising a live project and offers `--new-project`, which mints a second project and
-      changes a published doc's URL;
-    * an unusable **age** degrades to None. Its cost is not only the one em dash the index
-      renders: `signature()` then hashes a constant for that row, so if the row also carries no
-      page-declared stamp, a later deploy of it does not move the change signature. That is a
-      real (and pre-existing) blind spot, accepted because the alternative — refusing to publish
-      because a TIMESTAMP is unreadable — is an availability regression with no safety gain. The
-      table parser kept its age group optional for the same reason.
-
-    Rows are returned in CLI order, `docs-index` included — the caller filters and counts.
-    """
-    try:
-        doc = json.loads(blob)
-    except json.JSONDecodeError as e:
-        _refuse(f"stdout is not JSON ({e})", blob)
-    if not isinstance(doc, dict):
-        _refuse(f"stdout parsed as {type(doc).__name__}, not an object", blob)
-    # The payload names the tenant it answered FOR. Passing --scope only ASKS for an account;
-    # this is what verifies we were given it. The hazard is already documented in this file
-    # (#19 Step 11: an unpinned listing can enumerate a personal account) — a listing silently
-    # answered for the wrong account is that same hazard, and it would present every genuinely
-    # live project as absent, which is #125's failure by another route.
-    context = doc.get("contextName")
-    if context != scope:
-        _refuse(f"the listing answered for context {context!r}, not {scope!r}")
-    pagination = doc.get("pagination")
-    if not isinstance(pagination, dict) or "next" not in pagination:
-        _refuse("the payload carries no `pagination.next`, so completeness cannot be judged")
-    projects = doc.get("projects")
-    if not isinstance(projects, list):
-        _refuse("the payload carries no `projects` array", blob)
-    rows = []
-    for i, p in enumerate(projects):
-        if not isinstance(p, dict):
-            _refuse(f"projects[{i}] is {type(p).__name__}, not an object", blob)
-        name = p.get("name")
-        if not _clean_name(name):
-            _skip_row(f"projects[{i}]: no usable `name` ({name!r})")
-            continue
-        # #23: the href is the domain Vercel REPORTS, never one constructed from the name
-        # — five live projects have a truncated domain, and a constructed link to them is
-        # permanently dead. Skipped like a bad `name`: a row without its real domain can
-        # only be indexed as a guess, which is the defect this field replaces.
-        url = p.get("latestProductionUrl")
-        if not _clean_name(url) or not _PROD_URL.match(url):
-            _skip_row(f"projects[{i}] ({name}): no usable `latestProductionUrl` "
-                      f"({url!r}) — the index emits the reported domain, never a "
-                      f"constructed one (#23)")
-            continue
-        # 8a finding: the SHAPE check alone admits any vercel.app tenant. The host must
-        # be THIS project's own — its name exactly, or (only past the alias cap, where
-        # truncation exists) its 34-35 char truncation. A renamed project whose domain
-        # kept the old name is dropped here LOUDLY rather than indexing a mismatched link.
-        # The cap mirrors publish_doc.MAX_ALIAS_LABEL; the two files deliberately do not
-        # import each other, so the value is restated with this pointer.
-        label = url[len("https://"):-len(".vercel.app")]
-        # The acceptable truncation is THE deterministic cut (cap, trailing hyphens
-        # stripped) — never any prefix that merely resembles one (Step 11 finding: a
-        # foreign tenant squatting a resembling prefix must not become the href).
-        expected_cut = name[:_ALIAS_CAP].rstrip("-") if len(name) > _ALIAS_CAP else ""
-        if label != name and not (expected_cut and label == expected_cut):
-            _skip_row(f"projects[{i}] ({name}): reports a domain that is not this "
-                      f"project's own ({url!r}) — refusing to emit a foreign link "
-                      f"target (#23). Fix the project's production alias to unlist-proof "
-                      f"it; every other row still indexes")
-            continue
-        rows.append({"name": name, "url": url,
-                     "deployed": _instant(p.get("updatedAt"))})
-    return rows, pagination["next"]
-
-
-def vercel_projects(limit: int = 100, *, scope: str) -> list[dict]:
-    """Project name + last-deploy instant from the Vercel CLI, read as JSON.
-
-    `--format json` puts a machine surface on **stdout** and leaves only the banner on stderr —
-    the exact inverse of the human table, which writes everything to stderr with stdout empty.
-    So this reads stdout ALONE, and parses it strictly. There is deliberately **no fallback to
-    the table**: a fallback would duplicate the fragile parsing this replaced and would mask the
-    one event that should stop a publish outright — an upgrade that moved the machine surface.
-
-    The CLI still paginates at 20 without --limit, so --limit is still passed. Verified live
-    against Vercel CLI 56.5.0 (2026-08-04): `--limit 3` returns exactly three rows and sets
-    `pagination.next`; the full listing returns 0 escape bytes.
-
-    `limit` is now the PAGE SIZE, not a ceiling on the account (#171). Every page is followed
-    to exhaustion, so the returned list is the whole account regardless of how many pages that
-    takes.
-    """
-    # --scope pins the team: ambient scope is whatever the last `vercel switch` left,
-    # so an unpinned listing can enumerate a personal account instead (#19 Step 11).
-    #
-    # The colour controls below are defence in depth, NOT the guarantee — the strict parse is.
-    # They keep the human-readable stderr a diagnostic quotes clean, and FORCE_COLOR in the
-    # environment is one of the two ways #125 was reproducible. Everything else in the
-    # environment is preserved: strip PATH and the CLI loses both its binary and its credentials.
-    env = {k: v for k, v in os.environ.items() if k != "FORCE_COLOR"}
-    env["NO_COLOR"] = "1"
-
-    # #171: FOLLOW the cursor instead of refusing at it.
-    #
-    # The account crossed 100 projects on 2026-08-10 and stage 7 of EVERY publish started
-    # failing — the index could not be rebuilt at all, in any project. The old code refused
-    # whenever `pagination.next` was set and told the operator to "re-run with a higher
-    # --limit", which is advice a hardcoded `limit=100` default made impossible to take.
-    #
-    # Refusing was the right call when there was no loop: a partial listing makes live projects
-    # look absent, which is #125's failure, and stage 4 answers that by minting a duplicate
-    # project under a new URL. This keeps that guarantee and drops the false refusal, because a
-    # cursor that is followed to exhaustion is a COMPLETE listing, not a truncated one.
-    rows: list[dict] = []
-    seen: set = set()
-    cursor = None
-    for _page in range(_MAX_PAGES):
-        cmd = ["vercel", "project", "ls", "--format", "json",
-               "--limit", str(limit), "--scope", scope, "--no-color"]
-        if cursor is not None:
-            cmd += ["--next", str(cursor)]
-        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, env=env)
-        if proc.returncode != 0:
-            sys.exit(f"build_index: `vercel project ls` failed (rc={proc.returncode}):\n"
-                     + (proc.stdout or "") + (proc.stderr or ""))
-        page_rows, cursor = _parse_projects_json(proc.stdout or "", scope)
-        # Deduplicated by name, because a page boundary that moves while paging can repeat a
-        # row. A duplicate is not corruption, but it would double-count in the index, and the
-        # first sighting carries the newer timestamp — pages come newest-first.
-        for r in page_rows:
-            if r["name"] not in seen:
-                seen.add(r["name"])
-                rows.append(r)
-        if cursor is None:
-            break
-    else:
-        # A cursor that never clears. Not reachable through the CLI as it behaves today, which
-        # is exactly why it needs a backstop: the failure it prevents is an infinite loop
-        # spawning subprocesses, and that is worse than a refusal.
-        sys.exit(f"build_index: still paginating after {_MAX_PAGES} pages of {limit}; refusing "
-                 f"to keep going. Either the account is larger than this tool expects, or the "
-                 f"cursor is not advancing.")
-
-    # The empty-list refusal that used to live HERE has moved to `main()`, where its own
-    # stated purpose already put it (#9). It said "refusing to render an empty index" while
-    # sitting in the function that does not render anything — and the docstring of
-    # `TestTheBootstrapAccountStillPublishes` had already drawn the distinction in so many
-    # words: "the refusal that DOES exist is about rendering an index from nothing, which is a
-    # different question from what this function returns."
-    #
-    # A brand-new Vercel account has ZERO projects, not even `docs-index`, and `resolve_project`
-    # must be able to see "no such project yet" so `--new-project` can mint the very first doc.
-    # Exiting here made a first publish fail at stage 4 while setup reported the account ready.
-    #
-    # Nothing is weakened. `_parse_projects_json` has already refused a listing whose
-    # `contextName` is wrong or whose `pagination.next` is missing, and the cursor is followed
-    # to exhaustion — so an empty list that survives all of that is an empty ACCOUNT, not a
-    # truncated listing. That is the same reasoning the note below applies to the row count.
-    # The length heuristic that lived here is GONE, and its removal is the point rather than a
-    # casualty. It refused whenever a page came back full, because a full page used to be the
-    # only evidence of truncation available. Under the loop a full page is the ordinary case —
-    # it means "fetch the next one" — so keeping the check would refuse every account over 100
-    # projects, which is the bug being fixed. The guarantee it approximated is now held exactly
-    # by the cursor, which this file already called authoritative "where a row count is only a
-    # heuristic". Completeness is proven by exhausting the cursor, not by counting rows.
-    # The FILTERED result may legitimately be empty, and the empty-index refusal above is
-    # deliberately NOT moved down here. An account holding only `docs-index` is the bootstrap
-    # state: `resolve_project` must be able to see "no such project yet" and let `--new-project`
-    # mint the first doc. Refusing on an empty FILTERED list reads as tidier and breaks exactly
-    # that first publish — verified, and pinned by
-    # test_build_index.py::TestTheBootstrapAccountStillPublishes.
-    return [r for r in rows if r["name"] != SELF_PROJECT]
-
-
 def known_projects(workspace_file: Path | None) -> list[str]:
     """rawgentic project names, longest first so prefix matching prefers the specific one
     (a longer name must win over any shorter sibling).
@@ -401,7 +109,7 @@ def known_projects(workspace_file: Path | None) -> list[str]:
 
 
 def classify(name: str, projects: list[str]) -> tuple[str, str]:
-    """(group, chip) for a Vercel project name."""
+    """(group, chip) for a page name, matched against the known project list."""
     if name.startswith(WORKSPACE_GROUP + "-"):
         group, rest = WORKSPACE_GROUP, name[len(WORKSPACE_GROUP) + 1:]
     else:
@@ -414,73 +122,6 @@ def classify(name: str, projects: list[str]) -> tuple[str, str]:
 # The Edmonton stamp every new/updated page must carry (owner rule, 2026-07-31). Preferred
 # over the deploy age because it is what the DOCUMENT says about itself: a re-deploy with no
 # content change moves the deploy age but not this.
-_STAMP_NEAR = re.compile(
-    r"(?:updated|generated|drawn|stamped|revised|as of)\b[^0-9<]{0,24}"
-    r"(\d{4}-\d{2}-\d{2})(?:[ T]+(\d{2}:\d{2}))?", re.I)
-_STAMP_ANY = re.compile(r"(\d{4}-\d{2}-\d{2})[ T]+(\d{2}:\d{2})")
-_TZ = ZoneInfo("America/Edmonton")
-
-
-def _parse_stamp(body: str) -> datetime | None:
-    """The page's own declared last-updated instant, or None.
-
-    Anchored forms ("updated 2026-08-01 00:12") are tried first; only then a bare
-    datetime. Both are read from the page's own text, so a document that mentions dates in
-    its CONTENT can still mislead this — which is why the row marks where the time came
-    from rather than presenting all times as equally solid.
-    """
-    for pat in (_STAMP_NEAR, _STAMP_ANY):
-        m = pat.search(body)
-        if not m:
-            continue
-        date, clock = m.group(1), (m.group(2) if m.lastindex and m.lastindex >= 2 else None)
-        try:
-            dt = datetime.strptime(f"{date} {clock or '00:00'}", "%Y-%m-%d %H:%M")
-        except ValueError:
-            continue
-        return dt.replace(tzinfo=_TZ)
-    return None
-
-
-def page_meta(name: str, url: str, timeout: float = 15.0) -> tuple[str, datetime | None]:
-    """(title, self-declared updated-at) for one page. Falls back to the project name and
-    None — a fetch failure must not silently drop a row.
-
-    `url` is the row's REPORTED domain (#23): fetching a constructed
-    `https://{name}.vercel.app/` 404s for every truncated-domain project, so their titles
-    silently degraded to the bare project name."""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "docs-index-builder"})
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            body = resp.read(60000).decode("utf-8", "replace")
-        m = re.search(r"<title>(.*?)</title>", body, re.S | re.I)
-        title = html.unescape(m.group(1)).strip() if m else name
-        return title, _parse_stamp(body)
-    except Exception:  # noqa: BLE001 - any failure degrades to the name, never a dropped row
-        return name, None
-
-
-def build_rows(entries: list[dict], projects: list[str], fetch_titles: bool) -> list[dict]:
-    names = [e["name"] for e in entries]
-    meta: dict[str, tuple[str, datetime | None]] = {}
-    if fetch_titles:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-            meta = dict(zip(names, pool.map(
-                lambda e: page_meta(e["name"], e["url"] + "/"), entries)))
-    rows = []
-    for e in entries:
-        n = e["name"]
-        group, chip = classify(n, projects)
-        title, declared = meta.get(n, (n, None))
-        # Declared beats deployed. Same rule the VDL packs use: what the artifact says
-        # about itself wins over what the platform infers about it.
-        updated, source = (declared, "page") if declared else (e["deployed"], "deploy")
-        rows.append({"name": n, "url": e["url"],
-                     "title": title, "group": group, "chip": chip,
-                     "updated": updated, "updated_src": source if updated else "none"})
-    return rows
-
-
 def _ago(then: datetime, now: datetime) -> str:
     """Compact relative age: 40m, 6h, 3d, 2w."""
     secs = max(0, int((now - then).total_seconds()))
@@ -604,16 +245,14 @@ def render(rows: list[dict], stamp: str, now: datetime, sig: str,
     # and braces, because this page is deployed PUBLICLY.
     tenant = html.escape(scope) if scope else ""
     title_prefix = f"{tenant} · " if tenant else ""
-    # #34: the doc-harness serves this same page from its own registry, where the word
-    # "vercel" is simply wrong. Keyword-only and defaulting to the exact previous strings, so
-    # every existing caller is byte-for-byte unaffected — which is why the harness takes a
-    # parameter here rather than post-processing the rendered HTML. Escaped like `scope`,
-    # because it reaches the page the same way.
+    # #34: the harness passes its own eyebrow. The default matches it rather than the
+    # retired vendor wording, and it is escaped like `scope`, because it reaches the page
+    # the same way.
     if eyebrow is not None:
         eyebrow = html.escape(eyebrow)
     else:
-        eyebrow = f"{tenant} · vercel · living documentation" if tenant else (
-            "vercel · living documentation")
+        eyebrow = (f"{tenant} · living documentation" if tenant
+                   else "living documentation")
     groups: dict[str, list[dict]] = {}
     for r in sorted(rows, key=_sort_key):
         groups.setdefault(r["group"], []).append(r)
@@ -678,7 +317,7 @@ def render(rows: list[dict], stamp: str, now: datetime, sig: str,
         tilde = "~" if r["updated_src"] == "deploy" else ""
         exact = r["updated"].strftime("%Y-%m-%d %H:%M")
         src = ("declared by the page" if r["updated_src"] == "page"
-               else "inferred from the Vercel deploy age (coarse)")
+               else "inferred from the deploy age (coarse)")
         # NOT named `stamp`: `render()` already takes a `stamp` parameter (the build stamp the
         # footer prints), and shadowing it here would hand a future editor an integer where they
         # reasonably expect that string.
@@ -845,8 +484,8 @@ footer{{border-top:1px solid var(--hair);color:var(--dim);font:12px/1.6 ui-monos
 </div>
 
 <footer>
-  naming: {{project}}-{{purpose}}-{{ref}} · derived from `vercel project ls` by
-  build_index.py — never hand-edited · {total_pages} pages across {total_lines} lines ·
+  naming: {{date}}-{{repo}}-{{doc}} · derived from the repositories by the doc harness —
+  never hand-edited · {total_pages} pages across {total_lines} lines ·
   generated {html.escape(stamp)} (America/Edmonton)
 </footer>
 
@@ -919,75 +558,3 @@ footer{{border-top:1px solid var(--hair);color:var(--dim);font:12px/1.6 ui-monos
 </body>
 </html>
 """
-
-
-def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--out", help="output path, or - for stdout. Required unless --signature.")
-    ap.add_argument("--workspace-file", default=None,
-                    help="workspace file used to group pages by project. Resolved from your "
-                         "configuration when omitted; grouping is skipped when nothing is "
-                         "configured, which is a degradation rather than a failure.")
-    ap.add_argument("--vercel-scope", default=None,
-                    help="the Vercel team to list. Resolved from your configuration when "
-                         "omitted; there is no built-in default, because deploying to the "
-                         "wrong account is worse than refusing.")
-    ap.add_argument("--config", default=None,
-                    help="read configuration from this file instead of the default location")
-    ap.add_argument("--no-titles", action="store_true",
-                    help="skip <title> fetches (fast; rows are labelled by project name)")
-    ap.add_argument("--limit", type=int, default=100,
-                    help="vercel project ls page size (it paginates at 20 by default)")
-    ap.add_argument("--signature", action="store_true",
-                    help="print a hash of the row set and exit; no page is rendered. Changes "
-                         "only when a page is added, removed, retitled or restamped — NOT "
-                         "when the clock moves. refresh_index.sh diffs this to decide whether "
-                         "a redeploy is warranted.")
-    args = ap.parse_args(argv)
-    if not args.out and not args.signature:
-        ap.error("--out is required unless --signature is given")
-
-    # Resolved ONCE, here, and threaded down. Re-resolving inside a helper would let one run
-    # answer for two different accounts — the exact hazard that makes `publish_doc` pass these
-    # values to this script explicitly rather than letting it look them up again (#9).
-    cfg = _user_config()
-    try:
-        config_path = cfg.config_file(cli_value=args.config)
-        scope = cfg.require_vercel_scope(cli_value=args.vercel_scope, config_path=config_path)
-        workspace = cfg.workspace_file(cli_value=args.workspace_file, config_path=config_path)
-    except cfg.ConfigError as e:
-        sys.exit(f"build_index: {e}")
-
-    now = datetime.now(ZoneInfo("America/Edmonton"))
-    entries = vercel_projects(args.limit, scope=scope)
-    # Rendering an index from nothing is what the refusal was always about, so it lives here
-    # now rather than inside the listing function every consumer shares (#9). It also checks
-    # the FILTERED list, which the old placement could not: an account holding only
-    # `docs-index` used to reach `render` with zero rows and raise `IndexError` from the
-    # `order[0]` its own accent CSS reads.
-    if not entries:
-        sys.exit("build_index: no pages to index — the account holds no published documents "
-                 "yet. Refusing to render an empty index. Publish something first.")
-    projects = known_projects(workspace)
-    rows = build_rows(entries, projects, fetch_titles=not args.no_titles)
-
-    sig = signature(rows)
-    if args.signature:
-        print(sig)
-        return 0
-
-    stamp = now.strftime("%Y-%m-%d %H:%M %Z")
-    page = render(rows, stamp, now, sig, workspace, scope)
-
-    if args.out == "-":
-        sys.stdout.write(page)
-    else:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out).write_text(page, encoding="utf-8")
-        print(f"build_index: wrote {args.out} — {len(rows)} pages, "
-              f"{len({r['group'] for r in rows})} lines, stamped {stamp}")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

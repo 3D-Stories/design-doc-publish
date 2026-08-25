@@ -7,16 +7,16 @@ the page is live. Three things, and the third silently gets skipped because noth
 no publishing path at all. Not (5), auto-publish confined to preview URLs.
 
 The reason is a property of the plan, not a preference. Production deploys here cannot be gated:
-Vercel Authentication is unavailable for production (`invalid_sso_protection`), team password
-protection is off, and `protection enable --sso` exempts the `<name>.vercel.app` alias. So any
+hosted authentication was unavailable for production, team password
+protection cannot gate a production page. So any
 design that auto-publishes puts unreviewed HTML on a public, indexable URL with no possible gate.
 A warning closes the same failure mode with none of that exposure, and it cannot invert
 `publish_doc.py`'s deliberate lint-before-deploy ordering because it never deploys.
 
 **What counts as evidence of a deploy, locally.** The convention this workspace already follows is
-that a design doc links its live page from the companion markdown — `· [live](https://….vercel.app)`
+that a design doc links its live page from the companion markdown — `· [live](https://<name>.3dstories.ca)`
 is in epic #77's own body. So the check pairs each rendered `.html` with its `.md` and looks for a
-`vercel.app` URL. Local, offline and fast, which a Stop hook has to be.
+zone URL. Local, offline and fast, which a Stop hook has to be.
 
 **It always exits 0.** A Stop hook that fails would block the session over an advisory. The
 product is the message, never a veto.
@@ -61,12 +61,12 @@ class TestItFindsThePageNobodyDeployed:
         assert deploy_check.undeployed(tmp_path) == [tmp_path / "plan.html"]
 
     def test_a_rendered_page_whose_markdown_links_it_is_quiet(self, tmp_path):
-        _doc(tmp_path, "plan", md="# Plan\n\n· [live](https://example-plan-118.vercel.app)\n")
+        _doc(tmp_path, "plan", md="# Plan\n\n· [live](https://example-plan-118.3dstories.ca)\n")
         assert deploy_check.undeployed(tmp_path) == []
 
     def test_a_live_link_inside_the_html_also_counts(self, tmp_path):
         """Some pages carry their own canonical link and have no companion markdown."""
-        html = RENDERED.replace("</body>", "<a href='https://x.vercel.app'>live</a></body>")
+        html = RENDERED.replace("</body>", "<a href='https://x.3dstories.ca'>live</a></body>")
         _doc(tmp_path, "solo", html=html)
         assert deploy_check.undeployed(tmp_path) == []
 
@@ -91,7 +91,7 @@ class TestItLeavesEverythingElseAlone:
         assert deploy_check.undeployed(tmp_path) == []
 
     def test_a_derived_build_artifact_is_skipped(self, tmp_path):
-        """`index/index.html` is gitignored and rebuilt from `vercel project ls`; it is not a
+        """`index/index.html` is a gitignored build artifact; it is not a
         design doc and warning about it would be permanent noise."""
         d = tmp_path / "index"
         d.mkdir()
@@ -150,7 +150,7 @@ class TestItIsAdvisoryNeverAVeto:
         assert "plan.html" in proc.stdout + proc.stderr
 
     def test_the_cli_is_silent_when_there_is_nothing_to_say(self, tmp_path):
-        _doc(tmp_path, "plan", md="[live](https://x.vercel.app)")
+        _doc(tmp_path, "plan", md="[live](https://x.3dstories.ca)")
         proc = subprocess.run([sys.executable, str(SCRIPTS / "deploy_check.py"), str(tmp_path)],
                               capture_output=True, text=True)
         assert proc.returncode == 0

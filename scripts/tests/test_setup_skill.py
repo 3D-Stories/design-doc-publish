@@ -90,10 +90,10 @@ class TestTheSkillPointsAtTheRealTool:
         assert "--json" in body, "the skill must document --json"
 
     def test_it_does_not_claim_to_log_in_or_store_a_credential(self):
-        """setup.py never runs `vercel login` and stores no credential. A skill that implied
+        """setup.py signs in to nothing and stores no credential. A skill that implied
         otherwise would be asking a user to expect something the tool refuses to do."""
         body = SETUP_SKILL.read_text(encoding="utf-8").lower()
-        assert "vercel login" not in body or "never" in body, (
+        assert "login" not in body or "never" in body, (
             "do not imply the tool logs in; it does not")
 
 

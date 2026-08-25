@@ -3,11 +3,12 @@
 Design: `docs/planning/2026-08-10-9-first-run-setup-flow.md` (revision 3, after a Step-4
 gate that ran three cross-model passes and closed budget-exhausted).
 
-Two things used to be this package author's machine written into the source: the workspace
-file that stage 2 validates ``--project`` against, and the Vercel team every deploy targets.
-A stranger installing the plugin therefore stopped at stage 2 of 7. This module replaces both
-constants with a resolution order, and — just as importantly — with a refusal that names what
-to run when nothing is configured.
+The workspace file that stage 2 validates ``--project`` against used to be this package
+author's machine written into the source, so a stranger installing the plugin stopped at
+stage 2 of 7. This module replaces that constant with a resolution order, and — just as
+importantly — with a refusal that names what to run when nothing is configured. (It once
+resolved a second setting, the deploy account for the retired hosting vendor; that setting
+died with the vendor.)
 
 Four properties are load-bearing, and each of them was a review finding rather than foresight:
 
@@ -20,10 +21,6 @@ Four properties are load-bearing, and each of them was a review finding rather t
 * **``UNSET`` is not ``None`` and neither is ``""``.** An absent flag falls through. An
   explicitly empty one is an error: the user tried to set something, and silently resolving a
   different value is how a public page reaches the wrong account.
-* **There is no built-in fallback team.** A wrong team is worse than no team, because ambient
-  Vercel scope is whatever the last ``vercel switch`` left behind. ``require_vercel_scope``
-  raises rather than returning anything a caller could pass to ``--scope``.
-
 Stdlib only, like the rest of this package.
 """
 from __future__ import annotations
@@ -38,10 +35,9 @@ from pathlib import Path
 #: The one config-file version this build understands.
 CONFIG_VERSION = 1
 
-#: Vercel lowercases team slugs, and this is the same shape `publish_doc.derive_name` already
-#: enforces for a project name. Reused rather than re-invented: the value reaches a subprocess
-#: argument AND the generated index page, so a second, subtly different rule would be a hole.
-#: A leading `-` cannot match, which is what makes an option-like value impossible.
+#: The shape a project name must have. It reaches page hostnames and the generated index
+#: page, so a second, subtly different rule anywhere else would be a hole. A leading `-`
+#: cannot match, which is what makes an option-like value impossible.
 _SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
 MAX_NAME = 100
 
@@ -57,7 +53,6 @@ SETUP_COMMAND = f"python3 {_HERE / 'setup.py'}"
 
 ENV_CONFIG = "DESIGN_DOC_PUBLISH_CONFIG"
 ENV_WORKSPACE = "DESIGN_DOC_PUBLISH_WORKSPACE_FILE"
-ENV_SCOPE = "DESIGN_DOC_PUBLISH_VERCEL_SCOPE"
 
 
 class ConfigError(Exception):
@@ -172,25 +167,23 @@ def load_for_update(config_path: Path) -> dict:
     return data
 
 
-def validate_scope(value) -> str:
-    """The Vercel team slug, or a refusal.
+def validate_name(value) -> str:
+    """A project name, or a refusal.
 
-    Runs on EVERY rung — flag, environment and config file — so a hand-edited config cannot
-    smuggle past it a value a flag could never carry. Case is rejected rather than
-    normalized: Vercel lowercases anyway, and silently rewriting user input is how one name
-    becomes two projects.
+    One DNS-label-shaped slug: the name reaches page hostnames and the generated index, so
+    anything else is refused before it reaches either. A leading `-` cannot match, which is
+    what makes an option-like value impossible.
     """
     if not isinstance(value, str):
         raise ConfigError(
-            f"a Vercel team must be a string, not {type(value).__name__}")
+            f"a project name must be a string, not {type(value).__name__}")
     if len(value) > MAX_NAME:
         raise ConfigError(
-            f"the Vercel team {value[:20]!r}… is longer than {MAX_NAME} characters")
+            f"the name {value[:20]!r}… is longer than {MAX_NAME} characters")
     if not _SLUG.fullmatch(value):
         raise ConfigError(
-            f"{value!r} is not a Vercel team slug. Use lowercase letters, digits and inner "
-            f"hyphens only — this value is passed to the `vercel` CLI and rendered into the "
-            f"index page, so anything else is refused before it reaches either.")
+            f"{value!r} is not a usable project name. Use lowercase letters, digits and "
+            f"inner hyphens only.")
     return value
 
 
@@ -213,22 +206,6 @@ def workspace_file(*, cli_value=UNSET, config_path=None) -> Path | None:
     declared = load(config_path).get("workspace_file")
     if isinstance(declared, str) and declared.strip():
         return Path(declared).expanduser().resolve()
-    return None
-
-
-def vercel_scope(*, cli_value=UNSET, config_path=None) -> str | None:
-    """Which Vercel team to target, or ``None`` when nothing is configured."""
-    chosen = _selected(cli_value, ENV_SCOPE, "--vercel-scope")
-    if chosen is not None:
-        return validate_scope(chosen)
-    if config_path is None:
-        config_path = config_file()
-    declared = load(config_path).get("vercel_scope")
-    if isinstance(declared, str) and declared.strip():
-        return validate_scope(declared)
-    if declared is not None:
-        raise ConfigError(
-            f"vercel_scope in {config_path} is not a usable team name. Run: {SETUP_COMMAND}")
     return None
 
 
@@ -267,22 +244,6 @@ def require_workspace_file(*, cli_value=UNSET, config_path=None) -> Path:
         raise ConfigError(
             f"the configured workspace file {resolved} is malformed — it must be an object "
             f"whose `projects` is a list. Run: {SETUP_COMMAND}")
-    return resolved
-
-
-def require_vercel_scope(*, cli_value=UNSET, config_path=None) -> str:
-    """The Vercel team, or a refusal.
-
-    This RAISES rather than returning a falsy value on purpose. A caller that received one
-    could pass it straight to ``--scope`` and lose the account pin, which is the failure this
-    whole resolution order exists to prevent.
-    """
-    resolved = vercel_scope(cli_value=cli_value, config_path=config_path)
-    if resolved is None:
-        raise ConfigError(
-            "no Vercel team is configured, and deploying without one can land the page in "
-            "whichever account `vercel switch` last selected. "
-            f"Run: {SETUP_COMMAND}")
     return resolved
 
 

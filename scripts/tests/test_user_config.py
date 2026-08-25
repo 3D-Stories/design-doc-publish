@@ -3,7 +3,7 @@
 Design: `docs/planning/2026-08-10-9-first-run-setup-flow.md` (revision 3, after a Step-4
 gate that ran three cross-model passes and closed budget-exhausted).
 
-This module decides which Vercel account a PUBLIC page is deployed to, so the tests here
+This module decided which account a PUBLIC page reached (retired) and still owns the workspace pointer, so the tests here
 are about precedence and refusal rather than convenience. Three properties earned their
 own tests the hard way, each from a review finding:
 
@@ -36,7 +36,6 @@ import user_config  # noqa: E402
 ENV_VARS = (
     "DESIGN_DOC_PUBLISH_CONFIG",
     "DESIGN_DOC_PUBLISH_WORKSPACE_FILE",
-    "DESIGN_DOC_PUBLISH_VERCEL_SCOPE",
     "XDG_CONFIG_HOME",
 )
 
@@ -195,53 +194,10 @@ class TestResolvingTheWorkspaceFile:
                                           config_path=cfg) == tmp_path / "cfg.json"
 
 
-class TestResolvingTheVercelScope:
-    def test_unconfigured_resolves_to_none(self):
-        assert user_config.vercel_scope() is None
-
-    def test_there_is_no_built_in_fallback_team(self):
-        """A wrong team is worse than no team: an unpinned deploy lands in whichever
-        account `vercel switch` last selected."""
-        source = (SCRIPTS / "user_config.py").read_text(encoding="utf-8")
-        assert "3d-stories" not in source
-
-    def test_the_config_supplies_it(self, tmp_path):
-        cfg = _write_config(tmp_path / "config.json",
-                            {"version": 1, "vercel_scope": "acme-docs"})
-        assert user_config.vercel_scope(config_path=cfg) == "acme-docs"
-
-    def test_the_environment_beats_the_config(self, tmp_path, monkeypatch):
-        cfg = _write_config(tmp_path / "config.json",
-                            {"version": 1, "vercel_scope": "from-config"})
-        monkeypatch.setenv("DESIGN_DOC_PUBLISH_VERCEL_SCOPE", "from-env")
-        assert user_config.vercel_scope(config_path=cfg) == "from-env"
-
-    def test_the_flag_beats_everything(self, tmp_path, monkeypatch):
-        cfg = _write_config(tmp_path / "config.json",
-                            {"version": 1, "vercel_scope": "from-config"})
-        monkeypatch.setenv("DESIGN_DOC_PUBLISH_VERCEL_SCOPE", "from-env")
-        assert user_config.vercel_scope(cli_value="from-flag", config_path=cfg) == "from-flag"
-
-    def test_an_explicitly_empty_value_is_an_error_at_every_rung(self, tmp_path, monkeypatch):
-        with pytest.raises(user_config.ConfigError):
-            user_config.vercel_scope(cli_value="")
-        monkeypatch.setenv("DESIGN_DOC_PUBLISH_VERCEL_SCOPE", "")
-        with pytest.raises(user_config.ConfigError):
-            user_config.vercel_scope()
-
-    def test_a_config_value_is_validated_too(self, tmp_path):
-        """A hand-edited config must not smuggle a value past the validator that a flag
-        could never carry."""
-        cfg = _write_config(tmp_path / "config.json",
-                            {"version": 1, "vercel_scope": "--not-a-team"})
-        with pytest.raises(user_config.ConfigError):
-            user_config.vercel_scope(config_path=cfg)
-
-
-class TestTheScopeValidator:
-    @pytest.mark.parametrize("value", ["a", "acme", "acme-docs", "a1", "3d-stories", "x-1-y"])
+class TestTheNameValidator:
+    @pytest.mark.parametrize("value", ["a", "acme", "acme-docs", "a1", "my-project", "x-1-y"])
     def test_it_accepts_a_real_slug(self, value):
-        assert user_config.validate_scope(value) == value
+        assert user_config.validate_name(value) == value
 
     @pytest.mark.parametrize("value", [
         "-leading",          # an option-like value must never reach an argv
@@ -257,14 +213,14 @@ class TestTheScopeValidator:
     ])
     def test_it_refuses_everything_else(self, value):
         with pytest.raises(user_config.ConfigError):
-            user_config.validate_scope(value)
+            user_config.validate_name(value)
 
     def test_a_leading_dash_can_never_pass(self):
-        """The property that matters: the scope reaches a subprocess argument, so a value
-        that argparse or the vercel CLI would read as an option is the injection."""
+        """The property that matters: the name reaches hostnames and rendered pages, and a
+        value shaped like an option must never be able to reach an argv either."""
         for value in ("-x", "--scope", "--force"):
             with pytest.raises(user_config.ConfigError):
-                user_config.validate_scope(value)
+                user_config.validate_name(value)
 
 
 class TestTheRefusalsAStrangerSees:
@@ -293,13 +249,6 @@ class TestTheRefusalsAStrangerSees:
             user_config.require_workspace_file(config_path=cfg)
         assert "malformed" in str(excinfo.value).lower()
 
-    def test_an_unconfigured_scope_refuses_rather_than_returning_something(self):
-        """`require_vercel_scope` must raise. Returning a falsy value would let a caller
-        pass it to `--scope` and lose the account pin."""
-        with pytest.raises(user_config.ConfigError) as excinfo:
-            user_config.require_vercel_scope()
-        assert "setup.py" in str(excinfo.value)
-
 
 class TestWritingTheConfig:
     def test_it_creates_the_parent_directory_on_a_genuine_first_run(self, scrubbed):
@@ -308,8 +257,8 @@ class TestWritingTheConfig:
         written."""
         target = scrubbed / ".config" / "design-doc-publish" / "config.json"
         assert not target.parent.exists()
-        user_config.write_config({"version": 1, "vercel_scope": "acme"}, target)
-        assert json.loads(target.read_text(encoding="utf-8"))["vercel_scope"] == "acme"
+        user_config.write_config({"version": 1, "some_key": "acme"}, target)
+        assert json.loads(target.read_text(encoding="utf-8"))["some_key"] == "acme"
 
     def test_it_leaves_no_temporary_file_behind(self, tmp_path):
         target = tmp_path / "cfg" / "config.json"
