@@ -790,8 +790,19 @@ class TestTheRedirectContract:
 
     def test_the_opener_never_follows_redirects_on_its_own(self):
         """urlopen follows a 302 silently, which would send Access credentials to the
-        login host. The build must install a non-following handler."""
-        assert publish_doc.NO_REDIRECTS is not None
+        login host. The build must install a non-following handler.
+
+        Until #54 this test's whole body was `assert NO_REDIRECTS is not None`, which said
+        nothing at all about redirects. It now asserts the opener is real and that every
+        redirect handler on it refuses. What it does against a LIVE redirect is proven with
+        real sockets in test_setup.py::TestTheRedirectRefusalIsProvenAgainstARealSocket."""
+        import urllib.request
+        assert isinstance(publish_doc.NO_REDIRECTS, urllib.request.OpenerDirector)
+        handlers = [h for h in publish_doc.NO_REDIRECTS.handlers
+                    if isinstance(h, urllib.request.HTTPRedirectHandler)]
+        assert handlers, "no redirect handler is installed at all"
+        assert all(h.redirect_request(None, None, 302, "Found", {}, "http://x") is None
+                   for h in handlers), "a handler on this opener would still follow a redirect"
 
 
 # --------------------------------------------------------------------------- T5, AC3

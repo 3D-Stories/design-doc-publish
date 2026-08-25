@@ -183,12 +183,14 @@ def _locked(target):
         os.close(fd)
 
 
+#: Pinned in committed source, never read from the environment. `publish_doc` holds the
+#: authoritative copy and every security decision that depends on it; this one serves the Host
+#: header and `status`'s reporting only.
+_CONTROL_HOST = "docs-control.3dstories.ca"
+
 #: Every call in this module is a STATUS probe, so it should answer quickly or not at all.
 #: Without a bound, a non-responsive harness stalls `--check` forever, and the one command
 #: meant to diagnose a machine becomes the thing that hangs on it.
-#: Pinned in committed source, never read from the environment — see `_is_edge_control`.
-_CONTROL_HOST = "docs-control.3dstories.ca"
-
 _PROBE_TIMEOUT = 10
 
 #: A valid deployment name that no real document is expected to hold. The read-back route
@@ -201,11 +203,12 @@ def _is_edge_control(control_url):
     """True when the control URL is the public control host over TLS, so Cloudflare Access
     stands in front of it (#54).
 
-    The host is pinned in source here for the same reason it is pinned below: validating a
-    destination against a value read from the same environment that supplied the destination
-    is not validation. This module deliberately does not import `publish_doc` — it stays
-    parseable and runnable on its own — so the one string is duplicated rather than shared,
-    and `publish_doc._control_is_edge` is its counterpart.
+    **This is `status`'s REPORTING test, not a security control.** The authoritative rule is
+    `publish_doc._control_is_edge`, and `probe_harness` calls that one, because the decision to
+    attach a credential must have exactly one definition. This copy only decides whether
+    `status` says the Access pair is required, so a drift here mis-reports readiness and can
+    never let a credential out. It stays separate so that `--check` still answers on a machine
+    where `publish_doc` will not import.
     """
     import urllib.parse
     parsed = urllib.parse.urlsplit((control_url or "").strip())
@@ -229,24 +232,56 @@ def probe_harness(control_url, token, env=None):
     import urllib.request
     if env is None:
         env = os.environ
-    url = control_url.rstrip("/") + "/v1/deployments/" + _PROBE_NAME
+
+    # Step 8a finding F1, Critical. This function attaches the publish bearer and used to
+    # validate NOTHING about where that bearer went: whatever host DOC_HARNESS_CONTROL_URL
+    # named received the token. `publish_doc` closed this for the publisher in finding N4 and
+    # this module never got it, so #54 criterion 3 was false here.
+    #
+    # The allowlist is IMPORTED, never copied. Two copies of a destination allowlist drift, and
+    # the copy that drifts is the one that lets a credential out. The import is lazy — the
+    # interpreter-version guard at the top of this module has already run by the time any of
+    # this executes, which is what the module-level import ban is actually protecting.
+    #
+    # It fails CLOSED and says which way: setup is the tool people run when a machine is
+    # broken, so an unimportable publisher must produce a sentence, never a traceback and
+    # never a request.
+    try:
+        import publish_doc
+    except Exception as e:                              # noqa: BLE001
+        return "failed", ("the destination allowlist could not be loaded from publish_doc "
+                          "(%s), so nothing was sent" % e.__class__.__name__)
+    try:
+        # Normalizing FIRST is half the fix: `assert_bearer_destination` tests scheme and host,
+        # so on its own it would accept a base smuggling a path, a query, or userinfo — and
+        # userinfo in a URL is itself a credential.
+        origin = publish_doc._normalized_origin(
+            control_url, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+        publish_doc.assert_bearer_destination(origin, env=env, stage=5)
+    except publish_doc.StageError as e:
+        return "failed", e.message
+
+    url = origin + "/v1/deployments/" + _PROBE_NAME
     req = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
     # The harness routes on the HOST header, so a loopback control URL needs the control
     # host named explicitly — the same rule `publish_doc._control_request` applies, against
     # the same pinned zone. Pinned in source, deliberately not read from the environment.
-    if url.startswith("http://"):
+    if origin.startswith("http://"):
         req.add_header("Host", _CONTROL_HOST)
-    elif _is_edge_control(control_url):
+    elif publish_doc._control_is_edge(origin):
         # Through the edge, Access answers before the harness does. Without the pair the reply
         # is a 302 to the login, which the opener below refuses — so the probe would report an
         # unreachable harness when the real problem is two unset variables. `status` already
         # refuses this combination earlier; the check is repeated here because a guard a caller
-        # must remember is not a guard. No message renders a VALUE, only a variable name.
-        cid = (env.get("CF_ACCESS_CLIENT_ID") or "").strip()
-        secret = (env.get("CF_ACCESS_CLIENT_SECRET") or "").strip()
-        if not (cid and secret):
-            return "failed", ("this control URL is behind Cloudflare Access and needs "
-                              "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET; nothing was sent")
+        # must remember is not a guard.
+        #
+        # The pair reader is the publisher's, for the same reason the allowlist is: one
+        # definition. It names the MISSING half specifically rather than both, and no message
+        # it produces ever renders a value.
+        try:
+            cid, secret = publish_doc._access_pair(env, stage=5)
+        except publish_doc.StageError as e:
+            return "failed", e.message
         req.add_header("CF-Access-Client-Id", cid)
         req.add_header("CF-Access-Client-Secret", secret)
 
