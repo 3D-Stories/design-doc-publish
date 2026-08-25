@@ -1862,3 +1862,134 @@ class TestTheGuardedBuilderNormalizesItsOwnBase:
             "https://docs-control.3dstories.ca/", "/v1/deployments/x", "tok", method="GET",
             body=None, env=self.PAIR)
         assert req.full_url == "https://docs-control.3dstories.ca/v1/deployments/x"
+
+
+# --------------------------------------------------------- #54 follow-ups (owner-directed)
+
+class TestAnUnparseableUrlRefusesWithASentence:
+    """#54 follow-up 1. `_normalized_origin` PARSES before it validates, and `urlsplit` raises
+    on some input rather than returning something refusable — so a malformed
+    DOC_HARNESS_CONTROL_URL escaped as a ValueError. `main()`'s bare handler catches it and the
+    exit code stays right, but the operator gets a traceback where every other bad input gets one
+    clean sentence. `setup.py` had the same hole and it was closed during #54's review round;
+    this is the publisher half."""
+
+    MALFORMED = "http://[::1"
+
+    def test_normalized_origin_raises_a_stage_error_not_a_value_error(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._normalized_origin(self.MALFORMED, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+        assert e.value.stage == 5
+        assert "DOC_HARNESS_CONTROL_URL" in e.value.message
+
+    def test_control_base_raises_a_stage_error_too(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.control_base({"DOC_HARNESS_CONTROL_URL": self.MALFORMED})
+
+    def test_public_base_raises_a_stage_error_too(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.public_base({"DOC_HARNESS_PUBLIC_BASE": self.MALFORMED})
+
+    def test_the_guarded_builder_refuses_it_as_a_stage_5_failure(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                self.MALFORMED, "/v1/deployments/x", "tok", method="GET", body=None,
+                env={"DOC_HARNESS_PUBLISH_TOKEN": "tok"})
+        assert e.value.stage == 5
+
+    def test_no_refusal_here_renders_the_url_as_a_credential_carrier(self):
+        """A malformed URL can still carry userinfo. The message names the VARIABLE."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._normalized_origin(
+                "http://user:SUPERSECRET@[::1", stage=5, varname="DOC_HARNESS_CONTROL_URL")
+        assert "SUPERSECRET" not in e.value.message
+
+
+class TestOnlyTheDefaultTlsPortIsTheControlHost:
+    """#54 follow-up 2. Both host tests compared hostname alone, so
+    `https://docs-control.3dstories.ca:8443` satisfied the bearer allowlist AND counted as the
+    Access destination. Same host, so nothing left the intended machine — but a port is part of
+    an endpoint, and the pinned control host is one endpoint, not every port on that name."""
+
+    @pytest.mark.parametrize("base", [
+        "https://docs-control.3dstories.ca",
+        "https://docs-control.3dstories.ca:443",   # the default, written out
+    ])
+    def test_the_default_port_is_the_control_host(self, base):
+        assert publish_doc._control_is_edge(base) is True
+        publish_doc.assert_bearer_destination(base, env={})
+
+    @pytest.mark.parametrize("base", [
+        "https://docs-control.3dstories.ca:8443",
+        "https://docs-control.3dstories.ca:80",
+        "https://docs-control.3dstories.ca:1",
+    ])
+    def test_any_other_port_is_neither(self, base):
+        assert publish_doc._control_is_edge(base) is False
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_bearer_destination(base, env={})
+
+    def test_an_off_port_edge_url_attaches_no_access_headers(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc._control_request(
+                "https://docs-control.3dstories.ca:8443", "/v1/deployments/x", "tok",
+                method="GET", body=None,
+                env={"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+                     "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+
+    def test_loopback_and_bridge_ports_are_untouched(self):
+        """Those endpoints are ADDRESSED by port; the rule is about the pinned TLS name only."""
+        publish_doc.assert_bearer_destination("http://127.0.0.1:18081", env={})
+        publish_doc.assert_bearer_destination(
+            "http://172.17.0.2:8080",
+            env={"DOC_HARNESS_ALLOW_BRIDGE_PLAINTEXT": "172.17.0.2:8080"})
+
+
+class TestAMalformedPortIsRefusedNotRaised:
+    """Caught by self-review of the port fix above, BEFORE the cross-model pass returned.
+
+    Requiring `parsed.port in (None, 443)` introduced the very defect this branch exists to fix:
+    `.port` RAISES ValueError on a non-integer port, so `https://docs-control.3dstories.ca:notaport`
+    made `assert_bearer_destination` throw a raw ValueError. `_normalized_origin` let it through
+    because it never touched `.port`.
+
+    Both are fixed. The normalizer validates the port, and the destination guard does not depend
+    on its caller having done so — the same reasoning as finding A4."""
+
+    BAD_PORT = "https://docs-control.3dstories.ca:notaport"
+
+    def test_the_normalizer_refuses_a_non_integer_port(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._normalized_origin(self.BAD_PORT, stage=5, varname="DOC_HARNESS_CONTROL_URL")
+        assert e.value.stage == 5
+        assert "DOC_HARNESS_CONTROL_URL" in e.value.message
+
+    def test_the_destination_guard_refuses_it_on_its_own(self):
+        """Called directly, with no normalizer in front of it."""
+        with pytest.raises(publish_doc.StageError):
+            publish_doc.assert_bearer_destination(self.BAD_PORT, env={})
+
+    def test_the_edge_predicate_answers_false_rather_than_raising(self):
+        assert publish_doc._control_is_edge(self.BAD_PORT) is False
+
+    def test_the_guarded_builder_refuses_it_as_a_stage_5_failure(self):
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc._control_request(
+                self.BAD_PORT, "/v1/deployments/x", "tok", method="GET", body=None,
+                env={"DOC_HARNESS_PUBLISH_TOKEN": "tok",
+                     "CF_ACCESS_CLIENT_ID": "i", "CF_ACCESS_CLIENT_SECRET": "s"})
+        assert e.value.stage == 5
+
+    def test_an_out_of_range_port_is_refused_too(self):
+        with pytest.raises(publish_doc.StageError):
+            publish_doc._normalized_origin(
+                "https://docs-control.3dstories.ca:99999", stage=5, varname="X")
+
+    def test_the_parse_refusal_never_renders_the_url(self):
+        """Step-review finding 2. A base too malformed to parse can still carry userinfo, which
+        IS a credential — and the refusal was quoting the whole base back. The message names the
+        destination category, never the value."""
+        with pytest.raises(publish_doc.StageError) as e:
+            publish_doc.assert_bearer_destination(
+                "https://user:SUPERSECRET@h:notaport", env={})
+        assert "SUPERSECRET" not in e.value.message

@@ -243,10 +243,13 @@ def _is_edge_control(control_url):
 def probe_harness(control_url, token, env=None):
     """(outcome, detail) for the control API, using the read-back the publisher parses.
 
-    Outcome is one of `ok`, `denied`, `failed`. The split is the point: a call that could
-    not connect, timed out, or answered garbage is a FAILED probe, not a denial. Telling
-    someone their token was refused when the network blipped sends them to rotate a
-    credential they already hold. READ-ONLY by construction: GET, never POST.
+    Outcome is one of `ok`, `denied`, `failed`, `incomplete`. The split is the point: a call
+    that could not connect, timed out, or answered garbage is a FAILED probe, not a denial.
+    Telling someone their token was refused when the network blipped sends them to rotate a
+    credential they already hold. `incomplete` (#54 follow-up 3) is the fourth case and is
+    narrower still: nothing was sent at all, because a credential this destination requires is
+    missing locally. It is not a statement about the harness. READ-ONLY by construction: GET,
+    never POST.
 
     #54: this is a CONTROL CALL, so it obeys the same two rules the publisher's control calls
     obey. It carries the Cloudflare Access service-token pair when the destination is behind
@@ -312,7 +315,10 @@ def probe_harness(control_url, token, env=None):
         try:
             cid, secret = publish_doc._access_pair(env, stage=5)
         except publish_doc.StageError as e:
-            return "failed", e.message
+            # #54 follow-up 3: `incomplete`, not `failed`. A local credential refusal is not an
+            # unreachable harness, and `failed` mapped to advice saying the harness did not
+            # answer — when nothing was asked of it.
+            return "incomplete", e.message
         req.add_header("CF-Access-Client-Id", cid)
         req.add_header("CF-Access-Client-Secret", secret)
 
@@ -449,6 +455,13 @@ def status(config_path=None, *, env=None, **_ignored):
 
     outcome, detail = probe_harness(control, token, env=env)
     state["harness_reachable"] = outcome == "ok"
+    # #54 follow-up 3. A local credential refusal is exactly `edge_env_incomplete`, which this
+    # table already names — so it maps to that rather than earning a new state. Adding one would
+    # move the exit-code surface for a condition already covered. `status` normally refuses this
+    # combination one step earlier; this arm exists so a direct probe caller is not told the
+    # harness failed to answer a question nobody asked it.
+    if outcome == "incomplete":
+        return _finish(state, "edge_env_incomplete", detail)
     if outcome == "failed":
         return _finish(state, "harness_unreachable", detail)
     if outcome == "denied":
