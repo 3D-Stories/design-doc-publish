@@ -336,21 +336,36 @@ color:var(--ink-3);background:var(--code)}
 .tpl-roadmap .blk-ph-chip.is-blocked,
 .tpl-roadmap .blk-ph-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg)}
 .tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
 </style>
 </head>
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">design artifact · updated 2026-08-24 13:44 MDT</div>
+<div class="eyebrow">design artifact · updated 2026-08-25 12:56 MDT</div>
 <h1>design-doc-publish — campaign log</h1>
 
 </header>
 <main>
 <p>Rolling program log: one section per issue, newest first. Created 2026-08-13 with issue #23 (the shared-doc design-artifact convention; style roadmap).</p>
-<div class="blk blk-stats"><div class="blk-item"><span class="blk-value">5</span><span class="blk-label">issues on this log</span></div><div class="blk-item"><span class="blk-value">37</span><span class="blk-label">newest: PR open, the Vercel backfill</span></div><div class="blk-item"><span class="blk-value">2943/3043</span><span class="blk-label">suite, baseline to this PR</span><span class="blk-bar"><span class="blk-fill" style="width:96.7%"></span></span></div></div>
+<div class="blk blk-stats"><div class="blk-item"><span class="blk-value">6</span><span class="blk-label">issues on this log</span></div><div class="blk-item"><span class="blk-value">54</span><span class="blk-label">newest: PR open, control calls through the edge</span></div><div class="blk-item"><span class="blk-value">2928/3001</span><span class="blk-label">suite, baseline to this PR</span><span class="blk-bar"><span class="blk-fill" style="width:97.6%"></span></span></div></div>
 <div class="blk blk-callout"><div class="blk-callout is-info"><div class="blk-title">Read this first — what this log is</div><p>One section per issue, refreshed inside that issue&#x27;s own PR (a filed-but-unstarted
 issue gets a backlog section at WF1 time). The stats above always describe the NEWEST
 state; older sections keep their text as historical record.</p></div></div>
+<section class="mstone rm-epic"><h3>#54 — Control calls through the edge carry the Access service-token pair <span class="chip c-conf">SHIPPED</span></h3><p>PR open 2026-08-25. Publishing worked from the harness host and nowhere else. Through the public edge, Cloudflare Access answers a control call before the harness sees it, and a request carrying only the publish bearer gets a 302 to the login — which <code>NO_REDIRECTS</code> rightly refuses. <code>_control_request</code> now attaches <code>CF-Access-Client-Id</code> and <code>CF-Access-Client-Secret</code> when the destination is the pinned TLS control host, the same pair stage 6 already sends for the page fetch. A missing or half-present pair refuses locally, naming the variable, before a request object exists. Loopback and bridge behaviour are unchanged.</p>
+<p>Three review passes ran over it — inline, cross-model, and an adversarial refutation of eight explicit claims — and between them they turned up more than the feature did.</p>
+<div class="blk blk-callout"><div class="blk-callout is-warning"><div class="blk-title">The readiness probe was leaking the publish bearer, two ways</div><p><code>setup.probe_harness</code> validated NOTHING about its destination, so any host named in
+<code>DOC_HARNESS_CONTROL_URL</code> received the publish bearer. It also followed redirects: measured
+on CPython 3.12.3, a cross-host 302 delivered both <code>Authorization</code> and <code>CF-Access-Client-Id</code>
+to the redirect target, and a Cloudflare Access login IS such a redirect. Both are fixed. The
+allowlist is now imported from <code>publish_doc</code> rather than copied, because two copies of a
+destination allowlist drift and the copy that drifts is the one that lets a credential out.</p></div></div>
+<div class="blk blk-phases rm-phase"><div class="blk-ph is-merged"><div class="blk-ph-head"><span class="blk-ph-ord">01</span><span class="blk-ph-title">edge control calls</span><span class="blk-ph-badge is-merged" title="finished">the Access pair rides stage 5, refused locally when incomplete</span></div><div class="blk-ph-items"></div></div><div class="blk-ph is-merged"><div class="blk-ph-head"><span class="blk-ph-ord">02</span><span class="blk-ph-title">probe hardening</span><span class="blk-ph-badge is-merged" title="finished">destination allowlist + redirect refusal in setup.py, both found by review</span></div><div class="blk-ph-items"></div></div><div class="blk-ph is-merged"><div class="blk-ph-head"><span class="blk-ph-ord">03</span><span class="blk-ph-title">Access boundary</span><span class="blk-ph-badge is-merged" title="finished">a dedicated `_ACCESS_CONTROL_HOSTS_TLS`, pinned equal to the bearer set by a test</span></div><div class="blk-ph-items"></div></div><div class="blk-ph is-blocked"><div class="blk-ph-head"><span class="blk-ph-ord">04</span><span class="blk-ph-title">AC1 live proof</span><span class="blk-ph-badge is-blocked" title="stuck">deferred to target: no credentials here, and the dedicated Access application is still pending in the gateway repo</span></div><div class="blk-ph-items"></div></div></div>
+<p>The one acceptance criterion this PR cannot prove is the live round trip. Everything shipped is publisher-side. The zone still has no dedicated docs-control Access application — the consult records <code>service token isolated | pending</code> — so the server half stays unverified until the gateway repo lands it. That is written into the PR body as a deferred verification with its exact target check, never as a pass.</p></section>
 <section class="mstone rm-epic"><h3>#38 — Epic: replace the Vercel deploy target with the GitHub-doc harness <span class="chip c-plan">—</span></h3><p>Filed 2026-08-23, backlog. Design docs stop being hosted on Vercel. Pages live only in GitHub, and a Docker harness on the homelab serves the committed bytes at <code>https://&lt;name&gt;.3dstories.ca</code> behind Cloudflare Access. The registry pins each publish to an exact commit with a per-file manifest (Git blob id + SHA-256), so no request ever follows a moving branch. The index becomes a server-rendered page at <code>docs-index.3dstories.ca</code>, still derived, never hand-edited. Spec: <code>docs/planning/2026-08-23-github-doc-harness-spec.md</code> — peer-consulted (qwen3.8-max, gpt-5.6-sol), adversarially reviewed (deepseek-v4-pro: 10 findings, 8 fixed, 1 declined with reason, 1 partial), owner-confirmed.</p>
 <div class="blk blk-phases rm-phase"><div class="blk-ph is-merged"><div class="blk-ph-head"><span class="blk-ph-ord">01</span><span class="blk-ph-title">#34 harness service</span><span class="blk-ph-badge is-merged" title="finished">registry, control API, serving path, derived index</span></div><div class="blk-ph-items"></div></div><div class="blk-ph is-blocked"><div class="blk-ph-head"><span class="blk-ph-ord">02</span><span class="blk-ph-title">#35 go-live</span><span class="blk-ph-badge is-blocked" title="stuck">cloudflared service merged; wildcard DNS and Cloudflare Access need an owner decision, so the issue stays open</span></div><div class="blk-ph-items"></div></div><div class="blk-ph is-merged"><div class="blk-ph-head"><span class="blk-ph-ord">03</span><span class="blk-ph-title">#36 publish swap</span><span class="blk-ph-badge is-merged" title="finished">publish_doc.py publishes and verifies through the control API; live verification deferred whole</span></div><div class="blk-ph-items"></div></div><div class="blk-ph is-wip"><div class="blk-ph-head"><span class="blk-ph-ord">04</span><span class="blk-ph-title">#37 migration</span><span class="blk-ph-badge is-wip" title="in flight">181 projects today; the tool ships and the sample proves the harness cannot fetch private repositories</span></div><div class="blk-ph-items"></div></div></div></section>
 <section class="mstone rm-epic"><h3>#37 — Backfill the Vercel doc projects, and the blocker the sample found <span class="chip c-plan">—</span></h3><p>PR open 2026-08-24, fourth child of #38. One new script, <code>scripts/backfill_vercel.py</code>, standard library only, five phases over an append-only run directory: <code>inventory</code>, <code>map</code>, <code>stage</code>, <code>activate</code>, <code>report</code>. A page is identified by <strong>hashing its live bytes against git history</strong>, never by parsing its project name — <code>{project}-{purpose}-{ref}</code> is ambiguous, so a name can parse to a real but wrong project. The publish target is a separate field: the document&#x27;s CURRENT committed page. Comparing the historical match against Vercel would have been a tautology, and would have migrated the stale version of every drifted document.</p>
@@ -388,9 +403,19 @@ bytes (fetched and inspected) plus a test pinning the build-time string as the c
 drift surfaces as honest refusals, never silent wrongness. The exact-label branch stays
 tolerant of a future cap change by design — the paired High finding asking to harden it
 was declined for exactly that reason.</p></div></div></section>
+<section class="mstone rm-epic"><h3>2026-08-24 — the Vercel era ends (5.0.0) <span class="chip c-plan">—</span></h3><p>Owner instruction: rip every Vercel mention out of the plugin. What changed, in one entry:</p>
+<ul>
+<li><strong>The #37 backfill tool is deleted</strong> (<code>scripts/backfill_vercel.py</code>, its 105 tests, both fixtures). Convention resolution (4.0.0) made the migration unnecessary; git history and the dated #37 documents keep the record.</li>
+<li><strong><code>setup.py</code> checks the harness, not a vendor CLI</strong>: workspace file, <code>DOC_HARNESS_CONTROL_URL</code>, <code>DOC_HARNESS_PUBLISH_TOKEN</code>, the edge pair — and a READ-ONLY probe of the control API&#x27;s read-back route, proven over a real socket in <code>test_first_run.py</code>.</li>
+<li><strong><code>user_config</code> lost the account scope</strong>; it owns the workspace pointer alone. A vendor-free <code>validate_name</code> guards <code>--add-project</code>.</li>
+<li><strong><code>publish_doc</code> control calls carry <code>Host: docs-control.&lt;zone&gt;</code> over plaintext</strong>, fixing the measured #36 defect where a loopback publish was impossible and the live proof needed a hand-written client.</li>
+<li><strong><code>build_index</code> is a pure renderer</strong>: the standalone CLI that walked the vendor&#x27;s project list is gone; the harness walk is its only data source.</li>
+<li><strong><code>deploy_check</code> looks for a zone link</strong>, not a vendor hostname.</li>
+<li>Dated planning, review, runbook and measurement documents are HISTORY and keep their words; this log gets entries appended, never rewritten.</li>
+</ul></section>
 
 </main>
-<footer>Last updated: 2026-08-24 13:44 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-08-25 12:56 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
