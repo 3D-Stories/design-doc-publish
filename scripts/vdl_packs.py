@@ -67,6 +67,18 @@ SEEDS = {
     "sysop":            {"light": "#0e7d6d", "dark": "#7fe0cf", "note": "index colour, 4.69:1"},
     "3dstories-bench":  {"light": "#b3325d", "dark": "#f27e9d", "note": "index colour, 5.54:1"},
     "thewanderinginn":  {"light": "#a84f2e", "dark": "#e0876b", "note": "index colour, 5.12:1"},
+    # THIS repository, added by #56, and the values are not a new choice: they are
+    # PALETTE[2], the colour the name hash was already handing out. Three committed planning
+    # documents shipped wearing it before anyone declared it, which is the whole defect —
+    # the accent was resolved through `~/.config/design-doc-publish/workspace.json`, whose
+    # entry for this project carries no `path`, so `_project_config` returned None silently
+    # and the hash decided the branding of public pages. Seeding it here makes the fallback
+    # unreachable for this project and the answer a property of the repository. Same two
+    # colours land in this repo's own `.rawgentic.json` `vdl` block, so the `declared` path
+    # agrees rather than being overridden — `test_vdl_packs.py` pins the two to each other.
+    "design-doc-publish": {"light": "#4f7d15", "dark": "#b7e87f",
+                           "note": "PALETTE[2], adopted as-declared in #56 — already worn by "
+                                   "three committed planning docs before it was declared"},
 }
 
 # For a project in neither list. All five clear AA in both themes (light 4.58-8.65, dark

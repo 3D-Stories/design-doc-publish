@@ -630,3 +630,94 @@ class TestAnUnconfiguredWorkspaceIsAState:
             vdl_packs.pack_for("a-brand-new-thing", None)["accent"]["dark"],
             vdl_packs.pack_for("a-brand-new-thing", None)["accent"]["light"],
         )
+
+
+class TestThisRepositoryDeclaresItsOwnAccent:
+    """#56 — the accent for THIS project must not depend on an unversioned workspace file.
+
+    `pack_for` resolves **declared → seed → fallback**, and that order is deliberate: a
+    project that declares its own colour supersedes a seed. So the fix is not a reordering.
+    It is making the two reachable answers IDENTICAL — a `SEEDS` entry and a matching `vdl`
+    block in this repository's own committed `.rawgentic.json` — after which it no longer
+    matters which one a given machine's workspace happens to reach.
+
+    Before this, `design-doc-publish` was in neither table, so `_fallback` hashed the name
+    and three committed planning documents shipped wearing a colour nobody had declared.
+    Both directions are pinned here, because the mechanism IS the agreement: either half
+    alone leaves the other free to drift, and a drift restores the defect silently.
+    """
+
+    OWN_CONFIG = Path(__file__).resolve().parent.parent.parent / ".rawgentic.json"
+
+    def test_the_seed_entry_exists(self):
+        assert "design-doc-publish" in vdl_packs.SEEDS, (
+            "without a SEEDS entry `_fallback` hashes the name, so this project's committed "
+            "pages wear a colour chosen by sha256 — the #56 defect")
+
+    def test_this_repository_declares_a_vdl_block(self):
+        declared = json.loads(self.OWN_CONFIG.read_text(encoding="utf-8")).get("vdl")
+        assert declared is not None, (
+            f"{self.OWN_CONFIG} carries no `vdl` block, so a workspace that names this "
+            f"project WITH a path resolves the `declared` branch to nothing and the answer "
+            f"depends on which machine is rendering")
+
+    def test_the_declaration_and_the_seed_carry_THE_SAME_COLOURS(self):
+        """The load-bearing assertion. If these two ever disagree, the answer depends again on
+        whether a given machine's workspace reaches the declared branch — which is the whole
+        defect, restored quietly."""
+        seed = vdl_packs.SEEDS["design-doc-publish"]
+        declared = json.loads(self.OWN_CONFIG.read_text(encoding="utf-8"))["vdl"]["accent"]
+        assert declared == {"light": seed["light"], "dark": seed["dark"]}, (
+            f"the committed declaration {declared} and the seed "
+            f"{ {'light': seed['light'], 'dark': seed['dark']} } have drifted apart; make "
+            f"them equal or the accent depends on unversioned workspace state again")
+
+    def test_the_declaration_is_a_block_pack_for_would_actually_accept(self, tmp_path):
+        """A `vdl` block that fails `load_pack`'s validation falls open to the seed with a
+        warning, so the two could 'agree' while the declaration was inert. Feed the real
+        committed block through the real reader."""
+        cfg = tmp_path / ".rawgentic.json"
+        cfg.write_text(self.OWN_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+        pack = vdl_packs.load_pack("design-doc-publish", cfg)
+        assert pack is not None, (
+            "load_pack rejected this repository's own committed vdl block, so the declared "
+            "branch is inert and only the seed is doing any work")
+        assert pack["origin"] == "declared"
+        seed = vdl_packs.SEEDS["design-doc-publish"]
+        assert pack["accent"] == {"light": seed["light"], "dark": seed["dark"]}
+
+    def test_no_workspace_at_all_resolves_to_the_seed(self):
+        """The README's first command runs on a machine that has never seen setup. It must
+        reach the committed seed rather than the name hash."""
+        pack = vdl_packs.pack_for("design-doc-publish", None)
+        assert pack["origin"] == "seed"
+        assert pack["source"] == "vdl_packs.SEEDS"
+
+    def test_a_workspace_naming_the_project_bare_resolves_to_the_same_colour(self, tmp_path):
+        """Today's real state: `setup.py --add-project` writes `{"name": ...}` with no `path`,
+        so `_project_config` returns None silently. That used to reach the hash."""
+        ws = tmp_path / "workspace.json"
+        ws.write_text(json.dumps({"projects": [{"name": "design-doc-publish"}]}),
+                      encoding="utf-8")
+        assert (vdl_packs.pack_for("design-doc-publish", ws)["accent"]
+                == vdl_packs.pack_for("design-doc-publish", None)["accent"])
+
+    def test_a_workspace_pointing_at_this_repository_resolves_to_the_same_colour(self, tmp_path):
+        """The `declared` branch, reached for real. This is the case the agreement exists for:
+        a workspace WITH a path finds the committed block, and the answer does not move."""
+        repo = tmp_path / "design-doc-publish"
+        repo.mkdir()
+        (repo / ".rawgentic.json").write_text(
+            self.OWN_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+        ws = tmp_path / "workspace.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "design-doc-publish", "path": "design-doc-publish"}]}), encoding="utf-8")
+        pack = vdl_packs.pack_for("design-doc-publish", ws)
+        assert pack["origin"] == "declared"
+        assert pack["accent"] == vdl_packs.pack_for("design-doc-publish", None)["accent"]
+
+    def test_the_committed_accent_clears_AA_through_the_lint_gate(self):
+        """Not an asserted ratio — the same check `TestEveryPackClearsAA` applies to every other
+        pack, applied to this one. A declared colour that failed contrast would ship an
+        inaccessible page with a green suite."""
+        assert lint.lint(_page(vdl_packs.pack_for("design-doc-publish", None))) == []
