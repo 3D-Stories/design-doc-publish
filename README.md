@@ -167,6 +167,14 @@ python3 scripts/render-doc --md hello.md --out hello.html --title "Hello"
 > `DOC_HARNESS_PUBLISH_TOKEN`. Since 4.0.0 the harness also serves BY CONVENTION: a document
 > whose html file exists in a repository is reachable at its derived hostname with no publish
 > step at all — publishing remains the way to pin a page and to verify it end to end.
+>
+> **Publishing from anywhere but the harness host needs two more (#54).** Off that host there is
+> no loopback address to reach, so `DOC_HARNESS_CONTROL_URL` names the public control host
+> (`https://docs-control.<zone>`) and Cloudflare Access stands in front of it. Set
+> `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` — the same service-token pair the edge
+> verification half already uses — and the control calls carry them. Set only one and the
+> publish refuses locally, naming the missing variable, rather than failing later as a login
+> redirect that reads like a broken server.
 
 Rendering needs nothing, and that has not changed. **Publishing needs a reachable harness and its
 publish token.** Nothing about your machine is assumed.
@@ -192,7 +200,9 @@ python3 "$DDP/scripts/setup.py" --add-project my-project     # a name you can pu
 
 The harness endpoint and tokens are read from the environment on every run — setup never
 records them. Export `DOC_HARNESS_CONTROL_URL` and `DOC_HARNESS_PUBLISH_TOKEN` in the shell
-that publishes.
+that publishes, plus `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` when that control URL
+is the public control host. Setup reports an incomplete pair rather than calling the machine
+ready and leaving the publish to discover it.
 
 </details>
 
@@ -230,6 +240,7 @@ code is the verdict.
 | A POSIX system | `setup.py` serializes its writes with `fcntl`, which Windows does not have. Rendering itself is platform-neutral | setup refuses with a sentence rather than a traceback where locking is unavailable |
 | `git` | only for publishing, not for rendering | needed from stage 4: the manifest pins a commit, and the harness fetches its blobs from GitHub |
 | A reachable doc harness | only for publishing | `DOC_HARNESS_CONTROL_URL`, required with no default. See the harness section below |
+| A Cloudflare Access service token | only for publishing from a machine that is not the harness host | `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`, both or neither. Off the harness host the control URL is the public control host, and Access answers before the harness does |
 | A GitHub remote | only for publishing | the manifest's `repo` is derived from it, never configured beside it |
 
 ## Choosing a `--type`
