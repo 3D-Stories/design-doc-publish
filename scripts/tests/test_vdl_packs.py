@@ -83,8 +83,23 @@ class TestEveryPackClearsAA:
     @pytest.mark.parametrize("project", sorted(vdl_packs.SEEDS))
     def test_every_seed_lints_clean(self, project, tmp_path):
         pack = vdl_packs.pack_for(project, _workspace(tmp_path, {}))
-        assert pack["origin"] == "seed"
+        # `declared` for exactly one seeded project: THIS repository, whose own committed
+        # declaration is always reachable and now outranks a workspace pointer (#56). Every
+        # other seed still resolves to `seed`, so the carve-out is named rather than the
+        # assertion being loosened to "either" for all of them — that would stop this test
+        # noticing if some other project's seed quietly stopped being reached.
+        expected = "declared" if project == "design-doc-publish" else "seed"
+        assert pack["origin"] == expected
+        # Unchanged, and the point of the test: the COLOUR clears the lint gate on a real
+        # rendered page. For this repository that is now its declaration, which
+        # `TestThisRepositoryDeclaresItsOwnAccent` pins equal to its seed anyway.
         assert lint.lint(_page(pack)) == []
+
+    @pytest.mark.parametrize("project", sorted(set(vdl_packs.SEEDS) - {"design-doc-publish"}))
+    def test_every_other_seed_is_still_reached_through_the_chain(self, project, tmp_path):
+        """The blast-radius control for #56, stated as its own test rather than left implicit in
+        the carve-out above: the early own-repository answer must fire for THIS project only."""
+        assert vdl_packs.pack_for(project, _workspace(tmp_path, {}))["origin"] == "seed"
 
     @pytest.mark.parametrize("index", range(len(vdl_packs.PALETTE)))
     def test_every_fallback_colour_lints_clean(self, index):
@@ -686,9 +701,34 @@ class TestThisRepositoryDeclaresItsOwnAccent:
         seed = vdl_packs.SEEDS["design-doc-publish"]
         assert pack["accent"] == {"light": seed["light"], "dark": seed["dark"]}
 
-    def test_no_workspace_at_all_resolves_to_the_seed(self):
-        """The README's first command runs on a machine that has never seen setup. It must
-        reach the committed seed rather than the name hash."""
+    def test_no_workspace_at_all_resolves_to_a_COMMITTED_answer(self):
+        """The README's first command runs on a machine that has never seen setup. It must reach
+        a committed answer rather than the name hash.
+
+        Renamed and re-asserted after #56's production fix. The INTENT is unchanged and is the
+        thing that matters — never the hash. What changed is which committed source answers:
+        this repository's own declaration is always reachable and is now consulted first, so the
+        origin is `declared` rather than `seed`. The colour is identical either way, which
+        `test_the_declaration_and_the_seed_carry_THE_SAME_COLOURS` is what guarantees.
+        """
+        pack = vdl_packs.pack_for("design-doc-publish", None)
+        assert pack["origin"] == "declared"
+        assert pack["origin"] != "fallback", "the name hash is the #56 defect"
+        seed = vdl_packs.SEEDS["design-doc-publish"]
+        assert pack["accent"] == {"light": seed["light"], "dark": seed["dark"]}
+
+    def test_the_seed_still_covers_a_machine_whose_own_config_cannot_be_read(self, tmp_path,
+                                                                            monkeypatch):
+        """The seed is not redundant now that the declaration wins — it is the floor beneath it.
+
+        A checkout whose `.rawgentic.json` is missing or corrupt must still reach the seed and
+        never the name hash. Without this, #56's fix would have quietly made the seed dead code,
+        and the original defect would return on exactly the broken-config machine that can least
+        afford a surprise.
+        """
+        empty = tmp_path / "scripts"
+        empty.mkdir()
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", empty)
         pack = vdl_packs.pack_for("design-doc-publish", None)
         assert pack["origin"] == "seed"
         assert pack["source"] == "vdl_packs.SEEDS"
@@ -721,3 +761,118 @@ class TestThisRepositoryDeclaresItsOwnAccent:
         pack, applied to this one. A declared colour that failed contrast would ship an
         inaccessible page with a green suite."""
         assert lint.lint(_page(vdl_packs.pack_for("design-doc-publish", None))) == []
+
+
+class TestTheEXECUTINGTreeOwnsItsOwnAccent:
+    """#56, Step 8a cross-model Critical — the PRODUCTION path, not just the guard's.
+
+    Convergence between `SEEDS` and this repository's own `.rawgentic.json` made resolution
+    deterministic *within one tree*. It did not stop a workspace file from pointing the NAME
+    `design-doc-publish` at a DIFFERENT tree whose config declares another colour: production
+    then emitted that colour, while the byte-identity guard stayed green because it passes
+    `workspace_file=None`. Measured before this fix — production emitted `--accent:#eeeeee`
+    where the committed sources say `#b7e87f`.
+
+    That is exactly what AC2 forbids: "deterministic given `--project` and the committed
+    sources, not dependent on unversioned state in `~/.config`." A workspace pointer IS
+    unversioned state, and it was selecting the answer.
+
+    The rule now: **a project's own committed declaration, in the tree that is EXECUTING,
+    outranks a workspace pointer to some other tree wearing the same name.** This is not a
+    reordering of `declared → seed → fallback`; it is a narrower question asked first — "am I
+    being asked about myself?" — and for every OTHER project the chain is untouched, so
+    `vdl_packs.py:48-54`'s chorestory intent (a project's own declaration supersedes its seed)
+    still holds and in fact generalizes: any repository vendoring this module now gets the same
+    guarantee about its own pages.
+    """
+
+    def test_a_workspace_pointing_at_ANOTHER_tree_cannot_change_our_accent(self, tmp_path):
+        """The counterexample the cross-model review found, as a permanent regression test."""
+        other = tmp_path / "some-other-checkout"
+        other.mkdir()
+        (other / ".rawgentic.json").write_text(json.dumps({
+            "project": {"name": "design-doc-publish"},
+            "vdl": {"accent": {"light": "#111111", "dark": "#eeeeee"},
+                    "source": "a different checkout of the same project",
+                    "note": "must not win over the tree that is executing"}}), encoding="utf-8")
+        ws = tmp_path / "workspace.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "design-doc-publish", "path": "some-other-checkout"}]}), encoding="utf-8")
+
+        pack = vdl_packs.pack_for("design-doc-publish", ws)
+        assert pack["accent"]["light"] != "#111111", (
+            "a workspace pointer to another tree still selects our accent, so AC2 is not met")
+        assert pack["accent"] == vdl_packs.pack_for("design-doc-publish", None)["accent"]
+
+    @pytest.mark.parametrize("state", ["absent", "bare-name", "own-repo", "other-repo"])
+    def test_css_layer_is_byte_identical_across_every_workspace_state(self, state, tmp_path):
+        """AC2, asserted on the bytes that actually reach the page rather than on the pack.
+
+        Four workspace states, one required answer. `css_layer` is the sink, so comparing its
+        output is comparing what a reader would see.
+        """
+        own = Path(vdl_packs.__file__).resolve().parent.parent / ".rawgentic.json"
+        if state == "absent":
+            ws = None
+        elif state == "bare-name":
+            ws = tmp_path / "ws.json"
+            ws.write_text(json.dumps({"projects": [{"name": "design-doc-publish"}]}),
+                          encoding="utf-8")
+        elif state == "own-repo":
+            here = tmp_path / "design-doc-publish"
+            here.mkdir()
+            (here / ".rawgentic.json").write_text(own.read_text(encoding="utf-8"),
+                                                  encoding="utf-8")
+            ws = tmp_path / "ws.json"
+            ws.write_text(json.dumps({"projects": [
+                {"name": "design-doc-publish", "path": "design-doc-publish"}]}),
+                encoding="utf-8")
+        else:
+            elsewhere = tmp_path / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / ".rawgentic.json").write_text(json.dumps({
+                "project": {"name": "design-doc-publish"},
+                "vdl": {"accent": {"light": "#111111", "dark": "#eeeeee"},
+                        "source": "another tree", "note": "must not win"}}), encoding="utf-8")
+            ws = tmp_path / "ws.json"
+            ws.write_text(json.dumps({"projects": [
+                {"name": "design-doc-publish", "path": "elsewhere"}]}), encoding="utf-8")
+
+        expected = render_vdl.css_layer(vdl_packs.pack_for("design-doc-publish", None))
+        assert render_vdl.css_layer(vdl_packs.pack_for("design-doc-publish", ws)) == expected, (
+            f"workspace state {state!r} changes the bytes a reader sees; AC2 requires the "
+            f"accent to depend only on --project and the committed sources")
+
+    def test_ANOTHER_project_still_resolves_through_the_workspace(self, tmp_path):
+        """The blast-radius control. Only the EXECUTING project's own question is answered
+        early; every other project keeps `declared → seed → fallback` exactly as before, so
+        this is not a reordering and chorestory's declaration still supersedes its seed."""
+        repo = tmp_path / "payments-api"
+        repo.mkdir()
+        (repo / ".rawgentic.json").write_text(json.dumps({
+            "project": {"name": "payments-api"},
+            "vdl": {"accent": {"light": "#123456", "dark": "#abcdef"},
+                    "source": "its own repo", "note": "declared beats seed, unchanged"}}),
+            encoding="utf-8")
+        ws = tmp_path / "ws.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "payments-api", "path": "payments-api"}]}), encoding="utf-8")
+        pack = vdl_packs.pack_for("payments-api", ws)
+        assert pack["origin"] == "declared"
+        assert pack["accent"] == {"light": "#123456", "dark": "#abcdef"}
+
+    def test_the_early_answer_still_goes_through_load_pack_validation(self, tmp_path,
+                                                                     monkeypatch, capsys):
+        """A malformed own-declaration must FALL OPEN to the seed with a warning, exactly as a
+        malformed declaration does anywhere else. Answering early must not mean answering
+        unvalidated — that would be a new way to get an unvalidated hex to the `<style>` sink."""
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        (tmp_path / ".rawgentic.json").write_text(json.dumps({
+            "project": {"name": "design-doc-publish"},
+            "vdl": {"accent": {"light": "not-a-hex", "dark": "#b7e87f"},
+                    "source": "x", "note": "malformed on purpose"}}), encoding="utf-8")
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+        pack = vdl_packs.pack_for("design-doc-publish", None)
+        assert pack["origin"] == "seed", "a malformed own-declaration must fall open to the seed"
+        assert "design-doc-publish" in capsys.readouterr().err

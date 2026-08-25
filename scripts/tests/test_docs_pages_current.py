@@ -34,6 +34,7 @@ sys.path.insert(0, str(TESTS))
 
 from regen_docs_pages import (  # noqa: E402
     PAGES, ROOT, missing_sources, render_bytes, render_page, resolve_pack, undeclared_pairs,
+    validate_key,
 )
 
 sys.path.insert(0, str(TESTS.parent))
@@ -178,17 +179,29 @@ class TestTheAccentComesFromCommittedSourcesOnly:
             {'projects': [{'name': 'design-doc-publish', 'path': 'design-doc-publish'}]}),
             encoding='utf-8')
 
-        # Sanity: the workspace really would change the answer if it were consulted.
-        assert vdl_packs.pack_for('design-doc-publish', ws)['accent']['light'] == '#111111'
-        # And the guard's own resolution is unmoved by it.
+        # The guard's resolution is unmoved by it.
         assert resolve_pack('design-doc-publish')['accent']['light'] != '#111111'
+        # And since #56's production fix, so is the PRODUCTION path — which is the stronger
+        # claim and the one acceptance criterion 2 actually asks for. This assertion replaces
+        # an earlier "sanity check" that asserted the opposite: that a workspace WOULD change
+        # the answer if consulted. It would have, before the fix; that was the Critical the
+        # cross-model review found, and the guard alone could never see it.
+        assert vdl_packs.pack_for('design-doc-publish', ws)['accent']['light'] != '#111111'
+        assert (vdl_packs.pack_for('design-doc-publish', ws)['accent']
+                == resolve_pack('design-doc-publish')['accent'])
 
-    def test_the_answer_comes_from_the_committed_seed_table(self):
+    def test_the_answer_comes_from_a_COMMITTED_source_and_never_the_hash(self):
+        """The property that matters is never-the-hash, not which committed table answers.
+
+        Re-asserted after #56's production fix moved the answer from `seed` to `declared`: this
+        repository's own committed declaration is now consulted first. Both are committed, both
+        carry the same colour (pinned by `test_the_declaration_and_the_seed_carry_THE_SAME_COLOURS`),
+        and `fallback` is the defect either way.
+        """
         pack = resolve_pack('design-doc-publish')
-        assert pack['origin'] == 'seed', (
-            f"expected the committed SEEDS entry, got origin={pack['origin']!r}. A 'fallback' "
-            f"here means the seed entry is gone and the colour is a name hash again — the #56 "
-            f"defect exactly.")
+        assert pack['origin'] in ('declared', 'seed'), (
+            f"origin={pack['origin']!r}. A 'fallback' here means both committed sources are "
+            f"unreachable and the colour is a name hash again — the #56 defect exactly.")
         seed = vdl_packs.SEEDS['design-doc-publish']
         assert pack['accent'] == {'light': seed['light'], 'dark': seed['dark']}
 
@@ -211,3 +224,66 @@ class TestTheAccentComesFromCommittedSourcesOnly:
         # them. A third value would mean a pack layer leaked onto a pack-free page.
         import re
         assert set(re.findall(r'--accent:#([0-9a-f]{6})', page)) == {'0f766e', '2dd4bf'}
+
+
+class TestManifestKeysCannotEscapeTheDocsTree:
+    """#56, Step 8a cross-model review — a claim this module publishes, now enforced.
+
+    Keys were joined straight onto `ROOT` and then read from and written to. No committed key
+    escapes, which was checked — but "none does" is not "none can", and both this module's
+    docstring and the design note's security section CLAIM the writes stay under `docs/`. An
+    unenforced published claim is the defect.
+    """
+
+    def test_every_committed_key_passes(self):
+        for key in PAGES:
+            validate_key(key)
+
+    @pytest.mark.parametrize("key", [
+        '/etc/passwd',                 # absolute
+        'C:/Windows/system32/x',       # absolute, drive-letter form
+        'docs/../../etc/shadow',       # traversal out through docs
+        '../docs/elsewhere',           # traversal before docs
+        'notdocs/page',                # outside docs entirely
+        'docs',                        # the directory itself, no page
+        '',                            # empty
+        ' docs/padded',                # padded
+        'docs/trailing ',              # padded the other way
+    ])
+    def test_a_dangerous_key_is_refused(self, key):
+        with pytest.raises(ValueError):
+            validate_key(key)
+
+    def test_a_symlinked_page_is_refused(self, tmp_path, monkeypatch):
+        """The half the first review of this file MISSED.
+
+        `write_bytes` FOLLOWS a symlink, so a `docs/foo.html` pointing outside the tree would
+        silently carry the write with it — no traversal in the key at all. `resolve()` collapses
+        the link before the containment test, so the check sees where the byte would land rather
+        than where the key says it would.
+        """
+        import regen_docs_pages as rdp
+        fake_root = tmp_path / 'repo'
+        (fake_root / 'docs' / 'planning').mkdir(parents=True)
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        (outside / 'stolen.html').write_text('', encoding='utf-8')
+        (fake_root / 'docs' / 'planning' / 'trap.md').write_text('# x', encoding='utf-8')
+        (fake_root / 'docs' / 'planning' / 'trap.html').symlink_to(outside / 'stolen.html')
+
+        monkeypatch.setattr(rdp, 'ROOT', fake_root)
+        monkeypatch.setattr(rdp, 'DOCS', fake_root / 'docs')
+        with pytest.raises(ValueError, match='outside'):
+            rdp.validate_key('docs/planning/trap')
+
+    def test_a_plain_page_under_a_fake_root_is_accepted(self, tmp_path, monkeypatch):
+        """The negative control: the symlink test must fail for the SYMLINK, not merely because
+        the root was swapped. Without this, a validator that rejected everything would pass."""
+        import regen_docs_pages as rdp
+        fake_root = tmp_path / 'repo'
+        (fake_root / 'docs' / 'planning').mkdir(parents=True)
+        (fake_root / 'docs' / 'planning' / 'ok.md').write_text('# x', encoding='utf-8')
+        (fake_root / 'docs' / 'planning' / 'ok.html').write_text('', encoding='utf-8')
+        monkeypatch.setattr(rdp, 'ROOT', fake_root)
+        monkeypatch.setattr(rdp, 'DOCS', fake_root / 'docs')
+        rdp.validate_key('docs/planning/ok')

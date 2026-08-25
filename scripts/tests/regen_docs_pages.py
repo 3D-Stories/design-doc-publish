@@ -56,6 +56,7 @@ exemplar, and the cross-style guards. Two different failures; this one only ever
 second. The can-it-fail test and the sentinels in the guard are what stop a page regenerated
 from a broken engine passing silently.
 """
+import pathlib
 import sys
 from pathlib import Path
 
@@ -173,6 +174,40 @@ def pairs_on_disk() -> set:
             for h in ROOT.glob('docs/**/*.html') if h.with_suffix('.md').is_file()}
 
 
+DOCS = ROOT / 'docs'
+
+
+def validate_key(key: str) -> None:
+    """Refuse a manifest key that could read or write outside `docs/`.
+
+    Added after the Step 8a cross-model review pointed out that keys were joined straight onto
+    `ROOT` and then read from and written to. No committed key escapes today — that was checked
+    — but "no key does" is not the same as "no key can", and this module's own docstring, and
+    the design note's security section, both CLAIM the writes stay under `docs/`. A published
+    claim that nothing enforces is the defect; this makes it true rather than asserted.
+
+    The symlink clause is the half worth spelling out, because it is the one the first review
+    of this file missed: `write_bytes` FOLLOWS a symlink, so a `docs/foo.html` pointing outside
+    the tree would silently take the write with it. `resolve()` collapses the link before the
+    containment test, so the check sees where the byte would actually land.
+    """
+    if not key or key != key.strip():
+        raise ValueError(f"manifest key {key!r} is empty or padded")
+    if key.startswith('/') or (len(key) > 1 and key[1] == ':'):
+        raise ValueError(f"manifest key {key!r} is an absolute path")
+    parts = pathlib.PurePosixPath(key).parts
+    if '..' in parts:
+        raise ValueError(f"manifest key {key!r} contains a '..' component")
+    if parts[:1] != ('docs',):
+        raise ValueError(f"manifest key {key!r} does not start with 'docs/'")
+    for suffix in ('.md', '.html'):
+        target = (ROOT / f'{key}{suffix}').resolve()
+        if not target.is_relative_to(DOCS.resolve()):
+            raise ValueError(
+                f"manifest key {key!r} resolves to {target} for {suffix}, outside "
+                f"{DOCS} — a symlinked page would take the write out of the tree")
+
+
 def missing_sources() -> set:
     """Declared pages whose MARKDOWN is absent — the only real authoring error.
 
@@ -252,6 +287,11 @@ def main() -> int:
     #
     # Two DIFFERENT faults, and only these two. A declared page whose `.html` is simply not
     # written yet is neither: that is a new document, and writing it is this script's job.
+    # Containment BEFORE anything is read or written. A bad key must never reach a read or a
+    # write, so this runs ahead of every other check.
+    for key in sorted(PAGES):
+        validate_key(key)
+
     faults = False
     for key in sorted(missing_sources()):
         print(f"  NO MARKDOWN       {key}.md is absent — nothing can be rendered from it. "

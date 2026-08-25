@@ -257,6 +257,55 @@ def _fallback(project: str) -> dict:
             "source": "vdl_packs.PALETTE", "note": f"no declaration or seed for {project}"}
 
 
+_MODULE_DIR = Path(__file__).resolve().parent
+
+
+def _own_repository_config(project: str) -> Path | None:
+    """This module's OWN repository config, when `project` is that repository. Else None.
+
+    #56. Convergence between `SEEDS` and a repository's committed declaration made resolution
+    deterministic *within one tree*, and that was not enough. A workspace file could still point
+    the NAME at a DIFFERENT tree whose config declared another colour, and production emitted
+    that colour — measured: `--accent:#eeeeee` where the committed sources said `#b7e87f`. A
+    workspace pointer is unversioned state, so it was selecting the answer, which is precisely
+    what this project's AC2 forbids.
+
+    The rule: **a project's own committed declaration, in the tree that is EXECUTING, outranks a
+    workspace pointer to some other tree wearing the same name.** Asked FIRST, because by the
+    time `_project_config` has followed the pointer the wrong tree is already chosen.
+
+    This is not a reordering of `declared → seed → fallback`. It is a narrower question asked
+    ahead of it, and it fires only when the requested name IS this tree's own. Every other
+    project resolves exactly as before, so the deliberate intent at lines 48-54 — chorestory's
+    seed is a stand-in that its own declaration must supersede — is untouched, and in fact
+    generalizes: any repository vendoring this module now gets the same guarantee about its own
+    pages.
+
+    Fails open, like everything else here. An unreadable or malformed own-config returns None
+    and resolution continues down the ordinary chain; the answer is then the seed, not a crash.
+    """
+    config = _MODULE_DIR.parent / ".rawgentic.json"
+    if not config.exists():
+        return None                                   # silent: not a configured repository
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # Deliberately silent, and this is the one place that difference is right: `load_pack`
+        # warns about a config it was ASKED to read, whereas this one is speculative — it is
+        # consulted on every render of every project, so warning here would print on the
+        # ordinary path for anyone whose repository has no config of its own.
+        return None
+    if not isinstance(data, dict):
+        return None
+    own = data.get("project")
+    if not isinstance(own, dict):
+        return None
+    name = own.get("name")
+    if not isinstance(name, str) or name.strip().lower() != project:
+        return None                                   # a different project: not our question
+    return config
+
+
 def pack_for(project: str, workspace_file: Path | None) -> dict:
     """The colour for `project`: declared → seed → deterministic fallback.
 
@@ -266,8 +315,22 @@ def pack_for(project: str, workspace_file: Path | None) -> dict:
 
     `workspace_file` may be `None` (#9): a machine with no configured workspace resolves
     through the seed table and then the name hash, silently.
+
+    One question is asked BEFORE the chain (#56): is `project` the repository this module is
+    executing inside? If so its own committed declaration wins, because a workspace pointer to
+    another tree of the same name is unversioned state and must not choose a committed page's
+    branding. See `_own_repository_config`. Every other project is unaffected.
     """
     project = (project or "").strip().lower()
+    own = _own_repository_config(project)
+    if own is not None:
+        declared = load_pack(project, own)
+        if declared is not None:
+            # Still through `load_pack`, deliberately: answering early must not mean answering
+            # UNVALIDATED, or this would be a new route for an unchecked hex to reach the
+            # `<style>` sink. A malformed own-declaration warns and falls through to the seed,
+            # exactly as a malformed declaration does anywhere else.
+            return declared
     config = _project_config(project, workspace_file)
     if config is not None:
         declared = load_pack(project, config)

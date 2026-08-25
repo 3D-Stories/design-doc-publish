@@ -240,6 +240,27 @@ border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
 .tpl-design tbody tr:nth-child(even){background:var(--code)}
 .tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
 
+/* An ordinary fenced listing, in a box with its language and a copy button. RICH ONLY —
+   `plain` carries no template CSS by definition and stays a bare <pre>. The box owns the
+   border, radius and ground that `pre` supplies on its own elsewhere, so the bar and the
+   listing share one outline instead of stacking two. */
+.doc-code{margin:0 0 14px;border:1px solid var(--line);border-radius:10px;
+background:var(--code);overflow:hidden}
+.doc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:5px 8px 5px 14px;border-bottom:1px solid var(--line)}
+.doc-code-lang{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-code-copy{flex:none;font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:6px;
+padding:3px 10px;cursor:pointer}
+.doc-code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-code-copy[data-state=ok]{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy[data-state=fail]{color:var(--ink-2);border-color:var(--ink-3)}
+.doc-code>pre{margin:0;border:0;border-radius:0;background:none}
+/* Paper cannot take a copy. Printing the control would print a button that does nothing. */
+@media print{.doc-code-copy{display:none}}
+
 :root{--accent:#b7e87f;}
 :root[data-theme=dark]{--accent:#b7e87f;}
 :root[data-theme=light]{--accent:#4f7d15;}
@@ -278,7 +299,7 @@ border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
 <p>Five pages already round-trip clean: <code>docs/design-language-example</code>, <code>docs/examples/gallery/plain</code>, <code>docs/planning/2026-08-24-37-vercel-backfill</code> (all three with no pack), and <code>docs/planning/2026-08-23-github-doc-harness-spec</code> plus <code>docs/planning/2026-08-25-access-architecture-consult</code> (both <strong>with</strong> the pack — so the green fallback is already shipping on two committed planning docs).</p>
 <p>Owner decision, 2026-08-25: honor acceptance criterion 1 literally and cover all 18 pairs, re-rendering the 13 stale ones in this PR.</p>
 <h2>The approach</h2>
-<p>Three changes, none of which reorders the resolution chain.</p>
+<p>Four changes, none of which reorders the resolution chain. The fourth (1b) was not in the original design — it was forced by the Step 8a cross-model review, which proved the first three left acceptance criterion 2 only partly met.</p>
 <h3>1. Make the chain converge (acceptance criterion 2)</h3>
 <p><code>pack_for</code> walks <strong>declared → seed → fallback</strong>, and that order is deliberate: a project that declares its own colour must supersede a seed (<code>scripts/vdl_packs.py:48-54</code> says so explicitly for chorestory). Reordering it would break that intent, so this design does not.</p>
 <p>Instead it makes the two reachable answers <strong>identical</strong>:</p>
@@ -287,9 +308,27 @@ border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
 <li>add a <code>vdl</code> block carrying the <strong>same</strong> two colours to this repository&#x27;s own committed <code>.rawgentic.json</code>, which makes the <code>declared</code> path resolve to the same answer whenever a workspace does name a path here;</li>
 <li>pin the two to each other with a test, so they cannot drift apart later.</li>
 </ul>
-<p>After that the answer is the same whether the workspace names a path, names the project bare, or does not exist at all. The <code>~/.config</code> state stops being able to change the colour.</p>
+<p>After that the answer is the same whether the workspace names a path <em>to this tree</em>, names the project bare, or does not exist at all.</p>
+<p><strong>That is not yet enough, and §1b is why.</strong> It leaves the case where the workspace names a path to a DIFFERENT tree — which the first draft of this note dismissed and the review did not.</p>
 <p><strong>Why <code>#4f7d15</code> / <code>#b7e87f</code> and not a new colour.</strong> It is what two committed planning docs already wear, so adopting it re-renders one page instead of three and turns an accident into a declaration. It is a <code>PALETTE</code> entry, and <code>PALETTE</code>&#x27;s own contract is that all five clear WCAG AA in both themes against this renderer&#x27;s surfaces (<code>scripts/vdl_packs.py:72-75</code>), which <code>test_vdl_packs.py</code> measures rather than trusts. Reversible in one line each if the owner wants a different colour.</p>
-<p><strong>Residual, stated rather than hidden.</strong> A workspace that points the <em>name</em> <code>design-doc-publish</code> at some <em>other</em> repository whose <code>.rawgentic.json</code> declares a different <code>vdl</code> block would still change the colour. That is a misconfigured workspace, not renderer non-determinism, and <code>_project_config</code> already refuses a path that escapes the workspace root (<code>scripts/vdl_packs.py:226-230</code>). Closing it completely would require reordering the chain, which costs the chorestory intent above. Named here so the Step 4 rubric can test the reading rather than discover it.</p>
+<h3>1b. The residual I first dismissed, and then had to fix</h3>
+<p>The paragraph that used to sit here said a workspace pointing the <em>name</em> <code>design-doc-publish</code> at some <em>other</em> repository was &quot;a misconfigured workspace, not renderer non-determinism&quot;, and left it at that. <strong>That dismissal was wrong</strong>, and the Step 8a cross-model review said so at Critical. Acceptance criterion 2 has no misconfiguration exemption: it asks for the accent to be deterministic given <code>--project</code> and the committed sources, full stop.</p>
+<p>Worse, the new guard could not see the violation, because it passes <code>workspace_file=None</code> by design. So the gate would have stayed green while production emitted a different colour — a guard that passes exactly what it exists to refuse.</p>
+<p><strong>Measured, not argued.</strong> With a workspace pointing the name at another tree declaring <code>#111111</code> / <code>#eeeeee</code>:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>GUARD  (workspace_file=None)   : seed      {&#x27;light&#x27;: &#x27;#4f7d15&#x27;, &#x27;dark&#x27;: &#x27;#b7e87f&#x27;}
+PROD   (workspace -&gt; other)    : declared  {&#x27;light&#x27;: &#x27;#111111&#x27;, &#x27;dark&#x27;: &#x27;#eeeeee&#x27;}
+css_layer byte-identical?      : False
+  guard emits: :root{--accent:#b7e87f;}
+  prod  emits: :root{--accent:#eeeeee;}</code></pre></div>
+<p><strong>The fix, decided by the owner after that measurement.</strong> One question is now asked BEFORE the chain: <em>is this project the repository the module is executing inside?</em> If so, that tree&#x27;s own committed declaration wins — <code>_own_repository_config</code> in <code>scripts/vdl_packs.py</code>, consulted first, because by the time <code>_project_config</code> has followed the workspace pointer the wrong tree is already chosen.</p>
+<p>It is still <strong>not a reordering</strong> of <code>declared → seed → fallback</code>. It is a narrower question asked ahead of it, and it fires only when the requested name is this tree&#x27;s own — verified for every seeded project: <code>_own_repository_config</code> returns <code>None</code> for <code>chorestory</code>, <code>saystory</code>, <code>rawgentic</code>, <code>sysop</code> and an invented <code>payments-api</code>, and a path only for <code>design-doc-publish</code>. So the chorestory intent at <code>scripts/vdl_packs.py:48-54</code> is untouched, and it generalizes: any repository vendoring this module now gets the same guarantee about its own pages.</p>
+<p>Three properties held deliberately, each with its own test:</p>
+<ul>
+<li><strong>The early answer is still VALIDATED.</strong> It goes through <code>load_pack</code>, so a malformed own-declaration warns and falls through to the seed. Answering early must not mean answering unvalidated, or this would be a new route for an unchecked hex to reach the <code>&lt;style&gt;</code> sink.</li>
+<li><strong>The seed is not now dead code — it is the floor.</strong> A checkout whose own <code>.rawgentic.json</code> is missing or corrupt still reaches the seed, never the name hash. Without that test, this fix would have quietly made the seed unreachable and restored the original defect on exactly the broken-config machine that can least afford a surprise.</li>
+<li><strong>Byte-identical across all four workspace states</strong> — absent, bare name, own repository, another repository — asserted on <code>css_layer</code>&#x27;s output, because that is what a reader sees.</li>
+</ul>
+<p>Two existing tests changed as a consequence, and neither was weakened. <code>TestEveryPackClearsAA::test_every_seed_lints_clean</code> now expects <code>declared</code> for this one project and <code>seed</code> for every other, with a separate test pinning that the carve-out fires for this project ALONE — rather than loosening the assertion to &quot;either&quot;, which would have stopped it noticing if some other project&#x27;s seed quietly stopped being reached. And a test of mine that asserted <code>origin == &quot;seed&quot;</code> with no workspace now asserts <code>declared</code>, plus explicitly that it is never <code>fallback</code>, since never-the-hash was always the property that mattered.</p>
 <h3>2. A permanent gate over every committed pair (acceptance criterion 1)</h3>
 <p>New <code>scripts/tests/regen_docs_pages.py</code> + <code>scripts/tests/test_docs_pages_current.py</code>, following the established pattern in <code>regen_rendered_styles.py</code> / <code>test_rendered_styles_current.py</code> rather than inventing one. Import direction is forced the same way: the recipe lives in the regenerator and the test imports it, because <code>pytest</code> is not importable under a bare <code>python3</code> on this host.</p>
 <p>What is new versus that precedent, and why:</p>
@@ -326,7 +365,8 @@ border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
 <li>run <code>python3 scripts/tests/regen_docs_pages.py</code>;</li>
 <li>commit the markdown, the manifest and the regenerated HTML together.</li>
 </ol>
-<p><strong>A related observation, not a finding.</strong> <code>publish_doc.py:1289</code> uses <code>write_text</code>, which applies platform newline translation, so a publish from Windows would commit CRLF. That is pre-existing and inert on this Linux host, but this gate compares <strong>bytes</strong> (following <code>regen_rendered_styles.py</code>, whose docstring records that a text-I/O &quot;byte-identity&quot; guard is not one), so the gate would surface it rather than bless it. Surfacing it is the correct behavior and needs no change here.</p>
+<p><strong>Related platform behavior.</strong> <code>publish_doc.py:1289</code> uses <code>write_text</code>, which applies platform newline translation, so a publish from Windows would commit CRLF. That behavior predates this change and has no effect on this Linux host. This gate compares <strong>bytes</strong>, following <code>regen_rendered_styles.py</code>, whose docstring records that a text-I/O &quot;byte-identity&quot; guard is not one — so a CRLF-committed page would turn the gate red rather than compare equal.</p>
+<p>*(Reworded after the Step 8a cross-model review flagged the previous phrasing, &quot;a related observation, not a finding&quot;, as verdict-suppression language. It was: <code>&lt;review-severity&gt;</code> forbids telling a reviewer what verdict to reach, and #840 measured that such phrasing works — reviewers duly look elsewhere. The sentence has been reduced to the behavior and its consequence, with no classification attached. Recorded rather than quietly edited, because the rule I broke is one this repository&#x27;s own process is bound by.)*</p>
 <h3>3. Re-render the 13 stale pages (acceptance criterion 3)</h3>
 <p><code>campaign-log.html</code> is re-rendered <strong>with</strong> the pack, so it joins its two siblings at <code>#4f7d15</code> / <code>#b7e87f</code>, and with a new stamp — this PR appends a campaign-log entry, so the document genuinely changed. The 12 gallery pages keep their existing committed stamps: only the renderer moved, and bumping their stamps would falsely claim the documents were updated.</p>
 <p>The gallery pages stay <strong>pack-free</strong> (<code>project: null</code> in the manifest). They are template demonstrations, not project documents, and that matches <code>docs/design-language-example</code> and <code>docs/rendered-styles/*</code>. Their diff is then the single CSS line and nothing else.</p>
@@ -381,5 +421,42 @@ border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
 </main>
 <footer>Last updated: 2026-08-25 14:26 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
 </div>
+<script>
+(function(){
+var boxes=document.querySelectorAll('.doc-code');
+if(!boxes.length)return;
+function fallback(text){
+var ta=document.createElement('textarea');
+ta.value=text;ta.setAttribute('readonly','');
+ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+document.body.appendChild(ta);ta.select();
+var ok=false;
+try{ok=document.execCommand('copy');}catch(e){ok=false;}
+document.body.removeChild(ta);
+return ok;
+}
+function flash(btn,label,state){
+btn.textContent=label;
+btn.setAttribute('data-state',state);
+window.clearTimeout(btn.getAttribute('data-timer'));
+btn.setAttribute('data-timer',window.setTimeout(function(){
+btn.textContent='Copy';btn.removeAttribute('data-state');},2000));
+}
+Array.prototype.forEach.call(boxes,function(box){
+var btn=box.querySelector('.doc-code-copy');
+var code=box.querySelector('code');
+if(!btn||!code)return;
+btn.hidden=false;
+btn.addEventListener('click',function(){
+var text=code.textContent;
+function done(ok){flash(btn,ok?'Copied':'Press Ctrl+C',ok?'ok':'fail');}
+if(navigator.clipboard&&window.isSecureContext){
+navigator.clipboard.writeText(text).then(function(){done(true);},
+function(){done(fallback(text));});
+}else{done(fallback(text));}
+});
+});
+})();
+</script>
 </body>
 </html>

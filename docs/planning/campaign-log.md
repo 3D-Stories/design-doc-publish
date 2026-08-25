@@ -6,7 +6,7 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 ```stats
 7 | issues on this log
 56 | newest: PR open, a committed page must re-render to itself
-3023/3079 | suite, baseline to this PR
+3023/3111 | suite, baseline to this PR
 ```
 
 ```callout
@@ -33,8 +33,22 @@ green. Two independent defects wearing one symptom, and a census found the blast
 - **The chain is made to CONVERGE, not reordered.** `declared`-beats-`seed` is deliberate
   (`vdl_packs.py:48-54` says so for chorestory), so instead the two reachable answers are made
   identical: a `SEEDS` entry plus a matching `vdl` block in this repository's own committed
-  `.rawgentic.json`. Nine tests pin it in **both** directions — the agreement IS the fix, and
-  either half alone leaves the other free to drift the defect back.
+  `.rawgentic.json`. Tests pin it in **both** directions — the agreement IS the fix, and either
+  half alone leaves the other free to drift the defect back.
+- **Convergence alone was NOT enough, and the cross-model review caught it at Critical.** A
+  workspace file could still point the NAME at a *different tree* whose config declared another
+  colour; production then emitted that colour while the new guard stayed green, because the
+  guard passes `workspace_file=None` by design. Measured: production emitted
+  `--accent:#eeeeee` where the committed sources say `#b7e87f`. The first draft of the design
+  note had dismissed this as "a misconfigured workspace" — and AC2 has no misconfiguration
+  exemption. Fixed on the owner's call: `_own_repository_config` now asks, BEFORE the chain,
+  whether the requested project is the repository the module is executing inside, and if so that
+  tree's own committed declaration wins. Verified to fire for this project ALONE —
+  `chorestory`, `saystory`, `rawgentic`, `sysop` and an invented `payments-api` all still
+  resolve through the chain untouched. The early answer still goes through `load_pack`, so a
+  malformed own-declaration falls open to the seed rather than reaching the `<style>` sink
+  unvalidated; and the seed is still the floor beneath it, tested against a checkout whose own
+  config cannot be read.
 - **The colour is not a new choice.** `#4f7d15` / `#b7e87f` is `PALETTE[2]`, what the hash was
   already handing out, so this declares what three committed pages already wear. Measured
   rather than assumed: `css_layer` reads the pack only through `_colour` and `pack.get("tint")`

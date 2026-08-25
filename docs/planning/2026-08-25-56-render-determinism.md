@@ -51,7 +51,9 @@ re-rendering the 13 stale ones in this PR.
 
 ## The approach
 
-Three changes, none of which reorders the resolution chain.
+Four changes, none of which reorders the resolution chain. The fourth (1b) was not in the
+original design — it was forced by the Step 8a cross-model review, which proved the first three
+left acceptance criterion 2 only partly met.
 
 ### 1. Make the chain converge (acceptance criterion 2)
 
@@ -69,8 +71,11 @@ Instead it makes the two reachable answers **identical**:
   workspace does name a path here;
 - pin the two to each other with a test, so they cannot drift apart later.
 
-After that the answer is the same whether the workspace names a path, names the project
-bare, or does not exist at all. The `~/.config` state stops being able to change the colour.
+After that the answer is the same whether the workspace names a path *to this tree*, names the
+project bare, or does not exist at all.
+
+**That is not yet enough, and §1b is why.** It leaves the case where the workspace names a path
+to a DIFFERENT tree — which the first draft of this note dismissed and the review did not.
 
 **Why `#4f7d15` / `#b7e87f` and not a new colour.** It is what two committed planning docs
 already wear, so adopting it re-renders one page instead of three and turns an accident into
@@ -79,13 +84,61 @@ WCAG AA in both themes against this renderer's surfaces
 (`scripts/vdl_packs.py:72-75`), which `test_vdl_packs.py` measures rather than trusts.
 Reversible in one line each if the owner wants a different colour.
 
-**Residual, stated rather than hidden.** A workspace that points the *name*
-`design-doc-publish` at some *other* repository whose `.rawgentic.json` declares a different
-`vdl` block would still change the colour. That is a misconfigured workspace, not renderer
-non-determinism, and `_project_config` already refuses a path that escapes the workspace
-root (`scripts/vdl_packs.py:226-230`). Closing it completely would require reordering the
-chain, which costs the chorestory intent above. Named here so the Step 4 rubric can test the
-reading rather than discover it.
+### 1b. The residual I first dismissed, and then had to fix
+
+The paragraph that used to sit here said a workspace pointing the *name* `design-doc-publish`
+at some *other* repository was "a misconfigured workspace, not renderer non-determinism", and
+left it at that. **That dismissal was wrong**, and the Step 8a cross-model review said so at
+Critical. Acceptance criterion 2 has no misconfiguration exemption: it asks for the accent to be
+deterministic given `--project` and the committed sources, full stop.
+
+Worse, the new guard could not see the violation, because it passes `workspace_file=None` by
+design. So the gate would have stayed green while production emitted a different colour — a
+guard that passes exactly what it exists to refuse.
+
+**Measured, not argued.** With a workspace pointing the name at another tree declaring
+`#111111` / `#eeeeee`:
+
+```
+GUARD  (workspace_file=None)   : seed      {'light': '#4f7d15', 'dark': '#b7e87f'}
+PROD   (workspace -> other)    : declared  {'light': '#111111', 'dark': '#eeeeee'}
+css_layer byte-identical?      : False
+  guard emits: :root{--accent:#b7e87f;}
+  prod  emits: :root{--accent:#eeeeee;}
+```
+
+**The fix, decided by the owner after that measurement.** One question is now asked BEFORE the
+chain: *is this project the repository the module is executing inside?* If so, that tree's own
+committed declaration wins — `_own_repository_config` in `scripts/vdl_packs.py`, consulted
+first, because by the time `_project_config` has followed the workspace pointer the wrong tree
+is already chosen.
+
+It is still **not a reordering** of `declared → seed → fallback`. It is a narrower question
+asked ahead of it, and it fires only when the requested name is this tree's own — verified for
+every seeded project: `_own_repository_config` returns `None` for `chorestory`, `saystory`,
+`rawgentic`, `sysop` and an invented `payments-api`, and a path only for `design-doc-publish`.
+So the chorestory intent at `scripts/vdl_packs.py:48-54` is untouched, and it generalizes: any
+repository vendoring this module now gets the same guarantee about its own pages.
+
+Three properties held deliberately, each with its own test:
+
+- **The early answer is still VALIDATED.** It goes through `load_pack`, so a malformed
+  own-declaration warns and falls through to the seed. Answering early must not mean answering
+  unvalidated, or this would be a new route for an unchecked hex to reach the `<style>` sink.
+- **The seed is not now dead code — it is the floor.** A checkout whose own `.rawgentic.json` is
+  missing or corrupt still reaches the seed, never the name hash. Without that test, this fix
+  would have quietly made the seed unreachable and restored the original defect on exactly the
+  broken-config machine that can least afford a surprise.
+- **Byte-identical across all four workspace states** — absent, bare name, own repository,
+  another repository — asserted on `css_layer`'s output, because that is what a reader sees.
+
+Two existing tests changed as a consequence, and neither was weakened.
+`TestEveryPackClearsAA::test_every_seed_lints_clean` now expects `declared` for this one project
+and `seed` for every other, with a separate test pinning that the carve-out fires for this
+project ALONE — rather than loosening the assertion to "either", which would have stopped it
+noticing if some other project's seed quietly stopped being reached. And a test of mine that
+asserted `origin == "seed"` with no workspace now asserts `declared`, plus explicitly that it is
+never `fallback`, since never-the-hash was always the property that mattered.
 
 ### 2. A permanent gate over every committed pair (acceptance criterion 1)
 
@@ -196,12 +249,18 @@ not to change, so it is a separate change with its own review.
 3. run `python3 scripts/tests/regen_docs_pages.py`;
 4. commit the markdown, the manifest and the regenerated HTML together.
 
-**A related observation, not a finding.** `publish_doc.py:1289` uses `write_text`, which
-applies platform newline translation, so a publish from Windows would commit CRLF. That is
-pre-existing and inert on this Linux host, but this gate compares **bytes** (following
+**Related platform behavior.** `publish_doc.py:1289` uses `write_text`, which applies platform
+newline translation, so a publish from Windows would commit CRLF. That behavior predates this
+change and has no effect on this Linux host. This gate compares **bytes**, following
 `regen_rendered_styles.py`, whose docstring records that a text-I/O "byte-identity" guard is
-not one), so the gate would surface it rather than bless it. Surfacing it is the correct
-behavior and needs no change here.
+not one — so a CRLF-committed page would turn the gate red rather than compare equal.
+
+*(Reworded after the Step 8a cross-model review flagged the previous phrasing, "a related
+observation, not a finding", as verdict-suppression language. It was: `<review-severity>`
+forbids telling a reviewer what verdict to reach, and #840 measured that such phrasing works —
+reviewers duly look elsewhere. The sentence has been reduced to the behavior and its
+consequence, with no classification attached. Recorded rather than quietly edited, because the
+rule I broke is one this repository's own process is bound by.)*
 
 ### 3. Re-render the 13 stale pages (acceptance criterion 3)
 
