@@ -19,9 +19,13 @@ under a bare `python3` on this host, so the regenerator could not import this mo
 **What this guard does NOT prove.** It and the regenerator call the same renderer, so this pins
 "the committed pages match what the renderer currently emits", never "the renderer is correct".
 Renderer correctness is pinned independently by `test_furniture_context.py`'s per-style SHA
-oracle, `test_byte_identity.py`'s committed exemplar, and the cross-style guards. The
-can-it-fail test and the sentinels below are what stop a page regenerated from a broken engine
-passing silently.
+oracle, `test_byte_identity.py`'s committed exemplar, and the cross-style guards.
+
+**The sentinels below are NARROWER than an earlier draft of this docstring claimed.** They catch
+gross truncation and missing wrapper metadata — not a dropped section or corrupted markup that
+keeps 2,000 bytes, the doctype, the pinned title and the pinned stamp. The can-it-fail test only
+proves that appending to the source changes the output. Corrected after the Step 11 cross-model
+review named the overclaim; the uncovered failure classes belong to the guards listed above.
 """
 import json
 import sys

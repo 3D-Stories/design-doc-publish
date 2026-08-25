@@ -51,7 +51,7 @@ re-rendering the 13 stale ones in this PR.
 
 ## The approach
 
-Four changes, none of which reorders the resolution chain. The fourth (1b) was not in the
+Six changes, none of which reorders the resolution chain. The fourth (1b) was not in the
 original design — it was forced by the Step 8a cross-model review, which proved the first three
 left acceptance criterion 2 only partly met.
 
@@ -202,6 +202,45 @@ reached through a real workspace path. Two things narrow the exposure rather tha
 the guard asserts, over **every** project the manifest names, that resolution lands on
 `declared` or `seed` and never a hashed `fallback`; and the manifest itself is committed, so
 adding such a page is a reviewable act, not a silent one.
+
+### 1c. And the fix in 1b had a hole of its own, on its own fallback path
+
+The Step 11 cross-model review found it, and I confirmed it before accepting it. §1b established
+ownership and then, if our own declaration turned out to be *unusable*, fell through to
+`_project_config` — so a workspace could point the name at another tree whose **valid**
+declaration won:
+
+```
+malformed own vdl block + a workspace pointing at another tree
+  -> declared {'light': '#111111', 'dark': '#eeeeee'}
+```
+
+Criterion 2 re-opened on exactly the broken-config path §1b advertises as safe. My own tests
+missed it because every one of them passed `workspace_file=None`, so none exercised the
+fallback at all — the hole was in the test design, not just the code.
+
+**Ownership and pack validity are now separate questions.** Once the requested project is
+identified as the executing repository, the workspace is not consulted for it *at all* — a
+rejected declaration goes straight to that project's committed seed, and the seed-or-hash tail
+is factored into `_seed_or_fallback` so `pack_for`'s two exits cannot drift apart. Both
+counterexamples now measure byte-identical.
+
+**The honest limit, asserted rather than glossed.** When our own config cannot be *parsed*,
+ownership is genuinely undeterminable: the file that would name the project is unreadable.
+Claiming ownership anyway would skip the workspace for **every** project and break
+`index/build_index.py`, which asks `pack_for` about all of them. So in that one case the
+workspace still answers — and what makes that defensible is that it **warns loudly**, by the
+change in §1d. There is a test asserting exactly this limit, so it is a recorded decision rather
+than an untested gap, and it names itself as the test to change if someone finds a signal that
+settles ownership without parsing the file.
+
+### 1d. A silent swallow, found in my own review
+
+`_own_repository_config` swallowed parse errors silently, and its own justifying comment claimed
+a warning would print on the ordinary path. **The justification was checkable and false**: the
+`exists()` check above it already returns for a repository with no config, so the branch is
+reached only by a config that exists and is broken. It now warns. That warning is what makes
+§1c's limit acceptable rather than a hole.
 
 #### The gate's unit is a PAIR, and that leaves committed pages it cannot cover
 

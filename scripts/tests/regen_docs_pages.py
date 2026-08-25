@@ -53,8 +53,17 @@ breaking the renderer and the round-trip goes green again. That is inherent to a
 guard. Renderer correctness is pinned independently and elsewhere:
 `test_furniture_context.py`'s per-style SHA oracle, `test_byte_identity.py`'s committed
 exemplar, and the cross-style guards. Two different failures; this one only ever claimed the
-second. The can-it-fail test and the sentinels in the guard are what stop a page regenerated
-from a broken engine passing silently.
+second.
+
+**And the sentinels are NARROWER than an earlier draft of this docstring claimed.** They reject a
+short stub and a page missing its doctype, pinned title or pinned stamp — gross truncation and
+missing wrapper metadata. A renderer that dropped a section, corrupted markup, or lost a
+stylesheet while keeping 2,000 bytes and that metadata would pass every sentinel after
+regeneration. The can-it-fail test only proves that appending to the source changes the output,
+so it does not close that path either. Corrected after the Step 11 cross-model review named the
+overclaim: this guard catches a page that stopped matching the renderer, plus gross truncation,
+and nothing more. The failure classes it does not cover are covered elsewhere —
+`test_furniture_context.py`'s per-style SHA oracle and the cross-style guards.
 """
 import pathlib
 import sys

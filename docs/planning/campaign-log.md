@@ -6,7 +6,7 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 ```stats
 7 | issues on this log
 56 | newest: PR open, a committed page must re-render to itself
-3023/3111 | suite, baseline to this PR
+3023/3119 | suite, baseline to this PR
 ```
 
 ```callout
@@ -49,6 +49,20 @@ green. Two independent defects wearing one symptom, and a census found the blast
   malformed own-declaration falls open to the seed rather than reaching the `<style>` sink
   unvalidated; and the seed is still the floor beneath it, tested against a checkout whose own
   config cannot be read.
+- **That fix then had a hole of its own, and Step 11's cross-model pass found it.** With our own
+  `vdl` block MALFORMED, resolution fell through to the workspace, which could point the name at
+  another tree whose valid declaration won — AC2 re-opening on exactly the broken-config path.
+  Every one of my own tests had passed `workspace_file=None`, so none exercised the fallback:
+  the hole was in the test design as much as the code. Ownership and pack validity are now
+  separate questions — once the executing repository is identified the workspace is not consulted
+  for it at all, and `_seed_or_fallback` is factored out so `pack_for`'s two exits cannot drift.
+  **One limit is recorded rather than glossed:** when our own config cannot be PARSED, ownership
+  is genuinely undeterminable, so the workspace still answers there — and it now WARNS, which is
+  what makes that acceptable. A test asserts the limit so it is a decision, not a gap.
+- **A silent swallow, caught in my own inline review**, and worth recording because the reason
+  was checkable and wrong: `_own_repository_config` swallowed parse errors on the grounds that
+  warning would be noisy on the ordinary path, when the `exists()` check above already handles
+  that path. A corrupt config was silently downgrading to the seed.
 - **The colour is not a new choice.** `#4f7d15` / `#b7e87f` is `PALETTE[2]`, what the hash was
   already handing out, so this declares what three committed pages already wear. Measured
   rather than assumed: `css_layer` reads the pack only through `_colour` and `pack.get("tint")`

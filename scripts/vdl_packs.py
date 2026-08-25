@@ -259,9 +259,16 @@ def _fallback(project: str) -> dict:
 
 _MODULE_DIR = Path(__file__).resolve().parent
 
+# Ownership and pack validity are DIFFERENT questions, and conflating them was the hole the
+# Step 11 cross-model review found (#56). `_NOT_OURS` means "this is not our project, resolve it
+# through the workspace as always"; a `Path` means "this IS our project" and the workspace is
+# never consulted for it, whether or not the declaration at that path turns out to be usable.
+_NOT_OURS = None
+_OURS_UNUSABLE = object()
 
-def _own_repository_config(project: str) -> Path | None:
-    """This module's OWN repository config, when `project` is that repository. Else None.
+
+def _own_repository_config(project: str):
+    """`_NOT_OURS`, a config `Path` we own, or `_OURS_UNUSABLE`.
 
     #56. Convergence between `SEEDS` and a repository's committed declaration made resolution
     deterministic *within one tree*, and that was not enough. A workspace file could still point
@@ -286,7 +293,7 @@ def _own_repository_config(project: str) -> Path | None:
     """
     config = _MODULE_DIR.parent / ".rawgentic.json"
     if not config.exists():
-        return None                                   # silent: not a configured repository
+        return _NOT_OURS                              # silent: not a configured repository
     try:
         data = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
@@ -299,18 +306,39 @@ def _own_repository_config(project: str) -> Path | None:
         # colour. Caught in my own inline Step 11 review, because the justification was
         # checkable and wrong.
         _warn(project, config, f"own repository config unusable ({e.__class__.__name__}: {e})")
-        return None
+        # Ownership is UNDETERMINABLE here: the file that would name the project cannot be read,
+        # so we genuinely do not know whether `project` is ours. Returning `_OURS_UNUSABLE`
+        # would skip the workspace for EVERY project and break the index, which asks about all
+        # of them; claiming `_NOT_OURS` lets the workspace answer. The latter is the lesser
+        # wrong and is what happens — stated as a known limit rather than papered over, and the
+        # warning above is what makes it visible.
+        return _NOT_OURS
     if not isinstance(data, dict):
         _warn(project, config, f"own repository config root is {type(data).__name__}, "
                                f"not an object")
-        return None
+        return _NOT_OURS                              # ownership undeterminable, as above
     own = data.get("project")
     if not isinstance(own, dict):
-        return None                                   # silent: no project block to match on
+        return _NOT_OURS                              # silent: no project block to match on
     name = own.get("name")
     if not isinstance(name, str) or name.strip().lower() != project:
-        return None                                   # a different project: not our question
-    return config
+        return _NOT_OURS                              # a different project: not our question
+    return config                                     # OURS, and the config is readable
+
+
+def _seed_or_fallback(project: str) -> dict:
+    """The committed tail of the chain: this project's seed, else the name hash.
+
+    Factored out because `pack_for` now reaches it from TWO places — the ordinary end of the
+    chain, and the early return for a project we own whose declaration is unusable. Two inline
+    copies of the same three lines is how those two exits drift apart, and one of them is the
+    fix for a measured AC2 hole.
+    """
+    seed = SEEDS.get(project)
+    if seed is not None:
+        return {"accent": {"light": seed["light"], "dark": seed["dark"]}, "tint": None,
+                "origin": "seed", "source": "vdl_packs.SEEDS", "note": seed["note"]}
+    return _fallback(project)
 
 
 def pack_for(project: str, workspace_file: Path | None) -> dict:
@@ -330,21 +358,26 @@ def pack_for(project: str, workspace_file: Path | None) -> dict:
     """
     project = (project or "").strip().lower()
     own = _own_repository_config(project)
-    if own is not None:
-        declared = load_pack(project, own)
+    if own is not _NOT_OURS:
+        # WE OWN THIS PROJECT, so the workspace is not consulted for it at all — not even when
+        # our own declaration turns out to be unusable. That last clause is the whole point, and
+        # an earlier draft got it wrong: it fell through to `_project_config`, and a workspace
+        # could then point the name at another tree whose VALID declaration won. Measured at
+        # `#111111` where the committed sources say `#b7e87f`, so AC2 re-opened on exactly the
+        # broken-config path this branch advertises. Found by the Step 11 cross-model review.
+        declared = load_pack(project, own) if own is not _OURS_UNUSABLE else None
         if declared is not None:
             # Still through `load_pack`, deliberately: answering early must not mean answering
             # UNVALIDATED, or this would be a new route for an unchecked hex to reach the
-            # `<style>` sink. A malformed own-declaration warns and falls through to the seed,
-            # exactly as a malformed declaration does anywhere else.
+            # `<style>` sink.
             return declared
+        # Our declaration is absent or rejected. Straight to OUR seed, and if there is no seed,
+        # the name hash — both of which are committed. Never the workspace: an unversioned
+        # pointer must not become the answer just because our own file is broken.
+        return _seed_or_fallback(project)
     config = _project_config(project, workspace_file)
     if config is not None:
         declared = load_pack(project, config)
         if declared is not None:
             return declared
-    seed = SEEDS.get(project)
-    if seed is not None:
-        return {"accent": {"light": seed["light"], "dark": seed["dark"]}, "tint": None,
-                "origin": "seed", "source": "vdl_packs.SEEDS", "note": seed["note"]}
-    return _fallback(project)
+    return _seed_or_fallback(project)

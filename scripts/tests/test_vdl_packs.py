@@ -914,3 +914,125 @@ class TestTheEXECUTINGTreeOwnsItsOwnAccent:
         monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
         assert vdl_packs.pack_for("design-doc-publish", None)["origin"] == "seed"
         assert capsys.readouterr().err == ""
+
+    @pytest.mark.parametrize("own_state", ["malformed-block"])
+    def test_a_BROKEN_own_config_falls_to_the_SEED_not_to_the_workspace(self, own_state,
+                                                                       tmp_path, monkeypatch):
+        """The hole in my own fix, found by the Step 11 cross-model review and confirmed by
+        measurement before it was accepted.
+
+        The earlier tests for a broken own-config all passed `workspace_file=None`, so none of
+        them exercised the fallback. With a workspace present, `pack_for` fell through to
+        `_project_config`, followed the pointer to another tree, and took ITS valid declaration —
+        measured at `#111111` where the committed sources say `#b7e87f`. So AC2 re-opened on
+        exactly the advertised broken-config path.
+
+        Ownership and pack validity are now separate questions. Once the requested project is
+        identified as the executing repository, a rejected declaration goes to that project's
+        SEED and the workspace is never consulted: an unversioned pointer must not become the
+        answer just because our own file is broken.
+        """
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / ".rawgentic.json").write_text(json.dumps({
+            "project": {"name": "design-doc-publish"},
+            "vdl": {"accent": {"light": "#111111", "dark": "#eeeeee"},
+                    "source": "another tree", "note": "must never win"}}), encoding="utf-8")
+        ws = tmp_path / "ws.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "design-doc-publish", "path": "other"}]}), encoding="utf-8")
+
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        own = tmp_path / ".rawgentic.json"
+        if own_state == "malformed-block":
+            own.write_text(json.dumps({
+                "project": {"name": "design-doc-publish"},
+                "vdl": {"accent": {"light": "not-a-hex", "dark": "#b7e87f"},
+                        "source": "x", "note": "malformed on purpose"}}), encoding="utf-8")
+        elif own_state == "corrupt-json":
+            own.write_text("{ not json", encoding="utf-8")
+        else:
+            own.write_text('["a list"]', encoding="utf-8")
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+
+        pack = vdl_packs.pack_for("design-doc-publish", ws)
+        assert pack["accent"]["light"] != "#111111", (
+            f"own_state={own_state}: a broken own config let the workspace choose the accent")
+        seed = vdl_packs.SEEDS["design-doc-publish"]
+        assert pack["accent"] == {"light": seed["light"], "dark": seed["dark"]}
+        assert pack["origin"] == "seed"
+
+    def test_ownership_does_not_swallow_a_DIFFERENT_project_named_by_the_workspace(self,
+                                                                                  tmp_path):
+        """The control on the fix above. Skipping the workspace must apply ONLY to the executing
+        repository's own name — every other project must still resolve through it, or this would
+        have broken the index, which asks `pack_for` about every project in the workspace."""
+        repo = tmp_path / "payments-api"
+        repo.mkdir()
+        (repo / ".rawgentic.json").write_text(json.dumps({
+            "project": {"name": "payments-api"},
+            "vdl": {"accent": {"light": "#123456", "dark": "#abcdef"},
+                    "source": "its own repo", "note": "still resolves through the workspace"}}),
+            encoding="utf-8")
+        ws = tmp_path / "ws.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "payments-api", "path": "payments-api"}]}), encoding="utf-8")
+        pack = vdl_packs.pack_for("payments-api", ws)
+        assert pack["origin"] == "declared"
+        assert pack["accent"] == {"light": "#123456", "dark": "#abcdef"}
+
+    @pytest.mark.parametrize("own_state", ["corrupt-json", "non-object-root"])
+    def test_an_UNPARSEABLE_own_config_leaves_ownership_undeterminable_and_says_so(
+            self, own_state, tmp_path, monkeypatch, capsys):
+        """The HONEST LIMIT of the fix above, asserted rather than glossed.
+
+        The malformed-block case is fixable: the config parses, its `project.name` matches, so
+        ownership is established and the workspace is skipped. These two are NOT. The file that
+        would name the project cannot be read, so nothing can say whether `project` is ours.
+
+        Claiming ownership anyway would skip the workspace for EVERY project and break
+        `index/build_index.py`, which asks `pack_for` about all of them. So the workspace still
+        answers here, and what makes that defensible is the WARNING: a corrupt own-config is
+        loud, not silent.
+
+        This test exists so the limit is a recorded decision rather than an untested gap. If
+        someone later finds a signal that settles ownership without parsing the file, this is the
+        test that should change.
+        """
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / ".rawgentic.json").write_text(json.dumps({
+            "project": {"name": "design-doc-publish"},
+            "vdl": {"accent": {"light": "#111111", "dark": "#eeeeee"},
+                    "source": "another tree", "note": "wins only because ownership is unknown"}}),
+            encoding="utf-8")
+        ws = tmp_path / "ws.json"
+        ws.write_text(json.dumps({"projects": [
+            {"name": "design-doc-publish", "path": "other"}]}), encoding="utf-8")
+
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        own = tmp_path / ".rawgentic.json"
+        own.write_text("{ not json" if own_state == "corrupt-json" else '["a list"]',
+                       encoding="utf-8")
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+
+        pack = vdl_packs.pack_for("design-doc-publish", ws)
+        # The limit: the workspace answers, because ownership could not be established.
+        assert pack["origin"] == "declared"
+        assert pack["accent"]["light"] == "#111111"
+        # And it is LOUD, which is what makes the limit acceptable rather than a silent hole.
+        err = capsys.readouterr().err
+        assert "design-doc-publish" in err
+        assert "own repository config" in err
+
+    def test_with_NO_workspace_an_unparseable_own_config_still_reaches_the_seed(self, tmp_path,
+                                                                               monkeypatch):
+        """The limit above needs a workspace to bite. Without one there is nothing to fall to,
+        so the committed seed answers and the name hash is still never reached."""
+        fake = tmp_path / "scripts"
+        fake.mkdir()
+        (tmp_path / ".rawgentic.json").write_text("{ not json", encoding="utf-8")
+        monkeypatch.setattr(vdl_packs, "_MODULE_DIR", fake)
+        assert vdl_packs.pack_for("design-doc-publish", None)["origin"] == "seed"

@@ -366,7 +366,8 @@ color:var(--ink-3);background:var(--code)}
 <li>commit: <code>test(docs): pin every committed docs page to its own markdown (#56)</code></li>
 </ul>
 <h3>Task T2: Make the accent resolve from committed sources only</h3>
-<p>Add <code>design-doc-publish</code> to <code>SEEDS</code> in <code>scripts/vdl_packs.py</code> at <code>#4f7d15</code> / <code>#b7e87f</code>, and the matching <code>vdl</code> block to this repository&#x27;s own <code>.rawgentic.json</code>. Add a convergence test to <code>scripts/tests/test_vdl_packs.py</code> pinning the two to each other, plus a test that <code>pack_for(&quot;design-doc-publish&quot;, None)</code> returns <code>origin: seed</code> with those colours.</p>
+<p>Add <code>design-doc-publish</code> to <code>SEEDS</code> in <code>scripts/vdl_packs.py</code> at <code>#4f7d15</code> / <code>#b7e87f</code>, and the matching <code>vdl</code> block to this repository&#x27;s own <code>.rawgentic.json</code>. Add a convergence test to <code>scripts/tests/test_vdl_packs.py</code> pinning the two to each other, plus a test that <code>pack_for(&quot;design-doc-publish&quot;, None)</code> returns those colours from a COMMITTED source.</p>
+<p><em>Corrected after the Step 11 cross-model review.</em> This line originally required <code>origin: seed</code>, which the final design makes wrong: T5 (<code>_own_repository_config</code>, added on the owner&#x27;s call after the Step 8a Critical) consults this repository&#x27;s own committed declaration first, so the origin is <code>declared</code> whenever that declaration is valid, and <code>seed</code> only when it is absent or rejected. Anyone following the original line literally would have written a regressive assertion. <code>origin: fallback</code> is the defect in every case.</p>
 <p>RED first: the convergence test must fail before the <code>SEEDS</code> entry exists.</p>
 <ul>
 <li>riskLevel: high (security surface: a new accent value flows into a <code>&lt;style&gt;</code> block through <code>css_layer</code>)</li>
@@ -389,8 +390,25 @@ color:var(--ink-3);background:var(--code)}
 <li>files: docs/planning/campaign-log.md, docs/planning/2026-08-25-56-render-determinism.md, docs/planning/2026-08-25-56-render-determinism.html, docs/planning/2026-08-25-56-impl-plan.md, docs/planning/2026-08-25-56-impl-plan.html</li>
 <li>verification: the new pages are themselves in the T1 manifest and the gate is green on them, so this issue&#x27;s own documents are covered by the guard it adds.</li>
 <li>commit: <code>docs(campaign-log): record the #56 render-determinism entry (#56)</code></li>
+</ul>
+<h3>Task T5: The EXECUTING tree owns its own accent (added mid-run)</h3>
+<p>NOT in the original plan. Added on the owner&#x27;s call after the Step 8a cross-model review returned a Critical, confirmed by measurement, showing that T2&#x27;s convergence left acceptance criterion 2 only partly met: a workspace file could still point the NAME at a different tree whose config declared another colour, and production emitted that colour while the new guard stayed green.</p>
+<p><code>_own_repository_config</code> asks, before the chain, whether the requested project is the repository the module is executing inside; if so, that tree&#x27;s own committed declaration wins.</p>
+<ul>
+<li>riskLevel: high (security surface: same <code>&lt;style&gt;</code> sink as T2, and it adds a resolution source)</li>
+<li>files: scripts/vdl_packs.py, scripts/tests/test_vdl_packs.py</li>
+<li>verification: <code>pytest -k EXECUTING</code> red before the fix on the two workspace states that matter; after it, <code>css_layer</code> byte-identical across all four workspace states, and <code>_own_repository_config</code> returns None for every project except this one.</li>
+<li>commit: <code>fix(vdl): the EXECUTING tree owns its own accent, whatever a workspace says (#56)</code></li>
+</ul>
+<h3>Task T6: Warn when this repository&#x27;s own config exists and is broken (added mid-run)</h3>
+<p>NOT in the original plan. Found in my own Step 11 inline review: <code>_own_repository_config</code> swallowed parse errors silently, and its justifying comment was checkable and false.</p>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/vdl_packs.py, scripts/tests/test_vdl_packs.py</li>
+<li>verification: a corrupt own-config warns and still reaches the seed; a non-object root warns; a repository with no config at all stays silent (the negative control).</li>
+<li>commit: <code>fix(vdl): warn when this repository&#x27;s own config exists and is broken (#56)</code></li>
 </ul></section>
-<section class="mstone rm-epic"><h3>Ordering <span class="chip c-plan">—</span></h3><p>T1 → T2 → T4 → T3. T3 runs last because it regenerates <code>campaign-log.html</code>, which needs T4&#x27;s markdown entry and T2&#x27;s seed already in place. No task shares a <code>parallel_group</code>: T3 depends on all three predecessors and T2&#x27;s seed changes what T3 renders.</p></section>
+<section class="mstone rm-epic"><h3>Ordering <span class="chip c-plan">—</span></h3><p>T1 → T2 → T4 → T3, then T5 and T6 added mid-run after review. T3 runs last because it regenerates <code>campaign-log.html</code>, which needs T4&#x27;s markdown entry and T2&#x27;s seed already in place. No task shares a <code>parallel_group</code>: T3 depends on all three predecessors and T2&#x27;s seed changes what T3 renders.</p></section>
 <section class="mstone rm-epic"><h3>Documentation <span class="chip c-plan">—</span></h3><p>No README change: no flag, no interface and no published behaviour moves. <code>regen_docs_pages.py</code> is a developer regenerator documented by its own module docstring, exactly as <code>regen_rendered_styles.py</code> is.</p></section>
 <section class="mstone rm-epic"><h3>Deferred verification <span class="chip c-plan">—</span></h3><p>None. Every task is verifiable locally in this checkout, so no task carries a <code>verification: deferred-to-target</code> line.</p></section>
 <section class="mstone rm-epic"><h3>Not in this PR, and why <span class="chip c-plan">—</span></h3><ul>
