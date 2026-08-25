@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Zone Access architecture — catch-all with exceptions</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-analysis{background:radial-gradient(1100px 560px at 82% -12%,#1a243f 0%,transparent 60%),radial-gradient(900px 500px at -12% 8%,#17203a 0%,transparent 55%),var(--bg)}
+.tpl-analysis .wrap{max-width:880px;padding:0 24px 96px}
+.tpl-analysis header{padding:48px 0 10px;border-bottom:none;margin-bottom:26px}
+.tpl-analysis h1{font-size:clamp(28px,5vw,42px)}
+.tpl-analysis h2{font-size:22px;margin:40px 0 14px}
+
+/* #76 — the frame's companions. The FRAME slots above own ground, measure and type scale; these
+   are the treatments that only make sense once those exist.
+
+   THE EYEBROW, as the reference has it: an inline-block pill in accent over a tint of itself,
+   not a bare line of small caps. `--req-c-bg` rather than a new value — it is the accent hue's
+   own tint, already in the token layer and already contrast-scored there. */
+.tpl-analysis header .eyebrow{display:inline-block;color:var(--accent);
+background:var(--req-c-bg);border:1px solid var(--line);border-radius:999px;padding:5px 13px;
+font-size:11.5px;letter-spacing:.14em}
+/* The headline gets the reference's tight leading and a measure of its own: a display line that
+   runs the full 880px reads as a paragraph, not a title. */
+.tpl-analysis h1{line-height:1.12;max-width:20ch}
+/* The lede — the reference's `.lead`. This type's first-read element is the headline ANSWER, and
+   the subtitle is where it lands. */
+.tpl-analysis header .sub{font-size:17.5px;line-height:1.6;color:var(--ink-2);max-width:62ch}
+.tpl-analysis .an-index{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:10px 18px;margin:18px 0}
+.tpl-analysis .an-index ol{margin:.2em 0;padding-left:1.2em}
+.tpl-analysis .an-index li{margin:.25em 0}
+.tpl-analysis .an-index a{color:var(--ink-2);text-decoration:none;border-bottom:1px solid var(--line)}
+.tpl-analysis .an-index a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.tpl-analysis .an-q{border-top:1px solid var(--line);padding-top:14px;margin-top:24px}
+/* #76/D70: the reference's 22px section scale and 40px rhythm, applied where the page can
+   actually read them. The FRAME's h2 slots cannot reach a sectioned style. */
+.tpl-analysis .an-q>h3{font-size:22px;margin:40px 0 14px}
+.tpl-analysis .an-q h3{font-size:17px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.tpl-analysis .an-answer{font-size:16.5px;line-height:1.55;color:var(--ink);font-weight:550;
+border-left:3px solid var(--accent);padding-left:14px;margin:.5em 0 .9em}
+/* The base .chip shape lives in _ROADMAP_STYLE, which only roadmap and
+   dashboard inject — so an analysis chip needs its own shape, not just a
+   colour, or it renders as tight coloured text. */
+.tpl-analysis .an-conf{font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+font-weight:700;letter-spacing:.05em;padding:2px 8px;border-radius:999px;
+text-transform:uppercase;white-space:nowrap}
+.tpl-analysis .c-measured{color:var(--req-c);background:var(--req-c-bg)}
+.tpl-analysis .c-confirmed{color:var(--req-c);background:var(--req-c-bg)}
+.tpl-analysis .c-inferred{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-analysis .c-unstated{color:var(--ink-3);background:var(--code)}
+/* Stepped figure — the reference's `<ol class="steps">`: the number is the quiet index, the lead
+   sentence carries the weight, and the detail drops to the note voice underneath it. Static, so
+   there is nothing to open; see the docstring for why this is `steps` and not `steprail`. */
+.tpl-analysis .an-figure{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 18px;margin:18px 0}
+.tpl-analysis .an-figure ol{display:grid;gap:12px;margin:0;padding:0}
+.tpl-analysis .an-figure .blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px}
+.tpl-analysis .an-figure .blk-n{grid-row:1/3;font:700 13px/1.5 ui-monospace,Menlo,Consolas,
+monospace;color:var(--accent);align-self:start}
+.tpl-analysis .an-figure .blk-title{font-weight:650;color:var(--ink)}
+.tpl-analysis .an-figure .blk-text{color:var(--ink-3);font-size:13.5px;line-height:1.55}
+/* Measurement callout — the reference's `.note` voice, promoted to a panel because in this type
+   a measurement is the evidence the answer rests on. */
+.tpl-analysis .an-measure>.blk-callout{background:var(--code);border-left-color:var(--accent);
+border-radius:10px;padding:10px 15px}
+.tpl-analysis .an-measure .blk-title{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+/* Comparison table — the reference's `<table class="compare">`. No marker: a markdown table gets
+   no CLASS or wrapper hook from the renderer (its structural hooks — table/thead/tbody/td — are
+   all it has), so this styles the bare element scoped to this template, exactly as `review` and
+   `dashboard` do for their zebra rows.
+   `:not(.telemetry):not(.gates)` is NOT defensive dressing. The renderer appends its own
+   `table.gates` and `table.telemetry` inside `<main>`, so an unqualified `.tpl-analysis table`
+   restyled them too — a leak the cross-style gate CANNOT see, because it stays inside `analysis`.
+   Found by review, reproduced, then excluded.
+   The row-header column is `tbody td:first-child`, NOT `tbody th`: markdown emits every body
+   cell as `<td>`, so the `th` form was a dead selector that styled nothing. Also review's. */
+.tpl-analysis table:not(.telemetry):not(.gates){border:1px solid var(--line);border-radius:12px;
+border-collapse:separate;border-spacing:0;overflow:hidden;margin:18px 0}
+.tpl-analysis table:not(.telemetry):not(.gates) thead th{background:var(--code);
+font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;
+color:var(--ink-3);text-align:left}
+.tpl-analysis table:not(.telemetry):not(.gates) tbody td:first-child{font-weight:650;
+color:var(--ink)}
+.tpl-analysis table:not(.telemetry):not(.gates) tbody tr:nth-child(even){background:var(--code)}
+
+/* An ordinary fenced listing, in a box with its language and a copy button. RICH ONLY —
+   `plain` carries no template CSS by definition and stays a bare <pre>. The box owns the
+   border, radius and ground that `pre` supplies on its own elsewhere, so the bar and the
+   listing share one outline instead of stacking two. */
+.doc-code{margin:0 0 14px;border:1px solid var(--line);border-radius:10px;
+background:var(--code);overflow:hidden}
+.doc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:5px 8px 5px 14px;border-bottom:1px solid var(--line)}
+.doc-code-lang{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-code-copy{flex:none;font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:6px;
+padding:3px 10px;cursor:pointer}
+.doc-code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-code-copy[data-state=ok]{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy[data-state=fail]{color:var(--ink-2);border-color:var(--ink-3)}
+.doc-code>pre{margin:0;border:0;border-radius:0;background:none}
+/* Paper cannot take a copy. Printing the control would print a button that does nothing. */
+@media print{.doc-code-copy{display:none}}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-analysis">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-25 11:21 MDT</div>
+<h1>Zone Access architecture — catch-all with exceptions</h1>
+
+</header>
+<main>
+<p>The catch-all-with-exceptions model is ADOPTED for zone Access: one wildcard Cloudflare Access application protects every new one-label hostname automatically, and public hosts are explicit, marked exceptions. Three independent models (grok, deepseek-v4-pro, gpt-5.6-sol) and Cloudflare&#x27;s own documentation all endorse it — and the zone has run exactly this shape since 2026-08-24. The owner&#x27;s least-privilege claim is half right: the model is default-deny for NEW hosts, but it provides no separation BETWEEN protected services, and one finding needs action now — the automation service token sits on the wildcard application, making it a skeleton key for the whole zone.</p>
+<p>· <a href="https://2026-08-25-design-doc-publish-access-architecture-consult.3dstories.ca">live</a></p>
+<div class="blk blk-verdict"><div class="blk-row is-confirmed"><span class="blk-key">confirmed</span><span class="blk-text">Catch-all with exceptions is the right architecture for this zone. Dedicated Access applications are created only when a service&#x27;s policy must differ.</span></div></div>
+<div class="blk blk-provenance"><dl><dt>consulted</dt><dd>grok 1.0.5 (proposal), deepseek-v4-pro via the qwen CLI (proposal), gpt-5.6-sol via codex (adversarial review of the synthesis)</dd><dt>research</dt><dd>Cloudflare docs (app-paths, policies, require-access-protection) via context7; field guides via exa web search</dd><dt>zone state</dt><dd>measured live 2026-08-24/25: one wildcard app on *.3dstories.ca, nine bypass apps, wildcard DNS to a cloudflared tunnel</dd><dt>redaction</dt><dd>LAN addresses are redacted on this public page; the operational prompt with real values lives in the session record</dd></dl></div>
+<nav class="an-index"><ol><li><a href="#s1">Is the owner&#x27;s catch-all model right?</a></li><li><a href="#s2">Where does the least-privilege claim break?</a></li><li><a href="#s3">What must change now?</a></li><li><a href="#s4">What is deferred, and why?</a></li><li><a href="#s5">What is the standing rule for new services?</a></li><li><a href="#s6">What does the onboarding prompt look like under this model?</a></li><li><a href="#s7">What did each consultant actually contribute?</a></li></ol></nav>
+<section class="an-q" id="s1"><h3>Is the owner&#x27;s catch-all model right? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">Yes, and it is already running. Cloudflare built wildcard Access applications for exactly this pattern, and the surveyed homelab guides converge on it: protect <code>*.&lt;zone&gt;</code> by default, mark public hosts explicitly. A new one-label hostname is protected the moment it exists, with zero per-site Access work. The exception list is the whole public surface, readable in one screen.</p>
+<div class="blk blk-chips"><span class="blk-chip is-done">default-deny for new hosts</span><span class="blk-chip is-blocked">segmentation between services</span><span class="blk-chip is-pending">service token isolated</span><span class="blk-chip is-planned">account-level fail-closed</span></div></section>
+<section class="an-q" id="s2"><h3>Where does the least-privilege claim break? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">&quot;Least privilege&quot; is two different properties. The wildcard gives one and not the other.</p>
+<p>Default-deny: a new hostname cannot be reached without passing the zone login. That is real, and it is the property the owner wanted.</p>
+<p>Segmentation: one wildcard application means one application audience. One login session, one stolen JWT, or one service token is valid on every host the application covers. With a single human user this is tolerable today. It stops being tolerable the day a second identity or a scoped bot arrives.</p>
+<div class="blk blk-callout"><div class="blk-callout is-crit"><div class="blk-title">The skeleton key is real today, not someday</div><p>The automation service token is attached to the wildcard application, so that ONE token currently unlocks every protected host on the zone. Grok found it; the gpt-5.6-sol review confirmed the risk is present now. Move the token to a dedicated docs-control application.</p></div></div></section>
+<section class="an-q" id="s3"><h3>What must change now? <span class="chip c-unstated an-conf">—</span></h3><div class="blk blk-steps an-figure"><ol><li class="blk-step"><span class="blk-n">1</span><span class="blk-title">Isolate the service token</span><span class="blk-text">Create a dedicated application for the docs control host carrying the service-token policy plus the owner allow; remove the token policy from the wildcard. Test immediately after — one docs caution reports a specific application observed to block requests over a wildcard.</span></li><li class="blk-step"><span class="blk-n">2</span><span class="blk-title">Turn on Require Access protection</span><span class="blk-text">The account-level setting blocks any hostname with NO Access application. Without it, accidental deletion of the wildcard application fails the whole zone OPEN. The reviewer rated this mandatory, not optional.</span></li><li class="blk-step"><span class="blk-n">3</span><span class="blk-title">Grey-cloud the six external-service records</span><span class="blk-text">autodiscover, lyncdiscover, msoid, sip, email and _domainconnect should be DNS-only, and their six bypass applications deleted. Bypass only skips the login while Cloudflare still proxies an origin it cannot serve — the standing 521/530 errors. Diagnose each record as it is flipped rather than assuming one cause.</span></li></ol></div></section>
+<section class="an-q" id="s4"><h3>What is deferred, and why? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">The bypasses for the two admin hosts stay for now: removing them puts the zone login in front of tools that already carry their own authentication, which is defense-in-depth at the cost of a login step — the owner&#x27;s call. The two-label hole (a nested name is matched by the DNS wildcard but not by the Access wildcard) is real but currently blocked by certificate coverage; step 2 above closes it properly. The apex is not covered by the wildcard and needs its own application only if it is ever proxied.</p></section>
+<section class="an-q" id="s5"><h3>What is the standing rule for new services? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">Spin up the service, route it through a tunnel, proxy its one-label hostname. The wildcard protects it automatically. Create a dedicated Access application ONLY when the policy must differ: its own service token, additional people, or a different session length — and never attach a carve-out policy to the wildcard itself, which would hand the exception to every covered host.</p>
+<div class="blk blk-callout"><div class="blk-callout is-note"><div class="blk-title">Exceptions are named and reviewed</div><p>Every exception application is named bypass-&lt;host&gt; with its purpose. Deleting one fails CLOSED onto the wildcard. The list is reviewed on a schedule, and an entry that outlives its service is removed.</p></div></div></section>
+<section class="an-q" id="s6"><h3>What does the onboarding prompt look like under this model? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">The prompt below is the template handed to a project session to put a LAN-only service behind the zone login. LAN addresses are redacted here; the operational copy carries real values.</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">text</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>Put &lt;service&gt;.3dstories.ca behind the zone&#x27;s Cloudflare Access login. The zone runs
+catch-all-with-exceptions: ONE Access app on *.3dstories.ca (allow the owner&#x27;s email)
+protects every proxied one-label host automatically. DO NOT create an Access app for this
+site — the only job is getting its traffic through Cloudflare&#x27;s edge via a tunnel.
+
+VERIFY FIRST: if DNS is an A record to a private address, Cloudflare never sees the traffic
+and cannot protect it. Pick the tunnel origin from the service&#x27;s compose file (a service
+name like proxy:8443 — NEVER localhost, which inside the cloudflared container is
+cloudflared itself). Self-signed origin =&gt; originRequest noTLSVerify on that one route.
+
+CREDENTIALS: the Cloudflare API token (Access Edit + Cloudflare Tunnel Edit) sits in the
+secrets directory; the DNS token lives inside the traefik container on the gateway. PATCH
+fails with error 10405 — POST to create, PUT whole objects. Never print a token value.
+
+STEPS: (1) create the tunnel (config_src cloudflare); PUT its configuration with ingress
+[{hostname &lt;service&gt;.3dstories.ca, service &lt;origin&gt;}, {service http_status:404}]; store its
+token file mode 600. (2) add cloudflared to the service&#x27;s compose: digest-pinned image,
+[&quot;tunnel&quot;,&quot;--no-autoupdate&quot;,&quot;run&quot;], TUNNEL_TOKEN_FILE via a compose secret. TRAP: the image
+runs as uid 65532 and cannot read a 600 file owned by uid 1000 — set user: &quot;1000:1000&quot;.
+Ship via PR. (3) DNS LAST: flip the record to CNAME &lt;tunnel-id&gt;.cfargotunnel.com,
+proxied — record the old value first; the undo is restoring it.
+
+VERIFY from the public internet: anonymous fetch answers 302 to the Access login;
+after owner login the app renders (screenshot); www.3dstories.ca still answers 200 with
+no cf-access-domain header; the tunnel reads healthy via the API. Log every change and
+its one-step undo. If blocked, ask the owner with the exact command — never work around it.</code></pre></div></section>
+<section class="an-q" id="s7"><h3>What did each consultant actually contribute? <span class="chip c-unstated an-conf">—</span></h3><p class="an-answer">The grok proposal found the service-token skeleton key, split the least-privilege claim into its two halves, and named the two-label and apex gaps. The deepseek proposal (via the qwen CLI, which is configured to route there — reported honestly) supplied the exception-list failure modes and their mitigations, including naming and scheduled review. The gpt-5.6-sol review corrected the synthesis in six places: the token risk is present-tense, carve-outs belong on dedicated applications and never on the wildcard, the 521/530 diagnosis must be per-record rather than blanket, bypassed traffic is unlogged only by Access, certificate failure is not an authorization control, and Require Access protection should be mandatory.</p></section>
+
+</main>
+<footer>Last updated: 2026-08-25 11:21 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+<script>
+(function(){
+var boxes=document.querySelectorAll('.doc-code');
+if(!boxes.length)return;
+function fallback(text){
+var ta=document.createElement('textarea');
+ta.value=text;ta.setAttribute('readonly','');
+ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+document.body.appendChild(ta);ta.select();
+var ok=false;
+try{ok=document.execCommand('copy');}catch(e){ok=false;}
+document.body.removeChild(ta);
+return ok;
+}
+function flash(btn,label,state){
+btn.textContent=label;
+btn.setAttribute('data-state',state);
+window.clearTimeout(btn.getAttribute('data-timer'));
+btn.setAttribute('data-timer',window.setTimeout(function(){
+btn.textContent='Copy';btn.removeAttribute('data-state');},2000));
+}
+Array.prototype.forEach.call(boxes,function(box){
+var btn=box.querySelector('.doc-code-copy');
+var code=box.querySelector('code');
+if(!btn||!code)return;
+btn.hidden=false;
+btn.addEventListener('click',function(){
+var text=code.textContent;
+function done(ok){flash(btn,ok?'Copied':'Press Ctrl+C',ok?'ok':'fail');}
+if(navigator.clipboard&&window.isSecureContext){
+navigator.clipboard.writeText(text).then(function(){done(true);},
+function(){done(fallback(text));});
+}else{done(fallback(text));}
+});
+});
+})();
+</script>
+</body>
+</html>
