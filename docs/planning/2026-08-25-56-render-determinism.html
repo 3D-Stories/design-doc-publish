@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Issue #56 — a committed page must re-render to itself</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+/* An ordinary fenced listing, in a box with its language and a copy button. RICH ONLY —
+   `plain` carries no template CSS by definition and stays a bare <pre>. The box owns the
+   border, radius and ground that `pre` supplies on its own elsewhere, so the bar and the
+   listing share one outline instead of stacking two. */
+.doc-code{margin:0 0 14px;border:1px solid var(--line);border-radius:10px;
+background:var(--code);overflow:hidden}
+.doc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:5px 8px 5px 14px;border-bottom:1px solid var(--line)}
+.doc-code-lang{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-code-copy{flex:none;font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:6px;
+padding:3px 10px;cursor:pointer}
+.doc-code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-code-copy[data-state=ok]{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy[data-state=fail]{color:var(--ink-2);border-color:var(--ink-3)}
+.doc-code>pre{margin:0;border:0;border-radius:0;background:none}
+/* Paper cannot take a copy. Printing the control would print a button that does nothing. */
+@media print{.doc-code-copy{display:none}}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-08-25 14:26 MDT</div>
+<h1>Issue #56 — a committed page must re-render to itself</h1>
+
+</header>
+<main>
+<div class="dz-lead"><p><em>Design note. WF2 small-standard lane, so this is a brief note rather than a multi-approach design: the cause was reproduced live before any of it was written.</em></p></div>
+<h2>The problem, as measured</h2>
+<p>Two independent defects wear one symptom.</p>
+<p><strong>Defect A — content staleness.</strong> <code>docs/planning/campaign-log.md</code> gained the &quot;2026-08-24 — the Vercel era ends (5.0.0)&quot; section in <code>3503719</code> (#52, 2026-08-24 20:23:28 -0600). <code>docs/planning/campaign-log.html</code> was last written in <code>37482cf</code> (2026-08-24 13:46:11 -0600). Nobody re-rendered it, so the committed page is missing a whole section.</p>
+<p><strong>Defect B — the accent is resolved from unversioned state.</strong> <code>pack_for(&quot;design-doc-publish&quot;, &lt;workspace file&gt;)</code> returns <code>origin: fallback</code>, <code>#4f7d15</code> / <code>#b7e87f</code>. All three doors are shut, in order:</p>
+<ol>
+<li>the configured workspace entry is literally <code>{&quot;name&quot;: &quot;design-doc-publish&quot;}</code> with **no <code>path</code> key**, so <code>_project_config</code> returns <code>None</code> — silently, and deliberately (<code>scripts/vdl_packs.py:207-211</code>, the #9 case);</li>
+<li><code>design-doc-publish</code> is <strong>absent from <code>SEEDS</code></strong> (<code>scripts/vdl_packs.py:47-70</code>);</li>
+<li>so <code>_fallback</code> hashes the name into <code>PALETTE</code> (<code>scripts/vdl_packs.py:235-244</code>).</li>
+</ol>
+<p>Step 1 reads <code>~/.config/design-doc-publish/workspace.json</code>, which is not in git. That is the dependency acceptance criterion 2 names.</p>
+<p><strong>Why no test saw either.</strong> Every byte-identity guard in this repository renders with <strong>no project pack</strong> — <code>test_byte_identity.py:32</code> and <code>regen_rendered_styles.py:48</code> both omit <code>vdl</code>. The accent layer is therefore invisible to all of them. And nothing at all guards <code>docs/examples/gallery/*.html</code> or <code>docs/planning/*.html</code> for render currency.</p>
+<p><strong>The blast radius is 13 pages, not one.</strong> A census of all 18 committed <code>docs/**</code> md+html pairs (re-render at the committed stamp, diff) found:</p>
+<table>
+<thead><tr><th>pages</th><th>what the committed HTML is missing</th></tr></thead>
+<tbody>
+<tr><td>11 gallery pages</td><td>the CSS rule <code>a{color:var(--accent)}</code></td></tr>
+<tr><td>gallery <code>roadmap</code></td><td>that rule, plus <code>.blk-ph-badge{flex:none;…}</code> → <code>{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;…}</code></td></tr>
+<tr><td><code>docs/planning/campaign-log</code></td><td>the #52 section (defect A)</td></tr>
+</tbody>
+</table>
+<p>Five pages already round-trip clean: <code>docs/design-language-example</code>, <code>docs/examples/gallery/plain</code>, <code>docs/planning/2026-08-24-37-vercel-backfill</code> (all three with no pack), and <code>docs/planning/2026-08-23-github-doc-harness-spec</code> plus <code>docs/planning/2026-08-25-access-architecture-consult</code> (both <strong>with</strong> the pack — so the green fallback is already shipping on two committed planning docs).</p>
+<p>Owner decision, 2026-08-25: honor acceptance criterion 1 literally and cover all 18 pairs, re-rendering the 13 stale ones in this PR.</p>
+<h2>The approach</h2>
+<p>Six changes, none of which reorders the resolution chain. The fourth (1b) was not in the original design — it was forced by the Step 8a cross-model review, which proved the first three left acceptance criterion 2 only partly met.</p>
+<h3>1. Make the chain converge (acceptance criterion 2)</h3>
+<p><code>pack_for</code> walks <strong>declared → seed → fallback</strong>, and that order is deliberate: a project that declares its own colour must supersede a seed (<code>scripts/vdl_packs.py:48-54</code> says so explicitly for chorestory). Reordering it would break that intent, so this design does not.</p>
+<p>Instead it makes the two reachable answers <strong>identical</strong>:</p>
+<ul>
+<li>add <code>design-doc-publish</code> to <code>SEEDS</code> with <code>#4f7d15</code> / <code>#b7e87f</code>, which makes the fallback hash unreachable for this project;</li>
+<li>add a <code>vdl</code> block carrying the <strong>same</strong> two colours to this repository&#x27;s own committed <code>.rawgentic.json</code>, which makes the <code>declared</code> path resolve to the same answer whenever a workspace does name a path here;</li>
+<li>pin the two to each other with a test, so they cannot drift apart later.</li>
+</ul>
+<p>After that the answer is the same whether the workspace names a path <em>to this tree</em>, names the project bare, or does not exist at all.</p>
+<p><strong>That is not yet enough, and §1b is why.</strong> It leaves the case where the workspace names a path to a DIFFERENT tree — which the first draft of this note dismissed and the review did not.</p>
+<p><strong>Why <code>#4f7d15</code> / <code>#b7e87f</code> and not a new colour.</strong> It is what two committed planning docs already wear, so adopting it re-renders one page instead of three and turns an accident into a declaration. It is a <code>PALETTE</code> entry, and <code>PALETTE</code>&#x27;s own contract is that all five clear WCAG AA in both themes against this renderer&#x27;s surfaces (<code>scripts/vdl_packs.py:72-75</code>), which <code>test_vdl_packs.py</code> measures rather than trusts. Reversible in one line each if the owner wants a different colour.</p>
+<h3>1b. The residual I first dismissed, and then had to fix</h3>
+<p>The paragraph that used to sit here said a workspace pointing the <em>name</em> <code>design-doc-publish</code> at some <em>other</em> repository was &quot;a misconfigured workspace, not renderer non-determinism&quot;, and left it at that. <strong>That dismissal was wrong</strong>, and the Step 8a cross-model review said so at Critical. Acceptance criterion 2 has no misconfiguration exemption: it asks for the accent to be deterministic given <code>--project</code> and the committed sources, full stop.</p>
+<p>Worse, the new guard could not see the violation, because it passes <code>workspace_file=None</code> by design. So the gate would have stayed green while production emitted a different colour — a guard that passes exactly what it exists to refuse.</p>
+<p><strong>Measured, not argued.</strong> With a workspace pointing the name at another tree declaring <code>#111111</code> / <code>#eeeeee</code>:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>GUARD  (workspace_file=None)   : seed      {&#x27;light&#x27;: &#x27;#4f7d15&#x27;, &#x27;dark&#x27;: &#x27;#b7e87f&#x27;}
+PROD   (workspace -&gt; other)    : declared  {&#x27;light&#x27;: &#x27;#111111&#x27;, &#x27;dark&#x27;: &#x27;#eeeeee&#x27;}
+css_layer byte-identical?      : False
+  guard emits: :root{--accent:#b7e87f;}
+  prod  emits: :root{--accent:#eeeeee;}</code></pre></div>
+<p><strong>The fix, decided by the owner after that measurement.</strong> One question is now asked BEFORE the chain: <em>is this project the repository the module is executing inside?</em> If so, that tree&#x27;s own committed declaration wins — <code>_own_repository_config</code> in <code>scripts/vdl_packs.py</code>, consulted first, because by the time <code>_project_config</code> has followed the workspace pointer the wrong tree is already chosen.</p>
+<p>It is still <strong>not a reordering</strong> of <code>declared → seed → fallback</code>. It is a narrower question asked ahead of it, and it fires only when the requested name is this tree&#x27;s own — verified for every seeded project: <code>_own_repository_config</code> returns <code>None</code> for <code>chorestory</code>, <code>saystory</code>, <code>rawgentic</code>, <code>sysop</code> and an invented <code>payments-api</code>, and a path only for <code>design-doc-publish</code>. So the chorestory intent at <code>scripts/vdl_packs.py:48-54</code> is untouched, and it generalizes: any repository vendoring this module now gets the same guarantee about its own pages.</p>
+<p>Three properties held deliberately, each with its own test:</p>
+<ul>
+<li><strong>The early answer is still VALIDATED.</strong> It goes through <code>load_pack</code>, so a malformed own-declaration warns and falls through to the seed. Answering early must not mean answering unvalidated, or this would be a new route for an unchecked hex to reach the <code>&lt;style&gt;</code> sink.</li>
+<li><strong>The seed is not now dead code — it is the floor.</strong> A checkout whose own <code>.rawgentic.json</code> is missing or corrupt still reaches the seed, never the name hash. Without that test, this fix would have quietly made the seed unreachable and restored the original defect on exactly the broken-config machine that can least afford a surprise.</li>
+<li><strong>Byte-identical across all four workspace states</strong> — absent, bare name, own repository, another repository — asserted on <code>css_layer</code>&#x27;s output, because that is what a reader sees.</li>
+</ul>
+<p>Two existing tests changed as a consequence, and neither was weakened. <code>TestEveryPackClearsAA::test_every_seed_lints_clean</code> now expects <code>declared</code> for this one project and <code>seed</code> for every other, with a separate test pinning that the carve-out fires for this project ALONE — rather than loosening the assertion to &quot;either&quot;, which would have stopped it noticing if some other project&#x27;s seed quietly stopped being reached. And a test of mine that asserted <code>origin == &quot;seed&quot;</code> with no workspace now asserts <code>declared</code>, plus explicitly that it is never <code>fallback</code>, since never-the-hash was always the property that mattered.</p>
+<h3>2. A permanent gate over every committed pair (acceptance criterion 1)</h3>
+<p>New <code>scripts/tests/regen_docs_pages.py</code> + <code>scripts/tests/test_docs_pages_current.py</code>, following the established pattern in <code>regen_rendered_styles.py</code> / <code>test_rendered_styles_current.py</code> rather than inventing one. Import direction is forced the same way: the recipe lives in the regenerator and the test imports it, because <code>pytest</code> is not importable under a bare <code>python3</code> on this host.</p>
+<p>What is new versus that precedent, and why:</p>
+<ul>
+<li><strong>It renders WITH the project pack.</strong> This is the whole point. Every existing guard omits <code>vdl</code> — <code>test_byte_identity.py:32</code> and <code>regen_rendered_styles.py:48</code> both do — which is exactly why this class of drift was invisible.</li>
+<li>**And it resolves every pack with <code>workspace_file=None</code>, never a machine&#x27;s configured workspace.** Amended after the Step 4 self-review raised this as Critical, because the first draft said &quot;with the project pack&quot; and never named the source. Passing the live <code>~/.config/design-doc-publish/workspace.json</code> would make the gate&#x27;s own verdict depend on unversioned machine state — precisely what acceptance criterion 2 forbids — so a gate written to refuse render drift could itself pass it silently on a different clone. With <code>None</code>, <code>_project_config</code> (<code>scripts/vdl_packs.py:158</code>) returns on its first executable line (<code>:178</code>), so resolution runs <strong>seed → hash over committed tables only</strong>. That is committed-sources-by-construction rather than by promise.</li>
+</ul>
+<p>  Measured, not assumed: <code>pack_for(&quot;design-doc-publish&quot;, None)</code> and   <code>pack_for(&quot;design-doc-publish&quot;, &lt;the live workspace&gt;)</code> return the <em>same</em> accent today   (both <code>origin: fallback</code>, <code>#4f7d15</code> / <code>#b7e87f</code>), and with the new <code>SEEDS</code> entry the   answer becomes <code>origin: seed</code> with <strong>byte-identical <code>css_layer</code> output</strong> — confirmed by   comparing the two layer strings directly. <code>css_layer</code> (<code>scripts/render/vdl.py:53-83</code>) reads   the pack only through <code>_colour</code> (<code>:39-50</code>) and <code>pack.get(&quot;tint&quot;)</code>; it never emits <code>origin</code>,   <code>source</code>, or <code>note</code>, so the origin change moves no bytes and the two already-green planning   docs stay byte-identical.</p>
+<ul>
+<li><strong>A committed manifest supplies each page&#x27;s render inputs</strong> — title, subtitle, style, stamp, <code>doc_id</code>, and <code>project</code>. It must be committed rather than extracted from the committed HTML: the HTML is the artifact under test, so deriving the inputs from it is circular, and a hand-edited title would re-render happily and pass.</li>
+<li><strong>Completeness.</strong> The manifest&#x27;s key set must equal the set of committed <code>docs/**</code> md+html pairs exactly, so a new document cannot silently skip the gate and a deleted one cannot leave a stale entry behind. Same rule <code>test_rendered_styles_current.py</code> applies to its style set.</li>
+<li><strong>A can-it-fail test</strong>, because a golden-file guard whose regenerator and assertion share one code path passes even on a broken renderer.</li>
+<li><strong>Sentinels the regenerator cannot rewrite</strong> — a doctype, a minimum size, and the manifest&#x27;s own pinned title and stamp present in the page.</li>
+</ul>
+<h4>What links the gate to production, and how far that link reaches</h4>
+<p><code>publish_doc.py</code> passes a real workspace (<code>scripts/publish_doc.py:1680</code>), so the gate alone would be testing a different resolution from the shipped one. The convergence test in change 1 is what closes that: it pins the <code>SEEDS</code> entry to this repository&#x27;s own <code>.rawgentic.json</code> <code>vdl</code> block, so the declared path and the seed path give one answer, and the gate&#x27;s <code>None</code> answer equals production&#x27;s.</p>
+<p><strong>That equivalence is scoped, and the scope is stated rather than assumed.</strong> Revised after the Step 4 verifier flagged the unconditional claim. The convergence test pins exactly one project, <code>design-doc-publish</code>, so the guarantee reaches only pages whose manifest entry names that project or no project at all — which today is every page the gate covers. A page manifested under some <em>other</em> project would need its own convergence pin before the guarantee extended to it, because nothing would then tie that project&#x27;s <code>SEEDS</code> value to its own declared block reached through a real workspace path. Two things narrow the exposure rather than leave it open: the guard asserts, over <strong>every</strong> project the manifest names, that resolution lands on <code>declared</code> or <code>seed</code> and never a hashed <code>fallback</code>; and the manifest itself is committed, so adding such a page is a reviewable act, not a silent one.</p>
+<h3>1c. And the fix in 1b had a hole of its own, on its own fallback path</h3>
+<p>The Step 11 cross-model review found it, and I confirmed it before accepting it. §1b established ownership and then, if our own declaration turned out to be <em>unusable</em>, fell through to <code>_project_config</code> — so a workspace could point the name at another tree whose <strong>valid</strong> declaration won:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>malformed own vdl block + a workspace pointing at another tree
+  -&gt; declared {&#x27;light&#x27;: &#x27;#111111&#x27;, &#x27;dark&#x27;: &#x27;#eeeeee&#x27;}</code></pre></div>
+<p>Criterion 2 re-opened on exactly the broken-config path §1b advertises as safe. My own tests missed it because every one of them passed <code>workspace_file=None</code>, so none exercised the fallback at all — the hole was in the test design, not just the code.</p>
+<p><strong>Ownership and pack validity are now separate questions.</strong> Once the requested project is identified as the executing repository, the workspace is not consulted for it <em>at all</em> — a rejected declaration goes straight to that project&#x27;s committed seed, and the seed-or-hash tail is factored into <code>_seed_or_fallback</code> so <code>pack_for</code>&#x27;s two exits cannot drift apart. Both counterexamples now measure byte-identical.</p>
+<p><strong>The honest limit, asserted rather than glossed.</strong> When our own config cannot be <em>parsed</em>, ownership is genuinely undeterminable: the file that would name the project is unreadable. Claiming ownership anyway would skip the workspace for <strong>every</strong> project and break <code>index/build_index.py</code>, which asks <code>pack_for</code> about all of them. So in that one case the workspace still answers — and what makes that defensible is that it <strong>warns loudly</strong>, by the change in §1d. There is a test asserting exactly this limit, so it is a recorded decision rather than an untested gap, and it names itself as the test to change if someone finds a signal that settles ownership without parsing the file.</p>
+<h3>1d. A silent swallow, found in my own review</h3>
+<p><code>_own_repository_config</code> swallowed parse errors silently, and its own justifying comment claimed a warning would print on the ordinary path. <strong>The justification was checkable and false</strong>: the <code>exists()</code> check above it already returns for a repository with no config, so the branch is reached only by a config that exists and is broken. It now warns. That warning is what makes §1c&#x27;s limit acceptable rather than a hole.</p>
+<h4>The gate&#x27;s unit is a PAIR, and that leaves committed pages it cannot cover</h4>
+<p>Amended after the Step 4 self-review, which called this out as a Medium. Criterion 1 asks for a page to re-render &quot;from its unchanged markdown&quot;, so a page with no markdown cannot satisfy it either way and a pair is the only unit the criterion defines. Of 32 committed <code>docs/**/*.html</code>, 18 pair with a sibling markdown and 14 do not:</p>
+<ul>
+<li><code>docs/rendered-styles/*.html</code> (13) — <strong>already guarded</strong> by <code>test_rendered_styles_current.py</code>, which renders them from one cross-style fixture.</li>
+<li><code>docs/examples/example-roadmap.html</code> (1) — guarded by <strong>nothing</strong>. It stays uncovered by this PR. Named here rather than left to be discovered.</li>
+</ul>
+<p>The guard pins that set, so a <em>new</em> sourceless page turns it red instead of slipping into a gap nobody re-counted.</p>
+<p>Scope this gate does <strong>not</strong> claim, stated so nobody mistakes it: the regenerator and the test call the same renderer, so this pins &quot;the committed pages match what the renderer currently emits&quot;, never &quot;the renderer is correct&quot;. Renderer correctness is pinned independently by <code>test_furniture_context.py</code>&#x27;s per-style SHA oracle, <code>test_byte_identity.py</code>&#x27;s exemplar, and the cross-style guards.</p>
+<h4>The stamp, and the friction it buys — a DEFERRED High, named here</h4>
+<p>The manifest <strong>pins each page&#x27;s stamp</strong>. That is the non-circular choice: taking the stamp out of the page under test is the same circularity finding S4-1 rejected for the title. The consequence is real and must be stated rather than discovered.</p>
+<p><code>publish_doc.py</code> re-renders with <code>_mountain_now()</code> and has <strong>no <code>--generated-at</code> flag</strong>, and <code>render()</code> writes <code>out_path</code> at <code>scripts/publish_doc.py:1289</code> — <strong>before</strong> the <code>--dry-run</code> check. So even a dry-run publish rewrites a committed page with a fresh stamp, which turns this gate red on a page nobody meant to change.</p>
+<p>Recorded as deferred finding <strong>S4-3, High</strong>, with the rationale that this is friction rather than incorrectness, and re-presented at Step 11. It is High rather than Critical because it is bounded and recoverable: the failure message names the file and the regenerator, and one manifest line fixes it. The proper fix — a <code>--generated-at</code> flag, or having <code>publish_doc</code> read the manifest stamp for a page the manifest covers — changes a CLI surface this design promised not to change, so it is a separate change with its own review.</p>
+<p><strong>Authoring flow for a covered page, so nobody has to work this out from a red test:</strong></p>
+<ol>
+<li>edit the markdown;</li>
+<li>bump that page&#x27;s <code>stamp</code> in the manifest;</li>
+<li>run <code>python3 scripts/tests/regen_docs_pages.py</code>;</li>
+<li>commit the markdown, the manifest and the regenerated HTML together.</li>
+</ol>
+<p><strong>Related platform behavior.</strong> <code>publish_doc.py:1289</code> uses <code>write_text</code>, which applies platform newline translation, so a publish from Windows would commit CRLF. That behavior predates this change and has no effect on this Linux host. This gate compares <strong>bytes</strong>, following <code>regen_rendered_styles.py</code>, whose docstring records that a text-I/O &quot;byte-identity&quot; guard is not one — so a CRLF-committed page would turn the gate red rather than compare equal.</p>
+<p>*(Reworded after the Step 8a cross-model review flagged the previous phrasing, &quot;a related observation, not a finding&quot;, as verdict-suppression language. It was: <code>&lt;review-severity&gt;</code> forbids telling a reviewer what verdict to reach, and #840 measured that such phrasing works — reviewers duly look elsewhere. The sentence has been reduced to the behavior and its consequence, with no classification attached. Recorded rather than quietly edited, because the rule I broke is one this repository&#x27;s own process is bound by.)*</p>
+<h3>3. Re-render the 13 stale pages (acceptance criterion 3)</h3>
+<p><code>campaign-log.html</code> is re-rendered <strong>with</strong> the pack, so it joins its two siblings at <code>#4f7d15</code> / <code>#b7e87f</code>, and with a new stamp — this PR appends a campaign-log entry, so the document genuinely changed. The 12 gallery pages keep their existing committed stamps: only the renderer moved, and bumping their stamps would falsely claim the documents were updated.</p>
+<p>The gallery pages stay <strong>pack-free</strong> (<code>project: null</code> in the manifest). They are template demonstrations, not project documents, and that matches <code>docs/design-language-example</code> and <code>docs/rendered-styles/*</code>. Their diff is then the single CSS line and nothing else.</p>
+<h2>File changes</h2>
+<table>
+<thead><tr><th>file</th><th>change</th></tr></thead>
+<tbody>
+<tr><td><code>scripts/vdl_packs.py</code></td><td>one <code>SEEDS</code> entry for <code>design-doc-publish</code></td></tr>
+<tr><td><code>.rawgentic.json</code></td><td>one <code>vdl</code> block, same two colours</td></tr>
+<tr><td><code>scripts/tests/regen_docs_pages.py</code></td><td><strong>new</strong> — the manifest and the render recipe</td></tr>
+<tr><td><code>scripts/tests/test_docs_pages_current.py</code></td><td><strong>new</strong> — round-trip, completeness, can-it-fail, sentinels</td></tr>
+<tr><td><code>scripts/tests/test_vdl_packs.py</code></td><td>one test pinning <code>SEEDS</code> to the <code>.rawgentic.json</code> block</td></tr>
+<tr><td><code>docs/planning/campaign-log.md</code></td><td>one appended entry (the <code>designArtifact</code> shared doc)</td></tr>
+<tr><td><code>docs/planning/campaign-log.html</code></td><td>re-rendered, with the pack, new stamp</td></tr>
+<tr><td><code>docs/examples/gallery/*.html</code> (12)</td><td>re-rendered, pack-free, stamps unchanged</td></tr>
+<tr><td><code>docs/planning/2026-08-25-56-render-determinism.md</code> + <code>.html</code></td><td>this note</td></tr>
+</tbody>
+</table>
+<p>No configuration changes beyond the <code>vdl</code> block. No new dependency. No migration. No architecture change: the resolution chain keeps its shape and its order.</p>
+<h2>Script interface changes</h2>
+<p>None. <code>publish_doc.py</code> and <code>render</code> keep every flag they have. <code>regen_docs_pages.py</code> is a new developer-facing regenerator, run by hand exactly as <code>regen_rendered_styles.py</code> is.</p>
+<h2>Failure modes</h2>
+<table>
+<thead><tr><th>mode</th><th>behavior</th><th>why that is right</th></tr></thead>
+<tbody>
+<tr><td>a new <code>docs/**</code> md+html pair is committed with no manifest entry</td><td>the completeness test <strong>fails</strong></td><td>otherwise a new document silently skips the gate — the failure <code>test_rendered_styles_current.py</code> was written to prevent</td></tr>
+<tr><td>a manifest entry names a pair that no longer exists</td><td>the completeness test <strong>fails</strong></td><td>a deleted document must not leave a stale entry claiming coverage</td></tr>
+<tr><td>the renderer changes deliberately</td><td>every affected round-trip <strong>fails</strong> until the regenerator is run</td><td>that is the gate working; the regeneration is the deliberate act criterion 1 asks for</td></tr>
+<tr><td>the renderer breaks, and someone regenerates</td><td>the can-it-fail test and the sentinels <strong>fail</strong></td><td>a golden file regenerated from a broken engine is the one failure a round-trip alone cannot catch</td></tr>
+<tr><td>the <code>SEEDS</code> entry and the <code>.rawgentic.json</code> block are edited apart</td><td>the convergence test <strong>fails</strong></td><td>the two agreeing is the whole mechanism of criterion 2</td></tr>
+<tr><td>no workspace file exists at all</td><td><code>pack_for</code> reaches the new <code>SEEDS</code> entry</td><td>the README&#x27;s first command must keep working on a machine that has never run setup (#9)</td></tr>
+<tr><td>a workspace names the project bare, with no <code>path</code></td><td>same seed answer</td><td>this is today&#x27;s real state, and it is now deterministic</td></tr>
+</tbody>
+</table>
+<h2>Security implications</h2>
+<p>None material, and specifically:</p>
+<ul>
+<li><strong>No new input is trusted.</strong> The <code>SEEDS</code> entry and the <code>vdl</code> block are repository configuration, which is the trust class <code>vdl_packs</code> already documents for pack values (<code>scripts/render/__init__.py:629</code>, <code>scripts/render/vdl.py:39-50</code>). Neither is author text, and neither reaches a page except through <code>css_layer</code>, whose hex validation is unchanged.</li>
+<li><strong>The colour still passes validation.</strong> <code>_valid_colours</code> enforces <code>^#[0-9a-f]{6}$</code> on both themes; the new block satisfies it, and a malformed one would warn and fall open exactly as today.</li>
+<li><strong>The three containment guards are untouched.</strong> <code>publish_doc.py:120</code>, <code>render/__init__.py:715-727</code> and <code>index/build_index.py:41-52</code> each refuse to load a <code>vdl_packs.py</code> that resolves outside its root, and the escape check on a workspace <code>path</code> (<code>vdl_packs.py:226-230</code>) is unchanged. This design adds no fourth load site.</li>
+<li><strong>The new test reads only committed repository files</strong> and writes nothing outside the regenerator&#x27;s explicit output paths under <code>docs/</code>.</li>
+</ul>
+<h2>Platform / external dependencies</h2>
+<p>platform_apis: none</p>
+<p>Every change is in-repo Python plus file reads and writes through <code>pathlib</code>, already precedented at the exact call sites this touches (<code>regen_rendered_styles.py</code> does the same reads and writes against the same <code>docs/</code> tree). No platform, framework, or external API is introduced, so there is nothing whose feasibility could be assumed.</p>
+<h2>Multi-PR assessment</h2>
+<p>Single PR. The diff is large in bytes — 13 regenerated pages — but it is one logical change, and the gate and the re-render <strong>must</strong> land together: the gate is red until the pages are current, and the pages have no protection until the gate exists.</p>
+<h2>Known follow-up, flagged not fixed</h2>
+<p>The 14 gallery <code>.png</code> screenshots become subtly stale once link colour changes. No test breaks — <code>test_example_gallery.py</code> asserts the file exists, never that it is current — and regenerating them needs a real browser. It goes in the PR body as a follow-up.</p>
+<p>Separately: <code>docs/planning/2026-08-24-37-vercel-backfill.html</code> is committed <strong>without</strong> the pack while its two dated siblings carry it. This design records that as <code>project: null</code> and leaves it byte-identical, which is criterion 1&#x27;s &quot;explained and intended&quot; branch rather than a silent inconsistency. Normalizing every planning doc onto the pack is the owner&#x27;s call and is not in this PR.</p>
+
+</main>
+<footer>Last updated: 2026-08-25 14:26 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+<script>
+(function(){
+var boxes=document.querySelectorAll('.doc-code');
+if(!boxes.length)return;
+function fallback(text){
+var ta=document.createElement('textarea');
+ta.value=text;ta.setAttribute('readonly','');
+ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+document.body.appendChild(ta);ta.select();
+var ok=false;
+try{ok=document.execCommand('copy');}catch(e){ok=false;}
+document.body.removeChild(ta);
+return ok;
+}
+function flash(btn,label,state){
+btn.textContent=label;
+btn.setAttribute('data-state',state);
+window.clearTimeout(btn.getAttribute('data-timer'));
+btn.setAttribute('data-timer',window.setTimeout(function(){
+btn.textContent='Copy';btn.removeAttribute('data-state');},2000));
+}
+Array.prototype.forEach.call(boxes,function(box){
+var btn=box.querySelector('.doc-code-copy');
+var code=box.querySelector('code');
+if(!btn||!code)return;
+btn.hidden=false;
+btn.addEventListener('click',function(){
+var text=code.textContent;
+function done(ok){flash(btn,ok?'Copied':'Press Ctrl+C',ok?'ok':'fail');}
+if(navigator.clipboard&&window.isSecureContext){
+navigator.clipboard.writeText(text).then(function(){done(true);},
+function(){done(fallback(text));});
+}else{done(fallback(text));}
+});
+});
+})();
+</script>
+</body>
+</html>

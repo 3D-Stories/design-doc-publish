@@ -10,8 +10,18 @@
     "fullName": "3D-Stories/design-doc-publish",
     "defaultBranch": "main"
   },
+  "vdl": {
+    "accent": {
+      "light": "#4f7d15",
+      "dark": "#b7e87f"
+    },
+    "source": "scripts/vdl_packs.py SEEDS['design-doc-publish'] (PALETTE[2])",
+    "note": "#56 — declared so the accent cannot depend on an unversioned workspace file. Identical to the SEEDS entry on purpose: pack_for resolves declared before seed, so making the two agree removes the ~/.config dependency without reordering the chain. test_vdl_packs.py pins them to each other."
+  },
   "contextMeter": {
-    "windowSize": 1000000
+    "windowSize": 1000000,
+    "checkInPercent": 50,
+    "actPercent": 65
   },
   "testing": {
     "frameworks": [

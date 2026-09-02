@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="design-doc-publish">
-<title>Halyard webhook ingestion plan</title>
+<title>Issue #56 — implementation plan</title>
 <style>
 :root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
 --line:#2a353c;--accent:#2dd4bf;--code:#232d34}
@@ -337,29 +337,88 @@ color:var(--ink-3);background:var(--code)}
 .tpl-roadmap .blk-ph-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg)}
 .tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
 
-.blk-stats .blk-spark{display:block;margin-top:6px;height:20px}
-.blk-stats .blk-spark svg{width:100%;height:20px;overflow:visible}
-.blk-stats .blk-spark polyline{fill:none;stroke:var(--accent);stroke-width:1.5;
-vector-effect:non-scaling-stroke}
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
 </style>
 </head>
 <body class="tpl-roadmap">
 <div class="wrap">
 <header>
-<div class="eyebrow">design artifact · updated 2026-03-02 09:00 MST</div>
-<h1>Halyard webhook ingestion plan</h1>
+<div class="eyebrow">design artifact · updated 2026-08-25 14:26 MDT</div>
+<h1>Issue #56 — implementation plan</h1>
 
 </header>
 <main>
-<p>Delivery plan for Halyard&#x27;s webhook ingestion work. Four phases, sequenced so each one is independently shippable and independently revertable.</p>
-<div class="blk blk-meter rm-meter"><div class="blk-meter"><span class="blk-label">Phases complete</span><span class="blk-value">1 / 4</span><span class="blk-track"><span class="blk-fill" style="width:25.0%"></span></span></div></div>
-<div class="blk blk-chips"><span class="blk-chip is-done">main at 7c41e02</span><span class="blk-chip is-wip">phase 2</span><span class="blk-chip is-blocked">carrier contracts</span></div>
-<section class="mstone rm-epic"><h3>Phases <span class="chip c-plan">—</span></h3><div class="blk blk-phases rm-phase"><div class="blk-ph is-done"><div class="blk-ph-head"><span class="blk-ph-ord">01</span><span class="blk-ph-title">Phase 1 — Ingest</span><span class="blk-ph-badge is-done" title="finished">5 of 5 done</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-done"></span><span class="blk-comp-seg is-done"></span><span class="blk-comp-seg is-done"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-done"><span class="blk-ph-id">H-101</span><span class="blk-ph-chip is-done" title="finished">done</span><span class="blk-ph-text">Accept and verify carrier signatures</span></div><div class="blk-ph-item is-done"><span class="blk-ph-id">H-102</span><span class="blk-ph-chip is-done" title="finished">done</span><span class="blk-ph-text">Persist raw events, unparsed</span></div><div class="blk-ph-item is-done"><span class="blk-ph-id">H-103</span><span class="blk-ph-chip is-done" title="finished">done</span><span class="blk-ph-text">Replay tooling for a dropped window</span></div></div></div><div class="blk-ph is-wip"><div class="blk-ph-head"><span class="blk-ph-ord">02</span><span class="blk-ph-title">Phase 2 — Write through</span><span class="blk-ph-badge is-wip" title="in flight">2 of 4 done</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-done"></span><span class="blk-comp-seg is-wip"></span><span class="blk-comp-seg is-planned"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-done"><span class="blk-ph-id">H-110</span><span class="blk-ph-chip is-done" title="finished">done</span><span class="blk-ph-text">Map carrier scan codes to our vocabulary</span></div><div class="blk-ph-item is-wip"><span class="blk-ph-id">H-111</span><span class="blk-ph-chip is-wip" title="in flight">wip</span><span class="blk-ph-text">Write to the replica on receipt</span></div><div class="blk-ph-item is-planned"><span class="blk-ph-id">H-112</span><span class="blk-ph-chip is-planned" title="not started">planned</span><span class="blk-ph-text">Freshness check against the carrier API</span></div></div></div><div class="blk-ph is-note"><div class="blk-ph-head"><span class="blk-ph-ord">03</span><span class="blk-ph-title">Phase 3 — Retire polling</span><span class="blk-ph-badge is-note" title="not started">not started</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-planned"></span><span class="blk-comp-seg is-planned"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-planned"><span class="blk-ph-id">H-120</span><span class="blk-ph-chip is-planned" title="not started">planned</span><span class="blk-ph-text">Drop the 90s poller to 15 minutes</span></div><div class="blk-ph-item is-planned"><span class="blk-ph-id">H-121</span><span class="blk-ph-chip is-planned" title="not started">planned</span><span class="blk-ph-text">Delete it once miss rate holds</span></div></div></div><div class="blk-ph is-blocked"><div class="blk-ph-head"><span class="blk-ph-ord">04</span><span class="blk-ph-title">Phase 4 — Carrier two</span><span class="blk-ph-badge is-blocked" title="stuck">blocked</span></div><span class="blk-comp-bar"><span class="blk-comp-seg is-blocked"></span></span><div class="blk-ph-items"><div class="blk-ph-item is-blocked"><span class="blk-ph-id">H-130</span><span class="blk-ph-chip is-blocked" title="stuck">blocked</span><span class="blk-ph-text">Contract signed</span></div></div></div></div>
-<div class="blk blk-stats"><div class="blk-item"><span class="blk-value">6.2%</span><span class="blk-label">miss rate today</span><span class="blk-spark"><svg viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polyline points="0.0,0.0 33.3,6.7 66.7,12.2 100.0,20.0"/></svg></span></div><div class="blk-item"><span class="blk-value">0.4%</span><span class="blk-label">target</span></div><div class="blk-item"><span class="blk-value">2</span><span class="blk-label">carriers live</span></div></div></section>
-<section class="mstone rm-epic"><h3>Sequencing, and why it is this order <span class="chip c-plan">—</span></h3><p>Phase 3 cannot start before phase 2 finishes, because dropping the poller while the write-through path is half-built removes the only thing covering it. Phase 4 waits on a signature we do not control, so it is parked rather than staffed.</p></section>
+<p>*WF2 small-standard lane. Checklist form: ordered tasks, each with a <code>riskLevel</code> and a one-line verification. Design note: <code>docs/planning/2026-08-25-56-render-determinism.md</code>.*</p>
+<p>Branch: <code>fix/56-render-determinism</code> (a defect report, so the <code>fix</code> conventional-commit type).</p>
+<p>Baseline to diff against, recorded at Step 2: <strong>2928 passed, 8 skipped, exit 0.</strong></p>
+<section class="mstone rm-epic"><h3>Risk calibration, stated deliberately <span class="chip c-plan">—</span></h3><p>One of four tasks is <code>high</code> — 25%, inside the documented 15–30% band. T2 carries it because it is the only task that puts a <strong>new value into a <code>&lt;style&gt;</code> block</strong>: a <code>SEEDS</code> accent flows through <code>css_layer</code> into rendered markup. The sink validates (<code>scripts/render/vdl.py:44-56</code>, <code>_HEX.fullmatch</code>) and so does the declared-block reader (<code>scripts/vdl_packs.py:88-95</code>, <code>_valid_colours</code>), so the surface is guarded — but a task that writes to a markup sink gets the Step 8a review rather than an argument about why it does not need one. No file in this change matches <code>plan_lib.DEFAULT_HIGH_RISK_PATH_PATTERNS</code> (checked), so no task is auto-promoted; T2&#x27;s tag is a deliberate manual call.</p>
+<p>The other three are <code>standard</code>: no subprocess, no network, no untrusted deserialization, no auth or credential surface, no migration, no module API change.</p>
+<h3>Task T1: The docs-pair byte-identity gate</h3>
+<p>RED first. Write <code>scripts/tests/regen_docs_pages.py</code> carrying the manifest and the render recipe, and <code>scripts/tests/test_docs_pages_current.py</code> carrying the assertions. The manifest records, per committed <code>docs/**</code> md+html pair: title, subtitle, style, stamp, <code>doc_id</code>, and <code>project</code>. Every pack resolves with <code>workspace_file=None</code>. Assertions: the round-trip per pair, manifest-vs-disk completeness both ways, a can-it-fail test, and sentinels the regenerator cannot rewrite (doctype, minimum size, the pinned title and stamp present in the page).</p>
+<p>The test must go red on the 13 stale pages before T3 makes it green. A gate that is green the moment it is written has proved nothing.</p>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/tests/regen_docs_pages.py, scripts/tests/test_docs_pages_current.py</li>
+<li>verification: <code>pytest scripts/tests/test_docs_pages_current.py -q</code> fails naming exactly the 13 pages the Step 2 census listed, and no others. Then the can-it-fail test passes.</li>
+<li>commit: <code>test(docs): pin every committed docs page to its own markdown (#56)</code></li>
+</ul>
+<h3>Task T2: Make the accent resolve from committed sources only</h3>
+<p>Add <code>design-doc-publish</code> to <code>SEEDS</code> in <code>scripts/vdl_packs.py</code> at <code>#4f7d15</code> / <code>#b7e87f</code>, and the matching <code>vdl</code> block to this repository&#x27;s own <code>.rawgentic.json</code>. Add a convergence test to <code>scripts/tests/test_vdl_packs.py</code> pinning the two to each other, plus a test that <code>pack_for(&quot;design-doc-publish&quot;, None)</code> returns those colours from a COMMITTED source.</p>
+<p><em>Corrected after the Step 11 cross-model review.</em> This line originally required <code>origin: seed</code>, which the final design makes wrong: T5 (<code>_own_repository_config</code>, added on the owner&#x27;s call after the Step 8a Critical) consults this repository&#x27;s own committed declaration first, so the origin is <code>declared</code> whenever that declaration is valid, and <code>seed</code> only when it is absent or rejected. Anyone following the original line literally would have written a regressive assertion. <code>origin: fallback</code> is the defect in every case.</p>
+<p>RED first: the convergence test must fail before the <code>SEEDS</code> entry exists.</p>
+<ul>
+<li>riskLevel: high (security surface: a new accent value flows into a <code>&lt;style&gt;</code> block through <code>css_layer</code>)</li>
+<li>files: scripts/vdl_packs.py, .rawgentic.json, scripts/tests/test_vdl_packs.py</li>
+<li>verification: <code>pytest scripts/tests/test_vdl_packs.py -q</code> green, and the new convergence test fails when either colour is edited apart from the other.</li>
+<li>commit: <code>fix(vdl): resolve this project&#x27;s accent from committed sources, not ~/.config (#56)</code></li>
+</ul>
+<h3>Task T3: Re-render the 13 stale pages</h3>
+<p>Run the T1 regenerator. The 12 gallery pages keep their committed stamps and stay pack-free. <code>campaign-log.html</code> is re-rendered with the pack and a new stamp, after T4 appends its entry.</p>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: docs/examples/gallery/analysis.html, docs/examples/gallery/dashboard.html, docs/examples/gallery/design-system.html, docs/examples/gallery/design.html, docs/examples/gallery/module-map.html, docs/examples/gallery/report.html, docs/examples/gallery/review.html, docs/examples/gallery/roadmap.html, docs/examples/gallery/slide-deck.html, docs/examples/gallery/spec.html, docs/examples/gallery/uat.html, docs/examples/gallery/workflow.html, docs/planning/campaign-log.html</li>
+<li>verification: <code>pytest scripts/tests/test_docs_pages_current.py -q</code> green on all 18 pairs, and <code>git diff --stat</code> shows only the expected pages.</li>
+<li>commit: <code>fix(docs): re-render every stale committed page against the current renderer (#56)</code></li>
+</ul>
+<h3>Task T4: Campaign-log entry and this issue&#x27;s own design pages</h3>
+<p>Append the #56 entry to <code>docs/planning/campaign-log.md</code> (the project&#x27;s <code>designArtifact</code> shared doc). Render the design note and this plan to HTML through the sanctioned add-on.</p>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: docs/planning/campaign-log.md, docs/planning/2026-08-25-56-render-determinism.md, docs/planning/2026-08-25-56-render-determinism.html, docs/planning/2026-08-25-56-impl-plan.md, docs/planning/2026-08-25-56-impl-plan.html</li>
+<li>verification: the new pages are themselves in the T1 manifest and the gate is green on them, so this issue&#x27;s own documents are covered by the guard it adds.</li>
+<li>commit: <code>docs(campaign-log): record the #56 render-determinism entry (#56)</code></li>
+</ul>
+<h3>Task T5: The EXECUTING tree owns its own accent (added mid-run)</h3>
+<p>NOT in the original plan. Added on the owner&#x27;s call after the Step 8a cross-model review returned a Critical, confirmed by measurement, showing that T2&#x27;s convergence left acceptance criterion 2 only partly met: a workspace file could still point the NAME at a different tree whose config declared another colour, and production emitted that colour while the new guard stayed green.</p>
+<p><code>_own_repository_config</code> asks, before the chain, whether the requested project is the repository the module is executing inside; if so, that tree&#x27;s own committed declaration wins.</p>
+<ul>
+<li>riskLevel: high (security surface: same <code>&lt;style&gt;</code> sink as T2, and it adds a resolution source)</li>
+<li>files: scripts/vdl_packs.py, scripts/tests/test_vdl_packs.py</li>
+<li>verification: <code>pytest -k EXECUTING</code> red before the fix on the two workspace states that matter; after it, <code>css_layer</code> byte-identical across all four workspace states, and <code>_own_repository_config</code> returns None for every project except this one.</li>
+<li>commit: <code>fix(vdl): the EXECUTING tree owns its own accent, whatever a workspace says (#56)</code></li>
+</ul>
+<h3>Task T6: Warn when this repository&#x27;s own config exists and is broken (added mid-run)</h3>
+<p>NOT in the original plan. Found in my own Step 11 inline review: <code>_own_repository_config</code> swallowed parse errors silently, and its justifying comment was checkable and false.</p>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/vdl_packs.py, scripts/tests/test_vdl_packs.py</li>
+<li>verification: a corrupt own-config warns and still reaches the seed; a non-object root warns; a repository with no config at all stays silent (the negative control).</li>
+<li>commit: <code>fix(vdl): warn when this repository&#x27;s own config exists and is broken (#56)</code></li>
+</ul></section>
+<section class="mstone rm-epic"><h3>Ordering <span class="chip c-plan">—</span></h3><p>T1 → T2 → T4 → T3, then T5 and T6 added mid-run after review. T3 runs last because it regenerates <code>campaign-log.html</code>, which needs T4&#x27;s markdown entry and T2&#x27;s seed already in place. No task shares a <code>parallel_group</code>: T3 depends on all three predecessors and T2&#x27;s seed changes what T3 renders.</p></section>
+<section class="mstone rm-epic"><h3>Documentation <span class="chip c-plan">—</span></h3><p>No README change: no flag, no interface and no published behaviour moves. <code>regen_docs_pages.py</code> is a developer regenerator documented by its own module docstring, exactly as <code>regen_rendered_styles.py</code> is.</p></section>
+<section class="mstone rm-epic"><h3>Deferred verification <span class="chip c-plan">—</span></h3><p>None. Every task is verifiable locally in this checkout, so no task carries a <code>verification: deferred-to-target</code> line.</p></section>
+<section class="mstone rm-epic"><h3>Not in this PR, and why <span class="chip c-plan">—</span></h3><ul>
+<li>The 14 gallery <code>.png</code> screenshots go subtly stale once link colour changes. No test breaks (<code>test_example_gallery.py</code> asserts existence, not currency) and regenerating them needs a real browser. Stated in the PR body as a follow-up.</li>
+<li><code>docs/examples/example-roadmap.html</code> has no sibling markdown, so the criterion cannot apply to it and the pair-based gate cannot cover it. It stays unguarded, named in the design note.</li>
+<li><code>docs/planning/2026-08-24-37-vercel-backfill.html</code> is committed without the pack while its two dated siblings carry it. Recorded as <code>project: null</code> and left byte-identical — criterion 1&#x27;s &quot;explained and intended&quot; branch. Normalizing every planning doc onto the pack is the owner&#x27;s call.</li>
+</ul></section>
 
 </main>
-<footer>Last updated: 2026-03-02 09:00 MST · generated by design-doc-publish — self-contained, no external resources.</footer>
+<footer>Last updated: 2026-08-25 14:26 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
 </div>
 </body>
 </html>
