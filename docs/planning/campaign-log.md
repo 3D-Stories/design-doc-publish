@@ -5,8 +5,8 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 
 ```stats
 8 | issues on this log
-59 | newest: filed, a minutes doc type and style
-3119 | suite on main at e74b409
+59 | newest: shipped, a minutes doc type and style
+3192 | suite with this PR, was 3119
 ```
 
 ```callout
@@ -16,12 +16,30 @@ issue gets a backlog section at WF1 time). The stats above always describe the N
 state; older sections keep their text as historical record.
 ```
 
-## #59 — A minutes doc type and style, for meeting minutes
+## #59 — A minutes doc type and style, for meeting minutes — shipped
 
-Filed 2026-09-02, unstarted — a backlog section per the convention above.
+PR open 2026-09-02, carrying the whole style. Refreshed here from the backlog section it
+started as, which is this log's convention: a section is rewritten inside its own issue's PR.
 
-There is no minutes output. The roster was read rather than recalled: thirteen `--style`
-templates and eleven `--type` purposes, and neither list carries a minutes entry. The only
+The chip is stated in the HEADING deliberately. Left to the body it read DONE, picked out of
+the phrase "records what was **done**" in the Robert's Rules paragraph below — a status
+nobody wrote, sitting beside prose that still said "unstarted". `roadmap_status_chip` gives a
+definitive HEADING status precedence precisely so the author can state it, and this is that.
+
+**What shipped:** a `minutes` template module and its registration; `DOC_TYPE_TAGS` and
+`FIRST_READ_DEVICES` entries, with `timeline` excluded so the type cannot express a
+transcript; a `minutes` purpose on the CLI; four documentation surfaces; a gallery example
+with its rendered page and screenshot; the cross-style rendered page; and the tests. The
+suite goes 3119 to 3192 passing with no regression.
+
+**What did NOT ship, stated because the gap is real:** the publish gate checks that a page
+carries the three block TAGS its style opens with, never their role, position or content. So
+a minutes page can drop its attendee region, or carry an unrelated verdict key, and still
+publish. Role-level and semantic structure is guarded by `test_minutes_template.py` instead.
+
+**The state before this issue, kept as the record it was written as.** There was no minutes
+output. The roster was read rather than recalled: thirteen `--style`
+templates and eleven `--type` purposes, and neither list carried a minutes entry. The only
 occurrences of the word in this repository are two test comments about wall-clock time. Meeting
 write-ups ship today as `--type analysis --style analysis`, which gives a section index and a
 verdict block but no attendee block, no decision register and no action items with an owner.

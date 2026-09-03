@@ -129,6 +129,21 @@ def _module():
     return minutes
 
 
+def _body(md=DOC, style=STYLE):
+    """The rendered BODY, never the whole page.
+
+    EVERY marker lookup in this file goes through here, and that is the point rather than
+    tidiness. Step 11 measured the alternative: this template's own stylesheet names
+    `mn-attendees`, `mn-agreed`, `mn-decided` and `mn-actions` at offsets 663, 1407, 2406
+    and 3775 — already in the order AC6 requires — so an order assertion against the
+    complete page was satisfied by the CSS and would have stayed green with every region
+    deleted from the document. The marker-presence test was vacuous for the same reason.
+    Those tests are the ONLY guard over structure the publish gate cannot enforce, so
+    fail-open there is the worst place in this file for it.
+    """
+    return re.search(r"<body[^>]*>(.*)</body>", _render(md, style), re.S).group(1)
+
+
 class TestItIsARegisteredStyle:
     def test_it_is_in_the_registry(self):
         assert STYLE in render_artifact._TEMPLATES
@@ -171,29 +186,52 @@ class TestTheFrameIsItsOwn:
         assert len(render_frame.owned_slots(_module())) >= 3
 
 
+# A page with the attendee region deleted, and a page with the two registers swapped.
+# These exist so the AC6 assertions can be shown to FAIL on the shapes they exist to
+# reject — without them, "the regions are present and in order" is a claim nobody checked.
+NO_ATTENDEES_DOC = DOC.replace(
+    "```chips attendees\nA. Rivera - chair | ok\nB. Osei - secretary | ok\n```\n\n", "")
+# The FENCES are swapped, not the headings. Swapping `## Agreed` and `## Decided` only
+# renames the sections: the markers come from the fence tags, so the body order would not
+# move and the negative test would assert nothing. The first cut of this constant did
+# exactly that, and the negative test caught it — which is the argument for having one.
+_AGREED_FENCE = DOC[DOC.index("```findings"):DOC.index("## Decided")].rstrip() + "\n"
+_DECIDED_FENCE = DOC[DOC.index("```verdict"):DOC.index("## Alternatives")].rstrip() + "\n"
+SWAPPED_DOC = (DOC
+               .replace(_AGREED_FENCE, "\x00SWAP\x00\n")
+               .replace(_DECIDED_FENCE, _AGREED_FENCE)
+               .replace("\x00SWAP\x00\n", _DECIDED_FENCE))
+
+
 class TestAC6RegionsAreDistinctAndOrdered:
-    """The criterion the policy maps CANNOT prove. See the module docstring."""
+    """The criterion the policy maps CANNOT prove. See the module docstring.
+
+    Every assertion here reads `_body()`, never the whole page, and Step 11 is why: the
+    stylesheet names all four regions in the required order, so the first cut of this class
+    was green on the CSS alone and would have stayed green with the body emptied. The
+    negative tests at the end of the class are what stop that returning silently.
+    """
 
     REGIONS = ("mn-attendees", "mn-agreed", "mn-decided", "mn-actions")
 
     def test_all_four_regions_are_present(self):
-        html = _render()
-        missing = [r for r in self.REGIONS if r not in html]
-        assert not missing, f"AC6 regions absent from the rendered page: {missing}"
+        body = _body()
+        missing = [r for r in self.REGIONS if r not in body]
+        assert not missing, f"AC6 regions absent from the rendered body: {missing}"
 
     def test_the_attendee_region_is_its_own_marker(self):
         """The gate cannot distinguish `chips attendees` from `chips meetingbar` — both are the
         `chips` tag. So a page can drop the attendee region and still publish. Confirmed by
         probe. This assertion is the only thing standing between that and a silent regression."""
-        html = _render()
-        assert "mn-attendees" in html, "the attendee region lost its own marker"
-        assert "mn-meetingbar" in html, "the meeting-facts region lost its own marker"
-        assert html.index("mn-meetingbar") < html.index("mn-attendees"), (
+        body = _body()
+        assert "mn-attendees" in body, "the attendee region lost its own marker"
+        assert "mn-meetingbar" in body, "the meeting-facts region lost its own marker"
+        assert body.index("mn-meetingbar") < body.index("mn-attendees"), (
             "meeting facts come before attendees")
 
     def test_the_regions_appear_in_document_order(self):
-        html = _render()
-        at = [html.index(r) for r in self.REGIONS]
+        body = _body()
+        at = [body.index(r) for r in self.REGIONS]
         assert at == sorted(at), (
             f"AC6 regions are out of order: "
             f"{sorted(zip(at, self.REGIONS))}")
@@ -201,8 +239,28 @@ class TestAC6RegionsAreDistinctAndOrdered:
     def test_the_ledger_leads_the_registers(self):
         """Summary-first. The ledger answers "what did this meeting do?" in the opening
         screenful, which is what this engine's design language requires of every style."""
-        html = _render()
-        assert html.index("mn-ledger") < html.index("mn-agreed")
+        body = _body()
+        assert body.index("mn-ledger") < body.index("mn-agreed")
+
+    def test_a_page_that_DROPS_the_attendee_region_is_detected(self):
+        """The negative half, and the reason the positive half means anything. This is the
+        exact page the publish gate accepts — both chip regions are the `chips` tag, so
+        deleting one still satisfies `check_style_devices`. If this file does not catch it,
+        nothing does."""
+        body = _body(NO_ATTENDEES_DOC)
+        assert "mn-attendees" not in body, (
+            "a page with no attendee fence still emitted the attendee marker, so the "
+            "positive assertion above proves nothing")
+        assert "mn-meetingbar" in body, "the meeting-facts region should be untouched"
+
+    def test_a_page_with_the_registers_SWAPPED_is_detected(self):
+        """Order, proved by breaking it. The four regions sit in the stylesheet in the
+        required order, so an order check that could not fail here would be reading the CSS."""
+        body = _body(SWAPPED_DOC)
+        at = [body.index(r) for r in self.REGIONS if r in body]
+        assert at != sorted(at), (
+            "the registers were swapped in the source and the rendered body still reported "
+            "them in order — the order assertion is reading something other than the body")
 
 
 class TestAC8DecidedNothing:
@@ -328,9 +386,17 @@ class TestAC13ThePrecedentIsRecorded:
         doc = _module().__doc__ or ""
         for cite in ("openui/open-ui", "json-ld/minutes", "nodejs/TSC"):
             assert cite in doc, f"the docstring does not name the precedent {cite}"
-        assert "precedent" in doc.lower(), (
-            "the docstring must record that summary-first minutes have no committed-artifact "
-            "precedent")
+        low = doc.lower()
+        # Step 11: the first cut asserted only that the WORD `precedent` occurred, so a
+        # docstring claiming summary-first minutes have STRONG precedent passed an assertion
+        # whose own message said the opposite. AC13 asks for three propositions, so assert
+        # the three.
+        for phrase in ("no committed-artifact precedent", "diverges from both",
+                       "opening screenful"):
+            assert phrase in low, (
+                f"AC13 needs the docstring to state {phrase!r}: that summary-first minutes "
+                "have no committed-artifact precedent, that this template diverges from both "
+                "witnesses, and that the reason is this engine's own opening-screenful rule")
 
     def test_the_docstring_records_that_the_type_policy_only_WARNS(self):
         """`DOC_TYPE_TAGS` is advisory: `blocks.py` prints a warning and renders a rejected
@@ -345,8 +411,11 @@ class TestMarkers:
                 "mn-decided", "mn-alternatives", "mn-actions", "mn-open"}
 
     def test_every_declared_marker_reaches_the_page(self):
-        html = _render()
-        missing = sorted(c for c in _module().MARKERS.values() if c not in html)
+        """The BODY. Step 11 measured this one fully vacuous against the whole page: every
+        declared marker value appears in this template's own stylesheet, so the test passed
+        whatever the renderer emitted."""
+        body = _body()
+        missing = sorted(c for c in _module().MARKERS.values() if c not in body)
         assert not missing, f"declared but never emitted: {missing}"
 
     def test_the_expected_set_is_what_the_module_declares(self):
@@ -512,10 +581,21 @@ class TestTheGalleryScreenshot:
 
 
 @pytest.mark.parametrize("other", ["design-system", "review", "report"])
-def test_it_does_not_move_another_styles_bytes(other):
-    """Adding a template must change nothing else. `test_furniture_context.py`'s PRE_74 oracle
-    is the real guard over every style; this is a cheap local echo of it on three neighbours."""
-    a = render_artifact.render_artifact(DOC, title="T", style=other, generated_at="x")
-    b = render_artifact.render_artifact(DOC, title="T", style=other, generated_at="x")
-    assert a == b
-    assert "tpl-minutes" not in a
+def test_this_templates_vocabulary_does_not_leak_into_another_style(other):
+    """This template's body class and markers must not appear on another style's page.
+
+    RENAMED AND REWRITTEN AT STEP 11, because the old name was a claim it could not support.
+    It was called `test_it_does_not_move_another_styles_bytes` and rendered the SAME current
+    implementation twice, then asserted the two were equal — which tests that the renderer is
+    deterministic, not that adding this style moved nothing. Any change to `design-system`
+    would have moved both values identically and left it green.
+
+    Cross-style containment needs a BEFORE, and the repository already has one:
+    `test_furniture_context.py`'s PRE_74 sha oracle holds a pinned hash per style and is the
+    real guard. It is not duplicated here. What this file can honestly prove is leakage, so
+    that is what it now asserts and what its name now says.
+    """
+    page = render_artifact.render_artifact(DOC, title="T", style=other, generated_at="x")
+    assert "tpl-minutes" not in page, f"the minutes body class reached a {other} page"
+    leaked = sorted(c for c in _module().MARKERS.values() if c in page)
+    assert not leaked, f"minutes markers reached a {other} page: {leaked}"

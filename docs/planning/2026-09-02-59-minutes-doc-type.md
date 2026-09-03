@@ -319,10 +319,23 @@ platform_apis:
   feasibility: verified via spike — /tmp/wf2-59-probe.py, run 2026-09-02, exit 0, 22 checks
     passed and 0 failed. It injected this exact declaration into render._templates.TEMPLATES,
     .CSS and .MARKERS, bound it with render._bind plus render._css_for exactly as
-    render/__init__.py does, then rendered both the full page (17488 bytes, all nine region
-    markers emitted, body class tpl-minutes, no script tag) and the AC8 decided-nothing page
-    (13133 bytes, carrying no mn-decided region). frame.owned_slots returned 6 slots including
-    measure, and the measure clash dict came back unchanged.
+    render/__init__.py does, then rendered both the full page (all nine region markers
+    emitted, body class tpl-minutes, no script tag) and the AC8 decided-nothing page.
+    frame.owned_slots returned 6 slots including measure, and the measure clash dict came
+    back unchanged.
+
+    CORRECTED AT STEP 11, and the correction matters more than the numbers. This entry
+    previously recorded the AC8 page as "13133 bytes, carrying no mn-decided region". That
+    was the FIRST spike, taken while the draft design left `verdict` OUT of
+    FIRST_READ_DEVICES — the design the Step 3 peer consult then overturned. Leaving it here
+    preserved evidence for a rejected design directly beneath the design that replaced it,
+    and a reader could have accepted output violating both AC6 and AC8 on the strength of it.
+    Re-measured against the SHIPPED implementation: the AC8 page is 21849 bytes and DOES
+    carry mn-decided, holding exactly one blk-row is-none whose key is `none`, with no
+    `decided` key anywhere. The populated page is 21859 bytes. Byte counts from the first
+    spike are dropped rather than refreshed, because they measured an injected declaration
+    rather than the committed module and re-quoting them would imply a continuity that does
+    not exist.
   failure: fail-loud
 - api: headless Chrome --screenshot for docs/examples/gallery/minutes.png
   feasibility: verified via spike — run 2026-09-02 on Google Chrome 152.0.7977.64. The exact
