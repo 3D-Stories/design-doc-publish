@@ -160,9 +160,10 @@ PAGES = {
         style='design', stamp='2026-08-25 14:26 MDT', project='design-doc-publish'),
     # Re-rendered by #56 WITH the pack, joining its two dated siblings. Its previous committed
     # copy predated the #52 markdown entry entirely.
+    # Stamp bumped by #59's WF1 backlog section, per the authoring flow in this docstring.
     'docs/planning/campaign-log': dict(
         title='design-doc-publish — campaign log',
-        style='roadmap', stamp='2026-08-25 14:26 MDT', project='design-doc-publish'),
+        style='roadmap', stamp='2026-09-02 15:37 MDT', project='design-doc-publish'),
 }
 
 
