@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Issue #59 — implementation plan</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+:root{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=dark]{--chip-c:#2dd4bf;--chip-c-bg:#123531;--defer:#fbbf24;--defer-bg:#302a14}
+:root[data-theme=light]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}
+@media print{:root,:root[data-theme=dark]{--chip-c:#0f766e;--chip-c-bg:#e6f2f0;--defer:#955a06;--defer-bg:#f8f2e2}}
+.mstone{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--accent);border-radius:12px;padding:14px 16px;margin:14px 0}
+.mstone h3{margin:0 0 .4em;font-size:15px;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:2px 8px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.c-conf{color:var(--chip-c);background:var(--chip-c-bg)}
+.c-defer{color:var(--defer);background:var(--defer-bg)}
+.c-plan{color:var(--ink-2);background:var(--code)}
+
+body.tpl-roadmap{background:radial-gradient(1000px 520px at 70% -8%,#17202c 0%,var(--bg) 58%)}
+.tpl-roadmap .wrap{max-width:1120px;padding:0 22px 72px}
+.tpl-roadmap header{padding:36px 0 14px;border-bottom:none;margin-bottom:20px}
+.tpl-roadmap h1{font-size:clamp(26px,3.6vw,36px)}
+.tpl-roadmap h2{font-size:20px;margin:2em 0 .6em}
+
+.tpl-roadmap .rm-epic{border-left-width:4px}
+.tpl-roadmap .rm-meter{margin:10px 0 4px}
+.tpl-roadmap .rm-meter .blk-track{height:8px}
+.tpl-roadmap .rm-child{gap:5px}
+.tpl-roadmap .rm-child .blk-chip{font-size:10.5px;padding:2px 8px}
+/* Phase rail — what we take from the reference's `.gantt` is that a row is a PHASE, not a log
+   entry: the marker is a short bar rather than a dot, and the phase name is the heavy element
+   while the `when` shrinks to a label. It is NOT proportional — see the docstring; every bar is
+   the same size, because the grammar carries no duration. */
+.tpl-roadmap .rm-timeline{margin:18px 0;border-left-color:var(--line)}
+.tpl-roadmap .rm-timeline .blk-tl{padding:10px 0}
+.tpl-roadmap .rm-timeline .blk-tl::before{width:4px;height:22px;border-radius:2px;left:-19px;
+top:12px;background:var(--line)}
+.tpl-roadmap .rm-timeline .is-now::before{background:var(--accent)}
+.tpl-roadmap .rm-timeline .is-past::before{background:var(--ink-3)}
+.tpl-roadmap .rm-timeline .blk-when{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase}
+.tpl-roadmap .rm-timeline .blk-title{font-size:15.5px}
+/* Risk table — the reference's `.sev` pill, coloured by level, ahead of the risk text so the
+   column of pills is scannable on its own.
+   Severity is NOT a closed set here, which is worth knowing before reading the four rules below.
+   `_findings` calls `_token(value, "severity")` and `_SEMANTIC_SETS` has no "severity" entry, so
+   ANY slug passes straight through — `blocker` yields `is-blocker`, and a blank field yields
+   `is-note`. Neither warns. Executed, not assumed. The four rules colour the four levels the rest
+   of the engine already uses (`review` styles the same set); anything else keeps the base pill
+   shape with no fill, and the author's own word still renders inside it. Deliberate: an
+   unrecognised severity should look unrecognised, not be silently recoloured. */
+.tpl-roadmap .rm-risk{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+padding:4px 16px;margin:14px 0}
+.tpl-roadmap .rm-risk .blk-finding{border-bottom:1px solid var(--line);padding:10px 0}
+.tpl-roadmap .rm-risk .blk-finding:last-child{border-bottom:none}
+.tpl-roadmap .rm-risk .blk-sev{display:inline-block;font:700 10px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;padding:2px 9px;
+border-radius:999px;margin-right:8px}
+.tpl-roadmap .rm-risk .is-critical .blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .rm-risk .is-high .blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.tpl-roadmap .rm-risk .is-medium .blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .rm-risk .is-low .blk-sev{color:var(--sev-low);background:var(--sev-low-bg)}
+/* Data-flow figure — the reference's `.diagram`: a framed figure whose nodes are boxes and
+   whose edges are accented. The tree stays a tree; only the framing and the edge weight come
+   from the reference. */
+.tpl-roadmap .rm-flow{background:var(--code);border:1px solid var(--line);border-radius:12px;
+padding:12px 16px;margin:16px 0}
+.tpl-roadmap .rm-flow .blk-node{background:var(--bg)}
+.tpl-roadmap .rm-flow .blk-edge{color:var(--accent);font:700 10.5px/1.6 ui-monospace,Menlo,
+Consolas,monospace;letter-spacing:.05em}
+.tpl-roadmap .rm-flow .blk-label{font-weight:650}
+/* #68: the segmented composition meter — the signature device of the approved visual spec
+   (docs/planning/2026-08-02-72-visual-spec.md §2). One segment per group, proportional to its
+   count, coloured by STATE. The gap between segments is what makes it read as parts of a whole
+   rather than one bar; a solid bar is what `meter` already is. */
+.tpl-roadmap .blk-comp{margin:14px 0}
+.tpl-roadmap .blk-comp-bar{display:flex;gap:5px}
+.tpl-roadmap .blk-comp-seg{height:9px;border-radius:5px;background:var(--ink-3)}
+.tpl-roadmap .blk-comp-seg.is-crit{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-seg.is-warn{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-seg.is-ok{background:var(--chip-c)}
+/* #166: the STATUS half of the phase vocabulary. Strictly additive — the three severity rules
+   above keep their exact declarations, because every roadmap published so far is drawn with
+   them and a repaint is not a fix. The groups are declared in `blocks.py`; this layer only
+   says which colour each group takes, and `test_phase_state_vocabulary.py` fails when a
+   declared token has no rule here. */
+.tpl-roadmap .blk-comp-seg.is-done,.tpl-roadmap .blk-comp-seg.is-shipped,
+.tpl-roadmap .blk-comp-seg.is-merged{background:var(--chip-c)}
+.tpl-roadmap .blk-comp-seg.is-active,.tpl-roadmap .blk-comp-seg.is-wip,
+.tpl-roadmap .blk-comp-seg.is-pending{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-seg.is-blocked,
+.tpl-roadmap .blk-comp-seg.is-failed{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-legend{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:9px;
+font-size:10.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3)}
+.tpl-roadmap .blk-comp-key{display:inline-flex;align-items:center;gap:7px}
+.tpl-roadmap .blk-comp-key::before{content:"";width:8px;height:8px;border-radius:2px;
+background:var(--ink-3)}
+.tpl-roadmap .blk-comp-key.is-crit::before{background:var(--sev-crit)}
+.tpl-roadmap .blk-comp-key.is-warn::before{background:var(--sev-med)}
+.tpl-roadmap .blk-comp-key.is-ok::before{background:var(--chip-c)}
+/* #68 PR 2: the phase band — the container the composition meter measures.
+   Spec §2 "Tracks as first-class containers": a titled band with its own state badge, its own
+   segmented bar, and its work items nested INSIDE it. Depth by ground, not shadow (spec rule 2):
+   the band sits on `--surface` and its item strip sinks back to `--bg`, which is the two-ground
+   version of the target's three. The ordinal is what makes the sequence visible — it is the
+   "phases in order" the issue title asks for, and it is why the gutter is fixed-width and mono:
+   `01` and `10` must line up or the column stops reading as a sequence. */
+.tpl-roadmap .rm-phase{margin:18px 0;display:flex;flex-direction:column;gap:14px}
+.tpl-roadmap .blk-ph{background:var(--surface);border:1px solid var(--line);
+border-radius:12px;padding:14px 16px;border-left:4px solid var(--ink-3)}
+.tpl-roadmap .blk-ph.is-crit{border-left-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph.is-warn{border-left-color:var(--sev-med)}
+.tpl-roadmap .blk-ph.is-ok{border-left-color:var(--chip-c)}
+.tpl-roadmap .blk-ph.is-done,.tpl-roadmap .blk-ph.is-shipped,
+.tpl-roadmap .blk-ph.is-merged{border-left-color:var(--chip-c)}
+.tpl-roadmap .blk-ph.is-active,.tpl-roadmap .blk-ph.is-wip,
+.tpl-roadmap .blk-ph.is-pending{border-left-color:var(--sev-med)}
+.tpl-roadmap .blk-ph.is-blocked,
+.tpl-roadmap .blk-ph.is-failed{border-left-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph-head{display:flex;align-items:baseline;gap:12px}
+.tpl-roadmap .blk-ph-ord{flex:none;width:26px;font:700 13px/1.4 ui-monospace,Menlo,
+Consolas,monospace;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.tpl-roadmap .blk-ph-title{flex:1;font-size:15.5px;font-weight:700}
+.tpl-roadmap .blk-ph-badge{flex:0 1 auto;min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:2px 9px;border-radius:6px;
+color:var(--ink-3);border:1px solid var(--line)}
+.tpl-roadmap .blk-ph-badge.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-warn{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-ok{color:var(--chip-c);background:var(--sev-low-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-done,.tpl-roadmap .blk-ph-badge.is-shipped,
+.tpl-roadmap .blk-ph-badge.is-merged{color:var(--chip-c);background:var(--sev-low-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-active,.tpl-roadmap .blk-ph-badge.is-wip,
+.tpl-roadmap .blk-ph-badge.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-badge.is-blocked,
+.tpl-roadmap .blk-ph-badge.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+/* One segment per ITEM, so the bar is a picture of the list beneath it. Equal widths (spec §2)
+   — `flex:1` rather than an inline percentage, so the renderer does no arithmetic and the
+   segments cannot drift out of step with the rows they stand for. */
+.tpl-roadmap .blk-ph > .blk-comp-bar{margin:11px 0 0}
+.tpl-roadmap .blk-ph .blk-comp-seg{flex:1}
+.tpl-roadmap .blk-ph-items{margin-top:11px}
+.tpl-roadmap .blk-ph-items:empty{display:none}
+/* 38px = the ordinal's 26px plus the head's 12px gap, so an item's id starts exactly under
+   its phase's title. At 26px they were three-quarters aligned, which reads as a mistake
+   rather than as a level of hierarchy — found by looking, not by a test. */
+.tpl-roadmap .blk-ph-item{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+padding:8px 0 8px 38px;border-top:1px solid var(--line)}
+.tpl-roadmap .blk-ph-id{font:700 11.5px/1.6 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);border-bottom:2px solid var(--line);padding-bottom:1px}
+.tpl-roadmap .blk-ph-item.is-crit .blk-ph-id{color:var(--sev-crit);
+border-bottom-color:var(--sev-crit)}
+/* The id accent marks TROUBLE only, which is why it is not the whole vocabulary: if every state
+   coloured the id, none of them would stand out. `blocked` and `failed` join `crit` because they
+   are the same group (`_PHASE_STATE_STUCK`), and the guard pins that the group and these rules
+   name the same three words. Written as its own rule rather than appended to the selector list
+   above, so the `is-crit` line stays byte-for-byte what shipped. */
+.tpl-roadmap .blk-ph-item.is-blocked .blk-ph-id,
+.tpl-roadmap .blk-ph-item.is-failed .blk-ph-id{color:var(--sev-crit);
+border-bottom-color:var(--sev-crit)}
+.tpl-roadmap .blk-ph-chip{font:700 9.5px/1.7 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:1px 7px;border-radius:6px;
+color:var(--ink-3);background:var(--code)}
+.tpl-roadmap .blk-ph-chip.is-crit{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .blk-ph-chip.is-warn{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .blk-ph-chip.is-ok{color:var(--chip-c);background:var(--sev-low-bg)}
+/* The reported defect: DONE rendered grey because nothing matched `.is-done`. These take the
+   SAME declarations as `.is-ok` above rather than a new green, so a page that says DONE and a
+   page that says OK do not become two different-looking claims about the same thing. Measured
+   AA on both: 7.54 dark, 4.82 light. */
+.tpl-roadmap .blk-ph-chip.is-done,.tpl-roadmap .blk-ph-chip.is-shipped,
+.tpl-roadmap .blk-ph-chip.is-merged{color:var(--chip-c);background:var(--sev-low-bg)}
+.tpl-roadmap .blk-ph-chip.is-active,.tpl-roadmap .blk-ph-chip.is-wip,
+.tpl-roadmap .blk-ph-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg)}
+.tpl-roadmap .blk-ph-chip.is-blocked,
+.tpl-roadmap .blk-ph-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
+
+/* An ordinary fenced listing, in a box with its language and a copy button. RICH ONLY —
+   `plain` carries no template CSS by definition and stays a bare <pre>. The box owns the
+   border, radius and ground that `pre` supplies on its own elsewhere, so the bar and the
+   listing share one outline instead of stacking two. */
+.doc-code{margin:0 0 14px;border:1px solid var(--line);border-radius:10px;
+background:var(--code);overflow:hidden}
+.doc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:5px 8px 5px 14px;border-bottom:1px solid var(--line)}
+.doc-code-lang{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-code-copy{flex:none;font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:6px;
+padding:3px 10px;cursor:pointer}
+.doc-code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-code-copy[data-state=ok]{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy[data-state=fail]{color:var(--ink-2);border-color:var(--ink-3)}
+.doc-code>pre{margin:0;border:0;border-radius:0;background:none}
+/* Paper cannot take a copy. Printing the control would print a button that does nothing. */
+@media print{.doc-code-copy{display:none}}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-roadmap">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-09-02 18:30 MDT</div>
+<h1>Issue #59 — implementation plan</h1>
+
+</header>
+<main>
+<p>Nine tasks, one PR. Design: <code>docs/planning/2026-09-02-59-minutes-doc-type.md</code>.</p>
+<ul>
+<li><strong>Branch:</strong> <code>feat/59-minutes-doc-type-and-style</code></li>
+<li><strong>Baseline to beat:</strong> 3119 passed, 8 skipped, exit 0, measured at <code>e74b409</code></li>
+<li><strong>Test style:</strong> Red-Green-Refactor, because <code>capabilities.has_tests</code> is true</li>
+<li><strong>Risk calibration:</strong> <strong>2 of 10</strong> tasks are <code>high</code>, which is 20% and inside the documented 15-30% band. Step 8a therefore fires as one accumulated wave over those two commits, and the checkpoint that schedules it is defined below rather than merely promised.</li>
+</ul>
+<section class="mstone rm-epic"><h3>The shape this repository forces <span class="chip c-plan">—</span></h3><p>A style cannot land incrementally. Adding <code>minutes</code> to <code>MODULES</code> turns <strong>seven</strong> guard files red at once — the golden SHA oracle, the classification test, the two doc-table pins, the gallery guard, the currency gate, the rendered-styles guard and the reachability guard.</p>
+<p>That is by design. Each guard exists so a style cannot ship with a surface missing. So this is one red-to-green arc with a scoped verification per task, and the full suite runs once at Step 9.</p>
+<p>No task declares a <code>parallel_group</code>. Each one depends on the registration from the task before it, so the whole plan is serial and says so rather than claiming a parallelism it cannot prove.</p>
+<p><strong>Three files are touched by more than one task, and that is intended rather than a conflict.</strong> <code>scripts/tests/regen_docs_pages.py</code> is edited three times (T0&#x27;s stamp bump, T6&#x27;s gallery entry, T9&#x27;s two planning entries) and <code>README.md</code> twice (T4&#x27;s <code>--type</code> row, T6&#x27;s gallery cell). The <code>files</code> declarations exist so a <code>parallel_group</code> can be judged disjoint. Nothing here is parallel, so the overlap costs nothing — but one writer at a time is still the rule, and the serial order above is that writer.</p></section>
+<section class="mstone rm-epic"><h3>Tasks <span class="chip c-plan">—</span></h3><h3>Task T0: commit the three inherited files that are already on disk</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: docs/planning/campaign-log.md, docs/planning/campaign-log.html, scripts/tests/regen_docs_pages.py</li>
+<li>commit: <code>docs: the #59 backlog section on the campaign log, regenerated (#59)</code></li>
+</ul>
+<p>Lands FIRST, right after the branch cut. These three are already modified in this checkout and belong to #59: the diff adds the <code>## #59</code> section to the campaign log and rewrites its stats strip to name #59 as newest, and the <code>regen_docs_pages.py</code> change is that page&#x27;s stamp bump.</p>
+<p>Committing them first keeps the feature diff readable and puts #59&#x27;s own status surface out of harm&#x27;s way before anything else moves. All three go together — committing the markdown without its regenerated HTML reproduces the exact defect issue #56 existed to fix.</p>
+<p><strong>Pre-commit hunk gate, and it aborts rather than splitting.</strong> Staging a whole named file does not isolate the changes INSIDE it, and other sessions share this workspace — so a file could have gained somebody else&#x27;s hunk since this plan was written. Before staging:</p>
+<ol>
+<li>Read <code>git diff -- &lt;each of the three paths&gt;</code> and confirm every hunk is the expected #59 change: the <code>## #59</code> section plus the stats strip on the markdown, its regeneration on the HTML, and the single stamp line on <code>regen_docs_pages.py</code>.</li>
+<li>If ANY other hunk appears, <strong>ABORT</strong> and name the file. Do not commit around it.</li>
+<li>Stage the three by name. Never <code>git add docs/</code>.</li>
+<li>Re-read <code>git diff --staged</code> and confirm it holds those three files and nothing else.</li>
+</ol>
+<p><code>git add -p</code> would let a mixed file be split, but it is interactive and unavailable here, so this gate aborts instead. An abort is recoverable; a commit carrying another session&#x27;s work is not.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_docs_pages_current.py -q</code> — already measured green by the predecessor session at 60 tests, exit 0, so this task confirms rather than discovers.</li>
+</ul>
+<h3>Task T1: write the failing template test</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/tests/test_minutes_template.py</li>
+<li>commit: <code>test(minutes): the failing template test for the minutes style (#59)</code></li>
+</ul>
+<p>RED. Shaped after <code>scripts/tests/test_design_system_template.py</code>. It asserts:</p>
+<ol>
+<li>the style is in the registry and the body class is <code>tpl-minutes</code>;</li>
+<li>the frame owns <code>measure</code> and declares <code>ground</code>;</li>
+<li>all nine region markers are emitted from a fixture;</li>
+<li>the <strong>attendee region is present</strong>, and the four AC6 regions appear <strong>in document order</strong> — this pair is the M1 repair, and it is asserted against a rendered fixture because the policy maps prove presence only;</li>
+<li>the AC8 decided-nothing page renders, carries <code>mn-decided</code>, and emits zero <code>decided</code> keys;</li>
+<li>the docstring names all four vocabulary words, both precedents, and the divergence reason;</li>
+<li><code>settle</code> never appears as a register label;</li>
+<li>no <code>&lt;script&gt;</code> is emitted, so <code>uat</code> stays the only interactive template;</li>
+<li>the <code>mn-</code> markers are absent from every other style;</li>
+<li><strong>Assertion 11 in effect, and it belongs to T6.</strong> <code>TestTheGalleryScreenshot</code> decodes <code>docs/examples/gallery/minutes.png</code>, asserts 1280 x 1000, and asserts a byte floor DERIVED from the other committed gallery PNGs rather than from a magic number — the smallest is <code>module-map.png</code> at 72527 bytes, so the floor is half of the smallest sibling. See &quot;What the screenshot assertions do and do not prove&quot; below.</li>
+<li>A <strong>rendered-fixture vocabulary</strong> assertion, separate from the docstring one: <code>agreed</code> reaches the <code>mn-agreed</code> region, the decided key reaches <code>mn-decided</code>, and the action rows reach <code>mn-actions</code>. AC7 says the template USES one word for one thing, and &quot;uses&quot; means the output — a docstring assertion alone would pass while the rendered page misused every word.</li>
+</ol>
+<p><strong>Which assertions go green when, corrected after running it.</strong> An earlier draft of this plan said assertions 1 to 9 and 11 all go green at T2. <strong>Measured, that is wrong</strong>: the <code>TestPolicy</code> class reads <code>DOC_TYPE_TAGS[&quot;minutes&quot;]</code> and <code>FIRST_READ_DEVICES[&quot;minutes&quot;]</code>, which T3 creates, so five of its assertions cannot pass at T2. The registration alone is an incomplete state by construction.</p>
+<table>
+<thead><tr><th>Assertions</th><th>Green at</th><th>Excluded from the earlier command by</th></tr></thead>
+<tbody>
+<tr><td>registry, frame, markers, AC6 order, AC8, AC7, AC13</td><td><strong>T2</strong></td><td>—</td></tr>
+<tr><td><code>TestPolicy</code> — the two maps and the publish gate</td><td><strong>T3</strong></td><td><code>-k &quot;not TestPolicy&quot;</code></td></tr>
+<tr><td><code>TestTheGalleryScreenshot</code></td><td><strong>T6</strong></td><td><code>-k &quot;not TestTheGalleryScreenshot&quot;</code></td></tr>
+</tbody>
+</table>
+<p>Each task&#x27;s command therefore excludes exactly what a LATER task creates, and each is expected fully green rather than &quot;green except for the ones we know about&quot;.</p>
+<p>An earlier draft of this plan handled that by telling T2 to expect &quot;exactly one remaining failure&quot;. That was a workaround for a structural problem, and the cross-model review was right to reject it: <strong>a verification command that always exits non-zero certifies nothing.</strong> So T2&#x27;s command EXCLUDES <code>TestTheGalleryScreenshot</code> with <code>-k</code> and is expected FULLY green, and T6&#x27;s command runs the whole file.</p>
+<p><strong>Measured red baseline</strong>, taken with the module moved aside so the failure is genuinely for want of the implementation: <strong>31 failed, 7 passed, exit 1</strong> over the whole file, and <strong>28 failed, 7 passed, 3 deselected, exit 1</strong> in T2&#x27;s excluded form. The 7 passes are vacuous before the module exists — for example the &quot;markers are absent from every other style&quot; check is trivially true when the markers do not exist yet.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_minutes_template.py -q</code> MUST fail for want of the module. Record that failure as the red baseline.</li>
+</ul>
+<h3>Task T2: the template module and its registration</h3>
+<ul>
+<li>riskLevel: high (module boundary — <code>MODULES</code> drives six derived structures other modules import: <code>TEMPLATES</code>, <code>CSS</code>, <code>MARKERS</code>, <code>VARIANTS</code>, <code>BEFORE_BODY</code>, <code>AFTER_BODY</code>, plus the CLI&#x27;s <code>--style</code> choices)</li>
+<li>files: scripts/render/templates/minutes.py, scripts/render/templates/__init__.py</li>
+<li>commit: <code>feat(render): a minutes template, declaration only (#59)</code></li>
+</ul>
+<p>GREEN, part 1. <code>minutes.py</code> declares <code>NAME</code>, <code>FRAME</code>, <code>SECTIONS</code>, <code>MARKERS</code> and <code>CSS</code> and nothing else. No <code>BEFORE_BODY</code>, because a minutes page&#x27;s content is per-meeting and there is no constant furniture. No <code>BLOCK_VARIANTS</code>. No script. It imports no renderer.</p>
+<p><code>FRAME</code> values are fixed by the design and were measured live: <code>measure: 960px</code> (unused, and the clash dict is pinned), <code>ground: var(--bg)</code> declared as the flat default, plus <code>gutter</code>, <code>header_pad</code>, <code>header_rule</code> at 3px double, <code>header_gap</code> and <code>h1_size</code> — six owned live slots against a floor of three.</p>
+<p>The docstring carries AC13 verbatim in substance: summary-first minutes have no committed-artifact precedent, <code>openui/open-ui</code> and <code>json-ld/minutes</code> tag inline with <code>RESOLVED:</code> while <code>nodejs/TSC</code> tags nothing, and this template diverges from both because this engine&#x27;s own design language requires the opening screenful to answer the question. It also states the M2 limitation: the type policy warns on <code>timeline</code> and nothing checks transcript-like prose semantically.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_minutes_template.py scripts/tests/test_frame_gate.py scripts/tests/test_frame_ownership.py -q -k &quot;not TestTheGalleryScreenshot and not TestPolicy&quot;</code> — expected FULLY green. <strong>Measured: 105 passed, 9 deselected, exit 0.</strong></li>
+</ul>
+<p><strong><code>-k</code>, not <code>--deselect</code>, and that was measured rather than assumed.</strong> An earlier draft of this task said <code>--deselect scripts/tests/test_minutes_template.py::TestTheGalleryScreenshot</code>. On pytest 9.0.3, that is a <strong>no-op</strong>: <code>--collect-only</code> reports 38 tests collected with the flag and 38 without it. <code>-k &quot;not TestTheGalleryScreenshot&quot;</code> reports <code>35/38 tests collected (3 deselected)</code>. Running the instruction is what caught it.</p>
+<h3>Task T3: the two policy maps and the documented table</h3>
+<ul>
+<li>riskLevel: high (module boundary — <code>lint.check_style_devices</code> imports <code>FIRST_READ_DEVICES</code> and REFUSES pages from it, so a wrong set makes the publish gate reject valid pages or accept invalid ones; M1 showed how subtle that is)</li>
+<li>files: scripts/render/blocks.py, docs/design-language.md</li>
+<li>commit: <code>feat(render): register the minutes doc type and its first-read devices (#59)</code></li>
+</ul>
+<p>GREEN, part 2. <code>DOC_TYPE_TAGS[&quot;minutes&quot;]</code> gets the eight accepted tags, deliberately excluding <code>timeline</code>. <code>FIRST_READ_DEVICES[&quot;minutes&quot;]</code> gets <code>{&quot;chips&quot;, &quot;stats&quot;, &quot;verdict&quot;}</code> — the peer consult&#x27;s set, not this design&#x27;s first one.</p>
+<p>Then the <code>minutes</code> row in the <code>## Doc types</code> table of <code>docs/design-language.md</code>, whose <code>— <strong>blocks:</strong></code> annotation must parse to EXACTLY that frozenset. <strong>These are the two exact-equality pins the issue names as the likeliest source of a red suite.</strong> The table is part of the code change, never a follow-up.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_template_bodies.py -q</code></li>
+</ul>
+<h3>Task T4: the CLI surface and the two reachability documents</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/publish_doc.py, README.md, skills/design-doc-publish/SKILL.md</li>
+<li>commit: <code>feat(publish): a minutes purpose, and document how to reach it (#59)</code></li>
+</ul>
+<p>GREEN, part 3. Append <code>&quot;minutes&quot;</code> to <code>PURPOSES</code> and add <code>PURPOSE_STYLE[&quot;minutes&quot;]</code>, which a test pins to exact set equality with <code>PURPOSES</code>. Then a row in the README <code>## Choosing a --type</code> table and a <code>--type</code> row in <code>SKILL.md</code> naming the template, with selection guidance longer than twelve characters. Both are pinned in both directions.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_publish_doc.py scripts/tests/test_style_reachability.py -q</code></li>
+</ul>
+<h3>Task T5: capture the golden SHA</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/tests/test_furniture_context.py</li>
+<li>commit: <code>test(minutes): capture the per-style sha oracle entry (#59)</code></li>
+</ul>
+<p>GREEN, part 4. <code>PRE_74</code> asserts set equality with the registry, so a new style needs an entry. The comment follows the shape that file already uses for <code>design-system</code>: there is no &quot;before&quot; for a style that did not exist, so the pin is CAPTURED here and from now on guards that nothing else moves it. That oracle is also the M8 invariant&#x27;s check — adding this style must move no other style&#x27;s bytes.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_furniture_context.py -q</code></li>
+</ul>
+<h3>Task T6: the gallery triple and the README cell</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: docs/examples/gallery/minutes.md, docs/examples/gallery/minutes.html, docs/examples/gallery/minutes.png, scripts/tests/regen_docs_pages.py, README.md</li>
+<li>commit: <code>docs(minutes): a gallery example, its rendered page and its screenshot (#59)</code></li>
+</ul>
+<p>GREEN, part 5. Write <code>minutes.md</code> as a realistic invented meeting for the same fictional parcel carrier the other thirteen use, byte-distinct from all of them, exercising every region including the AC8 empty decided register. Add its <code>PAGES</code> entry to <code>regen_docs_pages.py</code>, with the screenshot command recorded beside it as a two-line comment — the repository has no committed recipe today, which is why the existing fourteen went stale after #58 with nothing catching it.</p>
+<p>Run the regenerator for the <code>.html</code>. Take the <code>.png</code> with the proven recipe below. Add the README gallery cell, which fills the empty cell now beside <code>plain</code> and makes that table exactly seven full rows.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_example_gallery.py scripts/tests/test_docs_pages_current.py scripts/tests/test_minutes_template.py -q</code> — the WHOLE minutes file this time, including <code>TestTheGalleryScreenshot</code>, which T2 deselected. Plus the recorded visual inspection described below.</li>
+</ul>
+<h3>Task T7: the rendered-styles page</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: docs/rendered-styles/minutes.html</li>
+<li>commit: <code>docs(minutes): the cross-style rendered page (#59)</code></li>
+</ul>
+<p>GREEN, part 6. Run <code>python3 scripts/tests/regen_rendered_styles.py</code>. Its style list is derived from the registry, so the page appears without editing that script.</p>
+<p>Expect stderr warnings, and the count is <strong>9</strong>, not the 11 an earlier draft of this plan implied. <code>blocks.BLOCK_TAGS</code> holds <strong>17</strong> tags, not nineteen — verified programmatically. <strong>The issue&#x27;s own sentence is wrong</strong>: &quot;The 19 blocks available are <code>analysis</code>, <code>callout</code>, … <code>roadmap</code>, …&quot; counts <code>analysis</code> and <code>roadmap</code>, which are STYLES and are absent from <code>BLOCK_TAGS</code>. Both checked, both False.</p>
+<p>So 17 accepted-minus-8 leaves 9 rejected, exactly what probe 3 measured: <code>composition</code>, <code>faq</code>, <code>flow</code>, <code>legend</code>, <code>meter</code>, <code>nodes</code>, <code>phases</code>, <code>steprail</code>, <code>timeline</code>. Each warns &quot;not accepted by doc type &#x27;minutes&#x27; — rendering it anyway&quot;. That is the repository&#x27;s normal advisory behaviour and <code>design-system</code> does the same with 4 accepted tags. Note the issue&#x27;s error in the PR body so its block list gets corrected.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_rendered_styles_current.py -q</code></li>
+</ul>
+<h3>Task T8: acceptance criterion 1, end to end, in two runs</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/tests/test_publish_doc.py</li>
+<li>commit: <code>test(minutes): AC1 verified against the real CLI, both invocation forms (#59)</code></li>
+</ul>
+<p><strong>This lands an automated test, not a transcript line.</strong> An earlier draft of this task declared a commit message and no <code>files</code>, which meant <code>git commit</code> would have failed with nothing to commit, and its evidence would have been two exit codes visible only in one session&#x27;s scrollback. The cross-model review was right on both counts: AC1&#x27;s evidence has to be repeatable and reviewable.</p>
+<p>So T8 adds a test class to the existing <code>scripts/tests/test_publish_doc.py</code>, which already drives this CLI, rather than a new file. It runs both invocation forms in a <code>tmp_path</code> and asserts:</p>
+<table>
+<thead><tr><th>Run</th><th>Command shape</th><th>Asserted</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>--type minutes</code>, <strong>no</strong> <code>--style</code></td><td>exit 0, the output file exists at the expected path, it carries <code>class=&quot;tpl-minutes&quot;</code>, and it carries every block in <code>FIRST_READ_DEVICES[&quot;minutes&quot;]</code></td></tr>
+<tr><td>2</td><td><code>--type minutes --style minutes</code></td><td>exit 0, and the rendered bytes equal run 1&#x27;s</td></tr>
+</tbody>
+</table>
+<p><strong>Run 1 is the load-bearing one, and the review is why.</strong> AC1&#x27;s own text names the second form, which supplies the style by hand — so on its own it could pass while <code>PURPOSE_STYLE[&quot;minutes&quot;]</code> was broken or absent. Run 1 is the only one that exercises the default type-to-style mapping. Run 2 then proves the explicit argument agrees with the default rather than diverging from it.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_publish_doc.py -q</code>, plus both exit codes recorded verbatim in the session notes.</li>
+</ul>
+<h3>Task T9: publish the design and plan pages</h3>
+<ul>
+<li>riskLevel: standard</li>
+<li>files: scripts/tests/regen_docs_pages.py, docs/planning/2026-09-02-59-minutes-doc-type.html, docs/planning/2026-09-02-59-impl-plan.html</li>
+<li>commit: <code>docs(minutes): publish the design and plan pages (#59)</code></li>
+</ul>
+<p>Add <code>PAGES</code> entries for this plan and for the design doc, then regenerate so both ship as committed markdown-plus-HTML pairs, which is the standing convention for a design document in this workspace.</p>
+<p><strong>No changelog fragment, and the earlier draft of this task was wrong to ask for one.</strong> This repository has no changelog surface at all — no <code>.github/workflows</code>, no <code>CHANGELOG.md</code>, no <code>## Changelog</code> in the README, no release-please, no changeset. All five checked. The changelog-fragment instruction belongs to <strong>rawgentic&#x27;s</strong> own surface-guard lane, and importing it here invented a deliverable with nowhere to live. Both review passes flagged the missing path; the right fix was to drop the requirement.</p>
+<p><strong>No task in this plan is AC12&#x27;s gate, including this one.</strong> Its scoped test certifies only its own commit. Step 9 runs immediately after T9 and is the sole regression evidence, per the verification strategy below. Adding a full-suite run here was the reviewer&#x27;s recommendation and it is DECLINED: <code>&lt;test-run-discipline&gt;</code> pins the full suite at exactly two runs, the Step 2 baseline and the Step 9 final, so a run here would be a third.</p>
+<ul>
+<li>verification: <code>~/.local/bin/pytest scripts/tests/test_docs_pages_current.py -q</code></li>
+</ul>
+<h3>Step 8a checkpoint — after T3, not a task</h3>
+<p>Step 8a is a WF2 step rather than a plan task, so it gets a checkpoint here instead of a <code>### Task</code> heading. It was promised in the risk calibration and never scheduled, which the review caught.</p>
+<ul>
+<li><strong>Fires:</strong> immediately after T3&#x27;s commit, which is the second and last <code>riskLevel: high</code> commit.</li>
+<li><strong>Covers:</strong> exactly two commits — T2&#x27;s <code>feat(render): a minutes template, declaration only</code> and T3&#x27;s <code>feat(render): register the minutes doc type and its first-read devices</code>.</li>
+<li><strong>Shape:</strong> ONE accumulated wave of two review passes over both commits together. The inline pass carries the <code>mechanical</code> lens; the runner pass carries <code>security</code>. Not one wave per commit.</li>
+<li><strong>Records:</strong> a per-task marker in the session notes carrying that task&#x27;s findings and resolved counts, its sha, and its verdict.</li>
+<li><strong>On a defect:</strong> repair it, amend or add a commit, and re-run the SCOPED verification for the affected task. A Critical or High finding that reaches the design consumes a <code>review_design</code> loop-back and returns to Step 3; anything else is repaired in place.</li>
+<li><strong>Passes when:</strong> every Critical and High finding is resolved or deferred with a recorded reason, and both tasks carry a marker.</li>
+</ul></section>
+<section class="mstone rm-epic"><h3>The screenshot recipe, proven rather than assumed <span class="chip c-plan">—</span></h3><p><code>test_example_gallery.py</code> requires one PNG per style and nothing in the repository produces them. This exact command was spiked on 2026-09-02 and reproduced <strong>three</strong> committed PNGs byte for byte — <code>design.png</code> (sha256 <code>b7914e2f1c8b083025fa6371c900ac22e58c273700f266a5e4fef147a1702362</code>, 125553 bytes), <code>review.png</code> and <code>slide-deck.png</code> — on Google Chrome 152.0.7977.64:</p>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">bash</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>google-chrome --headless --no-sandbox --disable-gpu --hide-scrollbars \
+  --force-device-scale-factor=1 --window-size=1280,1000 \
+  --screenshot=docs/examples/gallery/minutes.png \
+  &quot;file://$PWD/docs/examples/gallery/minutes.html&quot;</code></pre></div>
+<p>Every committed gallery PNG is exactly 1280 x 1000, so this is a viewport shot rather than a full-page one. The Playwright MCP browser was tried first and refused with &quot;Browser is already in use&quot; — another session holds it. That browser was <strong>not</strong> killed. This route was found instead, and it is the better one, because reproducing three committed artifacts byte for byte proves the recipe rather than merely proving a screenshot is possible.</p>
+<p>T6 records this command in a comment beside the gallery manifest entry. That is a two-line addition, and it closes a real gap: the recipe existed only in whoever last ran it.</p>
+<h3>What the screenshot assertions do and do not prove</h3>
+<p>Both review passes raised the same objection and it is fair. Correct dimensions plus a vague &quot;non-trivial&quot; size do not establish that the PNG depicts the minutes page. A browser error page is 1280 x 1000 too.</p>
+<p><strong>Declined: a reviewed SHA oracle or an image-variance comparison.</strong> That was the recommended remedy. A screenshot SHA is brittle across font rendering, Chrome versions and GPU flags, so it would fail for reasons having nothing to do with the page. This repository also carries no image-comparison dependency to set a tolerance against. A gate that goes red on a Chrome upgrade teaches people to ignore it.</p>
+<p><strong>Adopted instead, two things, and neither pretends to be the other:</strong></p>
+<ol>
+<li><strong>A byte floor DERIVED from committed data, not invented.</strong> The smallest committed gallery PNG is <code>module-map.png</code> at 72527 bytes, so the floor is half of that. It is self-maintaining, and it catches a blank page, which compresses to a few kilobytes.</li>
+<li><strong>A recorded visual inspection.</strong> The captured PNG is opened and looked at, and what was seen goes into the session notes: the minutes heading, the ledger strip, and at least the agreed and decided regions.</li>
+</ol>
+<p><strong>The automated assertions bound the failure class. The human look is the evidence.</strong> That is stated plainly because the reverse claim would be the defect: no assertion in this plan proves the screenshot depicts minutes. The inspection does, once, at the commit that creates it. A later silent rot of that PNG is NOT caught, and #58 already recorded the same gap for the other fourteen.</p></section>
+<section class="mstone rm-epic"><h3>Verification strategy <span class="chip c-plan">—</span></h3><p>Each task verifies with the scoped set named in its own row. No full-suite run happens inside Step 8. The full suite runs ONCE, at Step 9, diffed against the recorded baseline.</p>
+<p>This repository has <strong>no CI</strong>, so that local run IS the regression evidence and there is no run id to cite. Step 13 is skipped. No task declares <code>deferred-to-target</code>.</p>
+<h3>Acceptance-criteria coverage</h3>
+<table>
+<thead><tr><th>AC</th><th>Covered by</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>T8&#x27;s committed test in <code>test_publish_doc.py</code>, driving BOTH CLI forms — the no-<code>--style</code> run is the one that exercises <code>PURPOSE_STYLE</code></td></tr>
+<tr><td>2</td><td>T1 assertion 1</td></tr>
+<tr><td>3</td><td><code>test_doc_type_tags_match_the_documented_sets</code>, <code>TestFirstReadDeviceContract.test_first_read_devices_match_the_documented_column</code></td></tr>
+<tr><td>4</td><td><code>test_example_gallery.py</code>, all four existence checks including the <code>.png</code>, plus T1 assertion 10</td></tr>
+<tr><td>5</td><td><code>test_rendered_styles_current.py</code></td></tr>
+<tr><td>6</td><td>T1 assertion 4 — the region-ORDER assertion, not the policy maps, which prove only presence</td></tr>
+<tr><td>7</td><td>T1 assertion 11, the RENDERED-fixture vocabulary check, plus assertions 6 and 7 for the docstring and the <code>settle</code> prohibition. Assertion 11 is the load-bearing one: AC7 says the template USES one word for one thing, and a docstring-only check would pass while the page misused every word</td></tr>
+<tr><td>8</td><td>T1 assertion 5</td></tr>
+<tr><td>9</td><td><code>test_style_reachability.py</code> both directions, plus <code>test_example_gallery.py::test_every_style_is_linked_in_the_readme</code></td></tr>
+<tr><td>10</td><td>T1 exists and passes</td></tr>
+<tr><td>11</td><td><code>test_docs_pages_current.py</code></td></tr>
+<tr><td>12</td><td>the Step 9 full-suite run against the baseline</td></tr>
+<tr><td>13</td><td>T1 assertion 6, the docstring-precedent assertion</td></tr>
+</tbody>
+</table>
+<p><strong>Why AC6 and AC7 get direct assertions instead of leaning on the maps:</strong> set membership in <code>DOC_TYPE_TAGS</code> and <code>FIRST_READ_DEVICES</code> proves presence and nothing else — not document order, not distinct headings, not vocabulary, not honest content. The Step 3 peer consult named that limitation and M1 proved it concretely, which is why T1 asserts order and wording against a rendered fixture.</p></section>
+<section class="mstone rm-epic"><h3>Multi-PR decomposition <span class="chip c-plan">—</span></h3><p><strong>One PR.</strong> Roughly 500 to 800 inserted lines, with no separable phase: a registration without its documentation row turns two exact-equality tests red, so the surfaces land together or the suite is red in between.</p>
+<p>Three files already uncommitted in this checkout ship in the same PR: <code>docs/planning/campaign-log.md</code>, its regenerated <code>docs/planning/campaign-log.html</code>, and the <code>scripts/tests/regen_docs_pages.py</code> stamp bump. The campaign log is issue #59&#x27;s own status surface — its diff adds the <code>## #59</code> section and names #59 in the stats strip — and the workspace manual requires a status surface to update inside its own issue&#x27;s PR. Committing the markdown without its regenerated HTML reproduces the exact defect issue #56 existed to fix.</p></section>
+
+</main>
+<footer>Last updated: 2026-09-02 18:30 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+<script>
+(function(){
+var boxes=document.querySelectorAll('.doc-code');
+if(!boxes.length)return;
+function fallback(text){
+var ta=document.createElement('textarea');
+ta.value=text;ta.setAttribute('readonly','');
+ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+document.body.appendChild(ta);ta.select();
+var ok=false;
+try{ok=document.execCommand('copy');}catch(e){ok=false;}
+document.body.removeChild(ta);
+return ok;
+}
+function flash(btn,label,state){
+btn.textContent=label;
+btn.setAttribute('data-state',state);
+window.clearTimeout(btn.getAttribute('data-timer'));
+btn.setAttribute('data-timer',window.setTimeout(function(){
+btn.textContent='Copy';btn.removeAttribute('data-state');},2000));
+}
+Array.prototype.forEach.call(boxes,function(box){
+var btn=box.querySelector('.doc-code-copy');
+var code=box.querySelector('code');
+if(!btn||!code)return;
+btn.hidden=false;
+btn.addEventListener('click',function(){
+var text=code.textContent;
+function done(ok){flash(btn,ok?'Copied':'Press Ctrl+C',ok?'ok':'fail');}
+if(navigator.clipboard&&window.isSecureContext){
+navigator.clipboard.writeText(text).then(function(){done(true);},
+function(){done(fallback(text));});
+}else{done(fallback(text));}
+});
+});
+})();
+</script>
+</body>
+</html>
