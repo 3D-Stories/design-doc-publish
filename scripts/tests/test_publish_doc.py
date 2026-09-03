@@ -1619,8 +1619,15 @@ class TestAC1TheMinutesTypeReachesItsTemplate:
         assert rc == 0
         page = out.read_text(encoding="utf-8")
         assert lint.check_style_devices(page) == [], "the publish gate refused the page"
+        # The BODY, never the whole page. Step 8a caught the first cut of this reading the
+        # complete HTML, whose embedded stylesheet already names `.blk-chips`, `.blk-stats`
+        # and `.blk-verdict` — measured, all three are in the <style> block alone. So the
+        # assertion was satisfied by the stylesheet and would have passed with every block
+        # gone from the document. The same slip cost `test_minutes_template.py` a false
+        # failure earlier in this issue, in the other direction.
+        body = re.search(r"<body[^>]*>(.*)</body>", page, re.S).group(1)
         missing = [tag for tag in sorted(blocks.FIRST_READ_DEVICES["minutes"])
-                   if f"blk-{tag}" not in page]
+                   if f"blk-{tag}" not in body]
         assert not missing, f"first-read devices absent from the rendered page: {missing}"
 
     def test_the_explicit_style_agrees_with_the_default(self, run, minutes_doc, tmp_path):

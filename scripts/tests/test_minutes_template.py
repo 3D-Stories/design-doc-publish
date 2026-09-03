@@ -211,21 +211,54 @@ class TestAC8DecidedNothing:
     def test_the_page_renders(self):
         assert _render(), "the decided-nothing page did not render"
 
+    @staticmethod
+    def _decided_region(md=DOC):
+        """The decided register's own markup, sliced out of the BODY.
+
+        Sliced rather than searched whole, for the reason recorded on the AC7 test: this
+        template's CSS names `mn-decided` and `is-none` inside the <style> block, so any
+        assertion against the complete page can be satisfied by the stylesheet.
+        """
+        body = re.search(r"<body[^>]*>(.*)</body>", _render(md), re.S).group(1)
+        start = body.index("mn-decided")
+        return body[start:body.index("mn-alternatives", start)]
+
     def test_the_decided_register_is_present_but_holds_no_decision(self):
-        html = _render()
-        assert "mn-decided" in html, "the decided register vanished instead of being empty"
-        assert ">decided<" not in html, (
-            "a decision was fabricated on a page whose meeting decided nothing")
+        """Step 8a hardened this. The first cut asserted `mn-decided` present and the
+        string `>decided<` absent, and MEASURED, a page whose verdict key was `confirmed`
+        satisfied both — so the pair proved the register existed and proved nothing about
+        what it said. These assertions pin the row itself."""
+        region = self._decided_region()
+        rows = re.findall(r'<div class="blk-row([^"]*)"', region)
+        assert len(rows) == 1, f"the decided register holds {len(rows)} rows, expected exactly 1"
+        assert "is-none" in rows[0], (
+            f"the single row is not the empty state: class was 'blk-row{rows[0]}'")
+        keys = re.findall(r'<span class="blk-key">([^<]*)</span>', region)
+        assert keys == ["none"], (
+            f"the empty state's key is {keys}, and only `none` is the honest one — a key "
+            "like `confirmed` would pass a mere absence check while saying something else")
+        assert "No course of action was decided at this meeting." in region, (
+            "the empty state carries no sentence saying so, which is the whole point of "
+            "rendering the register rather than omitting it")
 
     def test_the_empty_state_has_its_own_state_class(self):
         """So the template can style it neutrally rather than as a warning."""
-        assert "is-none" in _render()
+        assert "is-none" in self._decided_region()
 
     def test_the_ledger_prints_the_zero_rather_than_omitting_it(self):
-        """An absence rendered as a printed zero is a statement somebody made."""
-        html = _render()
-        assert "courses decided" in html
-        assert re.search(r">0<[^>]*</[^>]+>\s*<[^>]*>courses decided", html) or "0" in html
+        """An absence rendered as a printed zero is a statement somebody made.
+
+        Step 8a removed this assertion's `or "0" in html` escape clause, which made it pass
+        on any page containing the character 0 anywhere — including inside a hex colour in
+        the stylesheet. The value and its label are now required to be adjacent."""
+        body = re.search(r"<body[^>]*>(.*)</body>", _render(), re.S).group(1)
+        ledger = body[body.index("mn-ledger"):body.index("mn-agreed")]
+        pair = re.search(r'<span class="blk-value">([^<]*)</span>'
+                         r'<span class="blk-label">courses decided</span>', ledger)
+        assert pair, "the ledger has no `courses decided` entry at all"
+        assert pair.group(1) == "0", (
+            f"the ledger reports {pair.group(1)!r} courses decided on a page whose register "
+            "is empty")
 
     def test_a_page_that_DID_decide_still_works(self):
         """The empty state must not be the only shape the template can render."""
@@ -384,10 +417,14 @@ class TestEveryRuleThisTemplateWritesCanActuallyMatch:
     is a bigger change than #59; this one covers the file it ships with.
     """
 
-    CLASS = re.compile(r"\.(blk-[a-z0-9-]+)")
+    # EVERY class token, not only the shared `blk-` ones. Step 8a caught the first cut
+    # matching `blk-` alone, which left this template's OWN vocabulary unguarded: a
+    # misspelled `.mn-action` or `.tpl-minute` carries most of the styling and would have
+    # been invisible to the very guard added to catch exactly that.
+    CLASS = re.compile(r"\.([a-z][a-z0-9]*(?:-[a-z0-9]+)*)")
 
     def _selected(self):
-        """Every `blk-` class this template's CSS selects, read out of the selectors only.
+        """Every class this template's CSS selects, read out of the selectors only.
 
         The rule bodies are skipped, so a class named inside a `content:` string or a comment
         is not mistaken for a selector.
