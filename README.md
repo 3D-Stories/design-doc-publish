@@ -261,6 +261,7 @@ if you want a different look for the same purpose.
 | `tokens` | `design-system` | documenting colours, type and components |
 | `map` | `module-map` | showing how parts of a system connect |
 | `deck` | `slide-deck` | it will be presented rather than read |
+| `minutes` | `minutes` | recording what a meeting decided and who owes what next |
 
 ## Chip state vocabulary
 
