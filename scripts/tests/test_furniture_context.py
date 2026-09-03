@@ -203,6 +203,19 @@ PRE_74 = {
     "design-system": "d3efa262cdeaa15597e49724f5b82444ab22674e2730a7eb2028ca325cd92ff8",
     "module-map": "f60156143d6f4bb881b8361dec3ee59f42f642291511d420845826ac8a251c18",
     "slide-deck": "c1205f74a1c31d4395ab01af14d05dd4b180cc5914e9404aee561c973d4f96ea",
+    # #59 adds this style, so its pin is CAPTURED here rather than inherited — there is no
+    # "before" for a style that did not exist, the same treatment #42 gave `design-system`.
+    # What the oracle guards from now on is that nothing else moves it.
+    #
+    # CONTAINMENT, MEASURED rather than asserted: every one of the thirteen pins above was
+    # recomputed at this commit and ALL THIRTEEN came back EQUAL, `plain` included. So adding
+    # a style to the registry moved no other style's bytes, which is the invariant this file
+    # exists to prove and the reason a new style may be pinned at introduction.
+    #
+    # Captured with THIS file's own `_sha` recipe (title="T", generated_at="x", no doc id),
+    # not with `regen_rendered_styles.py`'s. Two recipes live in this tree for different jobs
+    # and the header above records what happens when the wrong one is used.
+    "minutes": "6eab63ef14c34736d27ffb7d14deba73cba01bd921624dc999797e6fc12734d8",
 }
 
 PACK = {"accent": {"light": "#1e5f7a", "dark": "#7fd4f0"}}
