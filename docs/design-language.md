@@ -310,6 +310,7 @@ in its opening screenful.
 | `design-system` | you are showing a project's own colours, type and radii | the token swatch grid, then the legend naming each group and the status chips — **blocks:** `legend`, `chips` | `legend`, `callout`, `chips`, `provenance` |
 | `module-map` | you are showing what the parts are and what depends on what | the map itself, then its key — **blocks:** `nodes`, `legend` | `nodes`, `legend`, `callout`, `chips`, `provenance` |
 | `slide-deck` | you are presenting, one point per screen | the headline, then its figures — **blocks:** `stats` | `stats`, `callout`, `chips`, `provenance` |
+| `minutes` | you are recording what a meeting DID, and who has to do what next | the attendee row and the ledger of what the meeting did, then the decided register — **blocks:** `chips`, `stats`, `verdict` | `chips`, `stats`, `findings`, `verdict`, `options`, `steps`, `callout`, `provenance` |
 
 **The `— **blocks:**` annotation on each first-read cell is the source of truth for
 `blocks.FIRST_READ_DEVICES`** (#130), which `publish_doc.gate()` enforces: a styled page must carry

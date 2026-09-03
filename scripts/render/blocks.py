@@ -79,6 +79,18 @@ DOC_TYPE_TAGS = {
     "module-map": {"nodes", "legend", "callout", "chips", "provenance"},
     # #42: a slide carries a headline, a figure or two and at most one point.
     "slide-deck": {"stats", "callout", "chips", "provenance"},
+    # #59, the fourteenth style. `timeline` is deliberately ABSENT, and it is the one
+    # omission here that carries an argument: a minutes document records what was DONE, not
+    # a per-line chronology of what was said, which is Robert's Rules stated as a rule of
+    # order. `timeline` is exactly the block that would turn this type into a transcript.
+    #
+    # That exclusion is ADVISORY, not enforcing, and saying otherwise would be false:
+    # `render_fence` below warns "not accepted by doc type ... rendering it anyway" and
+    # renders the block regardless, and no strict mode exists. What it really buys is a
+    # signal plus one real gate — `test_template_bodies.py` fails on any fixture in THIS
+    # repository that uses a block its type rejects.
+    "minutes": {"chips", "stats", "findings", "verdict", "options", "steps",
+                "callout", "provenance"},
 }
 
 # #130. Which blocks a styled page must ACTUALLY CARRY — the devices its own style opens
@@ -122,6 +134,21 @@ FIRST_READ_DEVICES = {
     "design-system": frozenset({"legend", "chips"}),
     "module-map": frozenset({"nodes", "legend"}),
     "slide-deck": frozenset({"stats"}),
+    # #59. `verdict` is in here on PURPOSE, and it is the whole mechanism behind the
+    # decided-nothing page. Everything in this set is MANDATORY on every page of the style,
+    # because `lint.check_style_devices` refuses a page missing any member — so a minutes
+    # page ALWAYS carries a decided register, and a meeting that chose no course of action
+    # carries one holding a single neutral row. That satisfies "four distinct regions" and
+    # "an honestly empty decided register" at the same time, which an ABSENT register cannot.
+    #
+    # An earlier design draft left `verdict` out, reasoning that including it would make the
+    # decided-nothing page unpublishable. That reasoning was wrong: this gate proves
+    # PRESENCE, never content, as `check_style_devices` says of itself.
+    #
+    # `findings` and `steps` are deliberately OUT. A meeting can agree nothing or assign
+    # nothing, and an empty-state `steps` would render its sentence as step 1 unless a new
+    # engine-owned block variant existed — which is a renderer change, not a stylesheet one.
+    "minutes": frozenset({"chips", "stats", "verdict"}),
 }
 
 # Styles with NO row in the "## Doc types" table, so no documented first-read element to
