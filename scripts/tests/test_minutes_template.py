@@ -262,8 +262,14 @@ class TestAC7Vocabulary:
         which a cross-model review of the plan named. So this checks the page: each register's
         key word must appear INSIDE that register's own region and not somewhere else.
         """
-        html = _render()
-        # Slice the page at each region marker, so "inside this region" is a real claim
+        # The BODY, never the whole page. The first cut of this test sliced the full
+        # document, so every region started inside the <style> block — where this
+        # template's own CSS names `mn-agreed` and `mn-decided` within a few rules of each
+        # other, and its comments use both words. Every region therefore "contained" every
+        # word and the test failed for a reason having nothing to do with the page.
+        html = re.search(r"<body[^>]*>(.*)</body>", _render(), re.S).group(1)
+
+        # Slice the body at each region marker, so "inside this region" is a real claim
         # rather than "somewhere on the page".
         def region(cls, *following):
             start = html.index(cls)
