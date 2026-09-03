@@ -446,6 +446,21 @@ class TestEveryRuleThisTemplateWritesCanActuallyMatch:
             out.update(re.findall(r'class="([^"]+)"', _render(md)))
         return {c for group in out for c in group.split()}
 
+    def test_it_declares_no_counter_it_never_displays(self):
+        """The same defect class as a dead selector, and the inline half of the Step 8a wave
+        found one: `counter-reset:mn-act` and `counter-increment:mn-act` were declared while
+        `counter(mn-act)` appeared nowhere, so nothing ever printed it. The step number comes
+        from `.blk-n`, which the engine emits and this template already styles, so the counter
+        was two inert declarations on every minutes page and a claim the next reader would
+        have believed."""
+        css = _module().CSS
+        declared = set(re.findall(r"counter-(?:reset|increment):([a-z0-9-]+)", css))
+        used = set(re.findall(r"counter\(([a-z0-9-]+)", css))
+        dead = sorted(declared - used)
+        assert not dead, (
+            f"counters declared but never displayed: {dead}. Either print one with "
+            "`content:counter(...)` or delete the declarations")
+
     def test_every_class_its_css_selects_reaches_a_rendered_page(self):
         dead = sorted(self._selected() - self._emitted())
         assert not dead, (

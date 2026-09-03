@@ -190,8 +190,8 @@ letter-spacing:.08em;text-transform:uppercase;margin-right:5px}
 /* Action items. The owner is TEXT in the third field — no block carries an owner field, and
    modelling one properly is a renderer change (`report.py` hit the same wall and declined it).
    The documented display form is `Owner - action - due date or condition`. */
-.tpl-minutes .mn-actions{padding-left:0;list-style:none;counter-reset:mn-act}
-.tpl-minutes .mn-actions .blk-step{counter-increment:mn-act;display:grid;
+.tpl-minutes .mn-actions{padding-left:0;list-style:none}
+.tpl-minutes .mn-actions .blk-step{display:grid;
 grid-template-columns:auto 1fr;gap:4px 12px;border-bottom:1px solid var(--line);padding:10px 0}
 .tpl-minutes .mn-actions .blk-n{color:var(--ink-3);font-family:ui-monospace,monospace;
 font-size:12px;font-weight:700}

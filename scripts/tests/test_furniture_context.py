@@ -215,7 +215,7 @@ PRE_74 = {
     # Captured with THIS file's own `_sha` recipe (title="T", generated_at="x", no doc id),
     # not with `regen_rendered_styles.py`'s. Two recipes live in this tree for different jobs
     # and the header above records what happens when the wrong one is used.
-    "minutes": "e70d7455762f9bc14621c70b782055ca719815d3d9965821fcef5422c0e26ce5",
+    "minutes": "3389cc902e4af127be567e705fadb37e008e09172ae556c05281820f4c99ae81",
 }
 
 PACK = {"accent": {"light": "#1e5f7a", "dark": "#7fd4f0"}}
