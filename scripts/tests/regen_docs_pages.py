@@ -94,6 +94,19 @@ PAGES = {
         style='design', stamp='2026-07-10 12:00 MDT'),
 
     # --- the README gallery: one realistic document per style, all pack-free ---
+    #
+    # Each gallery entry also owns a committed `.png`, which `test_example_gallery.py`
+    # requires and which is what a reader actually sees — GitHub shows raw source for a
+    # committed `.html`. Nothing in this repository generated those PNGs and no recipe was
+    # written down, which is how all fourteen went stale after #58 with no gate catching it.
+    # Recorded here (#59), and proven rather than asserted: this exact command reproduced
+    # `design.png`, `review.png` and `slide-deck.png` byte for byte on Chrome 152.0.7977.64.
+    # Every committed gallery shot is 1280x1000, so it is a viewport shot, not a full-page one.
+    #
+    #     google-chrome --headless --no-sandbox --disable-gpu --hide-scrollbars \
+    #       --force-device-scale-factor=1 --window-size=1280,1000 \
+    #       --screenshot=docs/examples/gallery/<style>.png \
+    #       "file://$PWD/docs/examples/gallery/<style>.html"
     'docs/examples/gallery/analysis': dict(
         title="Why Halyard's miss rate doubled",
         style='analysis', stamp='2026-03-02 09:00 MST'),
@@ -109,6 +122,9 @@ PAGES = {
     'docs/examples/gallery/module-map': dict(
         title='Halyard tracking path',
         style='module-map', stamp='2026-03-02 09:00 MST'),
+    'docs/examples/gallery/minutes': dict(
+        title='Halyard change advisory board, 18 March',
+        style='minutes', stamp='2026-03-02 09:00 MST'),
     'docs/examples/gallery/plain': dict(
         title='Why we keep carrier timestamps verbatim',
         style='plain', stamp='2026-03-02 09:00 MST'),
@@ -158,11 +174,18 @@ PAGES = {
     'docs/planning/2026-08-25-56-render-determinism': dict(
         title='Issue #56 — a committed page must re-render to itself',
         style='design', stamp='2026-08-25 14:26 MDT', project='design-doc-publish'),
+    'docs/planning/2026-09-02-59-minutes-doc-type': dict(
+        title='Issue #59 — a minutes doc type and style for meeting minutes',
+        style='design', stamp='2026-09-02 18:30 MDT', project='design-doc-publish'),
+    'docs/planning/2026-09-02-59-impl-plan': dict(
+        title='Issue #59 — implementation plan',
+        style='roadmap', stamp='2026-09-02 18:30 MDT', project='design-doc-publish'),
     # Re-rendered by #56 WITH the pack, joining its two dated siblings. Its previous committed
     # copy predated the #52 markdown entry entirely.
+    # Stamp bumped by #59's WF1 backlog section, per the authoring flow in this docstring.
     'docs/planning/campaign-log': dict(
         title='design-doc-publish — campaign log',
-        style='roadmap', stamp='2026-08-25 14:26 MDT', project='design-doc-publish'),
+        style='roadmap', stamp='2026-09-02 15:37 MDT', project='design-doc-publish'),
 }
 
 

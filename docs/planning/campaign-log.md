@@ -4,9 +4,9 @@ Rolling program log: one section per issue, newest first. Created 2026-08-13 wit
 #23 (the shared-doc design-artifact convention; style roadmap).
 
 ```stats
-7 | issues on this log
-56 | newest: PR open, a committed page must re-render to itself
-3023/3119 | suite, baseline to this PR
+8 | issues on this log
+59 | newest: shipped, a minutes doc type and style
+3192 | suite with this PR, was 3119
 ```
 
 ```callout
@@ -15,6 +15,89 @@ One section per issue, refreshed inside that issue's own PR (a filed-but-unstart
 issue gets a backlog section at WF1 time). The stats above always describe the NEWEST
 state; older sections keep their text as historical record.
 ```
+
+## #59 — A minutes doc type and style, for meeting minutes — shipped
+
+PR open 2026-09-02, carrying the whole style. Refreshed here from the backlog section it
+started as, which is this log's convention: a section is rewritten inside its own issue's PR.
+
+The chip is stated in the HEADING deliberately. Left to the body it read DONE, picked out of
+the phrase "records what was **done**" in the Robert's Rules paragraph below — a status
+nobody wrote, sitting beside prose that still said "unstarted". `roadmap_status_chip` gives a
+definitive HEADING status precedence precisely so the author can state it, and this is that.
+
+**What shipped:** a `minutes` template module and its registration; `DOC_TYPE_TAGS` and
+`FIRST_READ_DEVICES` entries, with `timeline` excluded so the type cannot express a
+transcript; a `minutes` purpose on the CLI; four documentation surfaces; a gallery example
+with its rendered page and screenshot; the cross-style rendered page; and the tests. The
+suite goes 3119 to 3192 passing with no regression.
+
+**What did NOT ship, stated because the gap is real:** the publish gate checks that a page
+carries the three block TAGS its style opens with, never their role, position or content. So
+a minutes page can drop its attendee region, or carry an unrelated verdict key, and still
+publish. Role-level and semantic structure is guarded by `test_minutes_template.py` instead.
+
+**The state before this issue, kept as the record it was written as.** There was no minutes
+output. The roster was read rather than recalled: thirteen `--style`
+templates and eleven `--type` purposes, and neither list carried a minutes entry. The only
+occurrences of the word in this repository are two test comments about wall-clock time. Meeting
+write-ups ship today as `--type analysis --style analysis`, which gives a section index and a
+verdict block but no attendee block, no decision register and no action items with an owner.
+
+**Three constraints came from external research rather than from intuition** — a four-lane run on
+2026-09-02, reported at `claude_docs/research/2026-09-02-meeting-minutes-prior-art.md` in the
+workspace, with every claim marked confirmed or inferred.
+
+- **A minutes document is not a restyled analysis.** Robert's Rules of Order says minutes record
+  what was **done**, not what was said, and that summarizing discussion is "improper". Confirmed
+  from two fetched sources, one of them `robertsrules.com` itself. The `analysis` style is largely
+  a record of what was said, so this is a different document and not a new stylesheet over it.
+- **The agreed-versus-decided vocabulary is ours to invent.** Two lanes went looking for
+  practitioner vocabulary separating a premise the room AGREED from a course of action it CHOSE.
+  Neither found any. Practice makes the distinction by WORDING: an unvoted consensus takes a hedge
+  phrase, a vote takes a full motion record with mover, seconder, exact wording and count. The
+  first document to render is a brainstorm where the room agreed four premises and chose none of
+  sixty options, so the distinction is load-bearing rather than academic.
+- **No published convention covers a RANGED citation.** The one placement convention found is a
+  transcription vendor's own house style, by its own admission, and it addresses a single timecode
+  only. Ninety of the kickoff's 120 traces carry a distinct end segment, so
+  `_(trace: 22:32, segments 381 to 393)_` sits outside every convention found. Unprecedented
+  rather than wrong, and AC13 requires the template's docstring to say so.
+
+**One fork is left to the design step, deliberately.** Two currently-used governance formats mark
+a decision in opposite ways, and both were fetched: `openui/open-ui` and `json-ld/minutes` tag it
+inline with `RESOLVED:`, while `nodejs/TSC` tags nothing and leaves a reader to infer it from
+prose. Those first two are ONE witness and not two — both run the same Zakim and RRSAgent bots,
+confirmed by reading the bots' own lines in each file. So an explicit marker is a choice, never a
+standard.
+
+**A sharper disagreement is recorded rather than resolved.** Robert's Rules says minutes record
+what was done. The W3C convention keeps the FULL timestamped record of what was said and tags the
+outcomes inside it. The two most-cited precedents disagree about what a minutes document IS.
+Neither is wrong — one governs an assembly's official record, the other serves a working group
+that wants its reasoning recoverable — and a template picks a side or serves both.
+
+**No committed artifact found puts a synthesized answer above the record.** Both W3C artifacts
+were read in full, the second one specifically in an attempt to falsify this, which failed: its
+rendered page goes from the title straight into Topic 1, with no summary section and no
+resolutions heading. A reader must scan the transcript line by line to find a decision. So the
+summary-first shape has no precedent, and it fixes the exact defect that precedent carries.
+
+**Deferred, with reasons rather than silently.** A structured owner field on `steps` is out of
+scope: no block carries one, verified by grep, and `report.py:17-19` already declined it as a
+renderer change rather than a stylesheet one. Owners go in as text. #39's optional fourth field is
+the precedent if the block is ever widened, and widening it would touch `spec` and `report` too.
+The publish-time stamp residual is #31. Generating the kickoff's actual minutes is content in
+another repository.
+
+**Risk sits in two places.** Two exact-equality tests pin `DOC_TYPE_TAGS` and `FIRST_READ_DEVICES`
+against the `## Doc types` table in `docs/design-language.md`, so that table is part of the code
+change and not documentation to follow up. And `test_docs_pages_current.py` arrived with #58 an
+hour before this issue was filed, so no style has yet been added under it — the flow in
+`regen_docs_pages.py` applies, rather than publishing first and fixing the gate afterwards.
+
+Baseline to measure against, taken on `e74b409` on 2026-09-02: **3119 passed, 8 skipped, exit 0**,
+in 53 seconds, on `pytest 9.0.3` and `node v22.22.1`.
 
 ## #56 — A committed page must re-render to itself
 

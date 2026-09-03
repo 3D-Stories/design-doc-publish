@@ -152,7 +152,9 @@ EXIT_BASE = 10
 # `--type` names, and it is NOT the template vocabulary — see PURPOSE_STYLE.
 PURPOSES = ("design", "plan", "uat", "audit", "report", "runbook", "analysis", "spec",
             # #42: the page that documents a project's own design language.
-            "tokens", "map", "deck")
+            "tokens", "map", "deck",
+            # #59: the page that records what a meeting DID and who owes what next.
+            "minutes")
 
 # The only bridge between the two vocabularies (§2b). A purpose says WHY the page
 # exists; a style says how it looks. `plan`/`audit`/`runbook` are not styles, and
@@ -170,6 +172,7 @@ PURPOSE_STYLE = {
     "tokens": "design-system",
     "map": "module-map",
     "deck": "slide-deck",
+    "minutes": "minutes",
 }
 
 WORKSPACE_BUCKET = "workspace"     # the one literal that is not a rawgentic project

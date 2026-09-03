@@ -31,6 +31,7 @@ Absolute path — a skill runs from whatever project is bound. `DOC_HARNESS_CONT
 | `tokens` | `design-system` | a project's own colours, type and radii, shown |
 | `map` | `module-map` | what the parts are and what depends on what |
 | `deck` | `slide-deck` | something you present, one point per screen |
+| `minutes` | `minutes` | what a meeting agreed and decided, and who owes what |
 
 Every style above is built from **components you have to write** — a composition meter, a phase
 rail, a timeline, finding cards. Write none, or none of the ones that style **opens with**, and the

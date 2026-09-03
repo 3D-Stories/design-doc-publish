@@ -21,13 +21,15 @@ selects a key, which is what keeps author text out of a class attribute;
 `test_marker_values_are_slugs` pins it.
 """
 from ..markdown import roadmap_status_chip
-from . import (analysis, dashboard, design, design_system, module_map, report, review,
-               roadmap, slide_deck, spec, uat, workflow)
+from . import (analysis, dashboard, design, design_system, minutes, module_map, report,
+               review, roadmap, slide_deck, spec, uat, workflow)
 
 # Registry order drives the CLI's `--style` choices, so it is the roster order from
-# specs §4c rather than alphabetical.
+# specs §4c rather than alphabetical. #59 appends `minutes`, the fourteenth, at the end —
+# appending rather than inserting keeps every existing style's position, and position is
+# what the CLI's choice ordering and the per-style sha oracle both read.
 MODULES = (analysis, roadmap, report, design, dashboard, review, spec, uat,
-           workflow, design_system, module_map, slide_deck)
+           workflow, design_system, module_map, slide_deck, minutes)
 
 TEMPLATES = {m.NAME: m for m in MODULES}
 

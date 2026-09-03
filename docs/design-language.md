@@ -261,6 +261,7 @@ already-escaped text).
 | `design-system` | `render_sections` | component + blocks + design-system    | none                     | a project's own design language, shown rather than tabulated — `--style design-system` / `--type tokens`.  |
 | `module-map` | `render_sections` | component + blocks + module-map          | none                     | what the parts are and what depends on what — `--style module-map` / `--type map`.                        |
 | `slide-deck` | `render_sections` | component + blocks + slide-deck          | none                     | something you present, one point per screen — `--style slide-deck` / `--type deck`.                       |
+| `minutes`   | `render_sections` | component + blocks + minutes             | none                     | what a meeting agreed and decided, and who owes what — `--style minutes` / `--type minutes`.              |
 
 That is the full ten-type roster from specs §4c.
 
@@ -310,6 +311,7 @@ in its opening screenful.
 | `design-system` | you are showing a project's own colours, type and radii | the token swatch grid, then the legend naming each group and the status chips — **blocks:** `legend`, `chips` | `legend`, `callout`, `chips`, `provenance` |
 | `module-map` | you are showing what the parts are and what depends on what | the map itself, then its key — **blocks:** `nodes`, `legend` | `nodes`, `legend`, `callout`, `chips`, `provenance` |
 | `slide-deck` | you are presenting, one point per screen | the headline, then its figures — **blocks:** `stats` | `stats`, `callout`, `chips`, `provenance` |
+| `minutes` | you are recording what a meeting DID, and who has to do what next | the attendee row and the ledger of what the meeting did, then the decided register — **blocks:** `chips`, `stats`, `verdict` | `chips`, `stats`, `findings`, `verdict`, `options`, `steps`, `callout`, `provenance` |
 
 **The `— **blocks:**` annotation on each first-read cell is the source of truth for
 `blocks.FIRST_READ_DEVICES`** (#130), which `publish_doc.gate()` enforces: a styled page must carry

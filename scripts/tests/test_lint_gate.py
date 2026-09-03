@@ -455,6 +455,10 @@ FENCE = {
     "flow":     "```flow\nterm | A request arrives\nproc | Validate the token\n```\n",
     # #149: module-map's first-read set requires `nodes`.
     "nodes":    "```nodes\nrender\n  markdown | the block and inline parser\n```\n",
+    # #59: minutes is the first style whose first-read set requires `verdict`, so this
+    # parametrized suite asked for a sample fence the dict had never needed and raised
+    # KeyError. Caught by the full suite, not by any scoped run.
+    "verdict":  "```verdict\ndecided | Cap carrier retries before the peak.\n```\n",
 }
 
 

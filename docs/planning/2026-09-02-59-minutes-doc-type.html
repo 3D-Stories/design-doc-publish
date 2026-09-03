@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="design-doc-publish">
+<title>Issue #59 — a minutes doc type and style for meeting minutes</title>
+<style>
+:root{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;--ink-3:#76858f;
+--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=dark]{--bg:#12181c;--surface:#1a2228;--ink:#e7edf0;--ink-2:#a8b6bd;
+--ink-3:#76858f;--line:#2a353c;--accent:#2dd4bf;--code:#232d34}
+:root[data-theme=light]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;--ink-2:#4b5a63;
+--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}
+@media print{:root,:root[data-theme=dark]{--bg:#f6f7f8;--surface:#fff;--ink:#1a2126;
+--ink-2:#4b5a63;--ink-3:#667279;--line:#dde3e6;--accent:#0f766e;--code:#eef1f3}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.6 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:900px;margin:0 auto;padding:0 20px 72px}
+header{padding:40px 0 18px;border-bottom:1px solid var(--line);margin-bottom:20px}
+.eyebrow{color:var(--accent);font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+h1{font-size:clamp(22px,4vw,30px);margin:.3em 0;font-weight:750;letter-spacing:-.02em}
+h2{font-size:19px;font-weight:700;margin:1.4em 0 .4em}
+h3{font-size:16px;font-weight:650;margin:1.2em 0 .3em}
+p,li{color:var(--ink-2)}
+code{background:var(--code);border-radius:4px;padding:1px 5px;font:12.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
+pre{background:var(--code);border:1px solid var(--line);border-radius:8px;padding:12px 14px;overflow-x:auto}
+pre code{background:none;padding:0}
+blockquote{border-left:3px solid var(--accent);margin:.6em 0;padding:.2em 0 .2em 14px;color:var(--ink-3)}
+table{border-collapse:collapse;width:100%;margin:.6em 0;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.telemetry th{white-space:nowrap;color:var(--ink-3);width:1%}
+.telemetry-section{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:4px 18px 14px;margin-top:24px}
+footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink-3);font-size:12.5px}
+
+:root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
+:root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
+@media print{:root,:root[data-theme=dark]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}}
+a{color:var(--accent)}
+.score{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;background:var(--code);color:var(--accent);border-radius:5px;padding:1px 6px}
+.sev{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 7px;border-radius:999px;text-transform:uppercase;white-space:nowrap}
+.sev-critical{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.sev-high{color:var(--sev-high);background:var(--sev-high-bg)}
+.sev-medium{color:var(--sev-med);background:var(--sev-med-bg)}
+.sev-low{color:var(--sev-low);background:var(--sev-low-bg)}
+.req{font-size:11px;font-weight:700;letter-spacing:.03em;padding:1px 6px;border-radius:5px;color:var(--req-c);background:var(--req-c-bg)}
+.req-must-not,.req-should-not{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.req-may{color:var(--ink-3);background:var(--code)}
+
+:root{--accent-soft:color-mix(in srgb,var(--accent) 12%,transparent)}
+.blk{margin:14px 0}
+.blk-stats{display:flex;flex-wrap:wrap;gap:10px}
+.blk-stats .blk-item{flex:1 1 130px;background:var(--surface);border:1px solid var(--line);
+border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.blk-stats .blk-value{font-size:22px;font-weight:750;letter-spacing:-.02em;color:var(--ink)}
+.blk-stats .is-accent .blk-value{color:var(--accent)}
+.blk-stats .blk-label{font:11px/1.3 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.blk-bar{display:block;height:4px;border-radius:999px;background:var(--code);margin-top:6px}
+.blk-bar .blk-fill{display:block;height:100%;border-radius:999px;background:var(--accent)}
+.blk-verdict .blk-row{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+border-bottom:1px solid var(--line)}
+.blk-verdict .blk-row:last-child{border-bottom:0}
+.blk-verdict .blk-key{font:11px/1.4 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);flex:0 0 auto;min-width:64px}
+.blk-verdict .blk-text{color:var(--ink);font-size:16px;font-weight:600}
+.blk-chips{display:flex;flex-wrap:wrap;gap:6px}
+.blk-chip{font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 9px;
+border-radius:999px;text-transform:uppercase;white-space:nowrap;
+color:var(--ink-2);background:var(--code);border:1px solid var(--line)}
+.blk-chip.is-done,.blk-chip.is-shipped,.blk-chip.is-merged{color:var(--req-c);
+background:var(--req-c-bg);border-color:transparent}
+.blk-chip.is-wip,.blk-chip.is-pending{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.blk-chip.is-blocked,.blk-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.blk-callout>.blk-callout{border-left:3px solid var(--ink-3);background:var(--code);
+border-radius:0 8px 8px 0;padding:10px 14px}
+.blk-callout .blk-title{font-weight:700;color:var(--ink);margin-bottom:.2em}
+.blk-callout p{margin:0;color:var(--ink-2)}
+.blk-callout .is-warn,.blk-callout .is-high{border-left-color:var(--sev-high);
+background:var(--sev-high-bg)}
+.blk-callout .is-stop,.blk-callout .is-critical{border-left-color:var(--sev-crit);
+background:var(--sev-crit-bg)}
+.blk-callout .is-note,.blk-callout .is-info{border-left-color:var(--accent)}
+.blk-legend dl{display:grid;grid-template-columns:auto 1fr;gap:6px 12px;margin:0}
+.blk-legend dt{font:11px/1.6 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2);
+border-left:3px solid var(--ink-3);padding-left:8px}
+.blk-legend dt.is-done{border-left-color:var(--req-c)}
+.blk-legend dt.is-blocked{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-solid{border-left-color:var(--accent)}
+/* #171: the rest of the status vocabulary. Three tokens had a colour and the other ten did
+   not, so a legend whose keys happened to be `crit`/`warn`/`ok`/`note` — the four a roadmap
+   actually uses — rendered four identical grey bars. A legend exists to say what a colour
+   means, and that one could not: every row looked the same as every other.
+   Measured on the live `rawgentic-plan-graph` page before the fix.
+   Grouped to match `.blk-chip` above rather than invented here, so a legend key and a chip
+   carrying the same word cannot disagree about its colour. */
+.blk-legend dt.is-shipped,.blk-legend dt.is-merged,.blk-legend dt.is-ok{
+border-left-color:var(--req-c)}
+.blk-legend dt.is-failed,.blk-legend dt.is-crit{border-left-color:var(--sev-crit)}
+.blk-legend dt.is-wip,.blk-legend dt.is-pending,.blk-legend dt.is-active,
+.blk-legend dt.is-warn{border-left-color:var(--sev-med)}
+/* `note` and `planned` are deliberately absent: they are the declared NEUTRAL states, and the
+   base rule's `--ink-3` is their colour. Adding a rule here would be the same mistake in
+   reverse — see `_PHASE_STATE_NEUTRAL`. A key outside the vocabulary entirely (`solid` above,
+   or a line style in a module map) also keeps the neutral bar, correctly: the legend's key
+   space is open by design, and only the status words carry a status colour. */
+.blk-legend dd{margin:0;color:var(--ink-2);font-size:13.5px}
+.blk-meter{display:grid;grid-template-columns:1fr auto;gap:2px 12px;margin:8px 0}
+.blk-meter .blk-label{color:var(--ink-2);font-size:13.5px}
+.blk-meter .blk-value{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3)}
+.blk-meter .blk-track{grid-column:1/-1;height:6px;border-radius:999px;background:var(--code);
+overflow:hidden}
+.blk-meter .blk-fill{display:block;height:100%;background:var(--accent)}
+.blk-meter.is-accent .blk-fill{background:var(--accent)}
+.blk-findings .blk-finding{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;
+padding:10px 0;border-bottom:1px solid var(--line)}
+.blk-findings .blk-finding:last-child{border-bottom:0}
+.blk-sev{font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+padding:2px 7px;border-radius:999px;white-space:nowrap;align-self:start;
+color:var(--sev-low);background:var(--sev-low-bg)}
+.is-critical>.blk-sev{color:var(--sev-crit);background:var(--sev-crit-bg)}
+.is-high>.blk-sev{color:var(--sev-high);background:var(--sev-high-bg)}
+.is-medium>.blk-sev{color:var(--sev-med);background:var(--sev-med-bg)}
+.blk-findings .blk-title{font-weight:650;color:var(--ink)}
+.blk-findings .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-prov{grid-column:2;font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-3)}
+.blk-steps ol,.blk-steps{margin:0;padding:0;list-style:none}
+.blk-step{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;padding:9px 0;
+border-bottom:1px solid var(--line)}
+.blk-step:last-child{border-bottom:0}
+.blk-step .blk-n{font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+color:var(--accent);align-self:start}
+.blk-step .blk-title{font-weight:650;color:var(--ink)}
+.blk-step .blk-text{grid-column:2;color:var(--ink-2);font-size:13.5px}
+.blk-nodes ul{list-style:none;margin:0;padding:0}
+.blk-nodes ul ul{margin-left:18px;padding-left:14px;border-left:1px solid var(--line)}
+.blk-node{background:var(--surface);border:1px solid var(--line);border-radius:8px;
+padding:7px 11px;margin:6px 0;display:flex;flex-wrap:wrap;gap:2px 10px;align-items:baseline}
+/* A child list lives INSIDE its parent <li>, so on a flex parent it becomes a flex
+   SIBLING of the label and renders beside it instead of beneath. Found by looking at a
+   rendered three-level tree, not by reading the markup. */
+.blk-node>ul{flex-basis:100%;margin-top:6px}
+/* Two roots in ONE nodes block are a before/after pair; a template opts in by
+   gridding this top-level list. Two separate fences cannot pair — each is its
+   own wrapper with a single child. */
+.blk-nodes>ul{display:grid;gap:0 16px}
+.blk-node .blk-label{font-weight:650;color:var(--ink)}
+.blk-node .blk-text{color:var(--ink-3);font:11.5px/1.5 ui-monospace,Menlo,Consolas,monospace}
+.blk-edge{flex-basis:100%;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.05em;text-transform:uppercase;color:var(--accent)}
+.blk-edge.is-proposed{color:var(--ink-3);border-bottom:1px dashed var(--ink-3);
+align-self:start;display:inline-block;flex-basis:auto}
+.blk-provenance dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;
+font-size:13px}
+.blk-provenance dt{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;font-weight:700;
+letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.blk-provenance dd{margin:0;color:var(--ink-2)}
+
+body.tpl-design{background:radial-gradient(1200px 600px at 50% -10%,rgba(124,156,255,.10),transparent 60%),var(--bg)}
+.tpl-design .wrap{max-width:1080px;padding:0 clamp(16px,4vw,32px) 64px}
+.tpl-design header{padding:clamp(24px,4vw,56px) 0 12px;border-bottom:none;margin-bottom:18px}
+.tpl-design h1{font-size:clamp(26px,3.4vw,40px)}
+.tpl-design h2{font-size:20.8px;margin:1.9em 0 .6em}
+
+/* #76 — the frame's companions only. Two rules, deliberately few.
+   An earlier draft of this PR also added a two-column `.dz-options` grid "so the wide measure
+   pays for itself". Both wrong: the grid was DEAD (the `.dz-options` rule further down sets
+   `display:block` at equal specificity and later source order), and it contradicted a decision
+   this file already records — cards stack FULL WIDTH because "a trade-off you have to READ is
+   not a 220px tile". The width pays for itself inside each card, where the for/against grid is
+   two columns and needs the room. Deleted rather than reconciled. */
+.tpl-design h1{line-height:1.2;max-width:22ch}
+.tpl-design header .eyebrow{font-size:11px;letter-spacing:.14em}
+.tpl-design .dz-lead{background:var(--surface);border:1px solid var(--line);
+border-left:4px solid var(--accent);border-radius:12px;padding:4px 20px 14px;margin:6px 0 26px}
+.tpl-design .dz-lead>p:first-child{font-size:17.5px;line-height:1.55;color:var(--ink);font-weight:550}
+/* Option cards. Stacked full-width, because a trade-off you have to READ is not a 220px tile;
+   the shared layer's flex row is overridden here at higher specificity. */
+.tpl-design .dz-options{margin:22px 0;display:block;counter-reset:dz-opt}
+.tpl-design .dz-options .blk-opt{counter-increment:dz-opt;display:grid;gap:10px 14px;
+grid-template-columns:1fr 1fr;grid-template-areas:"head head" "pro con";
+background:var(--surface);border:1px solid var(--line);border-radius:14px;
+padding:16px 18px;margin:0 0 16px;flex:none}
+.tpl-design .dz-options .blk-opt>.blk-title{grid-area:head;display:flex;gap:12px;
+align-items:baseline;font-size:19px;letter-spacing:-.01em;margin:0}
+.tpl-design .dz-options .blk-opt>.blk-title::before{content:counter(dz-opt,decimal-leading-zero);
+font:700 22px/1.1 ui-monospace,Menlo,Consolas,monospace;color:var(--accent);flex:none}
+.tpl-design .dz-options .blk-for{grid-area:pro;background:var(--req-c-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+.tpl-design .dz-options .blk-against{grid-area:con;background:var(--sev-high-bg);
+border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:13.5px}
+/* #134 SETTLED THE FOLLOW-UP THIS COMMENT USED TO NAME. It said these labels were CSS-generated
+   content, so not dependable semantic markup, that the reference uses real DOM text
+   (`<h4>Pros</h4>`), and that making it semantic "means changing the renderer, which moves every
+   style's bytes and so cannot ride in a per-template PR". That is exactly what #134 did: `_options`
+   now emits a real `.blk-lbl` element, every rich style's bytes moved, and `plain` did not.
+   So this is no longer a `::before` at all — it RESTYLES the markup label the renderer emits.
+   Only the typography is set here; the colours come from the shared layer, which reaches this
+   template because the wrapper carries both `blk-options` and `dz-options`. `text-transform`
+   keeps the visible form FOR/AGAINST while the accessible name stays the emitted "For"/"Against".
+   The space the renderer emits after the label collapses harmlessly against a block. */
+.tpl-design .dz-options .blk-lbl{display:block;font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;text-transform:uppercase}
+/* Restated at (0,4,0): the card rule above is (0,3,0) and was silently beating the shared
+   `.blk-options .is-chosen` (0,2,0), so the chosen card lost its accent border. Measured. */
+.tpl-design .dz-options .blk-opt.is-chosen{border-color:var(--accent);border-width:2px}
+.tpl-design .dz-options .blk-opt.is-rejected{opacity:.72}
+.tpl-design .dz-options .is-chosen>.blk-title::after{content:"CHOSEN";font:700 10px/1.6
+ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent);
+border:1px solid var(--accent);border-radius:999px;padding:1px 8px;margin-left:auto;flex:none}
+@media(max-width:640px){.tpl-design .dz-options .blk-opt{grid-template-columns:1fr;
+grid-template-areas:"head" "pro" "con"}}
+/* A today/proposed pair is TWO ROOTS in one `nodes compare` block, so the
+   grid goes on the top-level list. Two separate fences cannot pair — each is
+   its own wrapper with a single child. */
+@media(min-width:720px){.tpl-design .dz-compare>ul{grid-template-columns:1fr 1fr}}
+.tpl-design .dz-compare{background:var(--code);border-radius:12px;padding:10px 14px}
+/* The verdict band — `.recommend` in the reference. A gradient wash rather than a flat fill, so
+   the decision reads as the page's conclusion and not as one more callout. */
+.tpl-design .dz-decision{margin:24px 0 8px}
+.tpl-design .dz-decision>.blk-callout{border:1px solid var(--accent);border-left-width:1px;
+border-radius:14px;padding:16px 18px;
+background:linear-gradient(180deg,var(--accent-soft),transparent)}
+.tpl-design .dz-decision>.blk-callout>.blk-title::before{content:"DECISION";display:block;
+font:700 10px/1.6 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.07em;color:var(--accent)}
+/* Trade-off table. Styled, deliberately NOT markered: a markdown table emits a bare <table> with
+   no hook, and `section_class` is not a table marker — using it would flip `design` into
+   sectioned rendering and demote its h2s. */
+.tpl-design table{border-collapse:collapse;width:100%;margin:14px 0}
+.tpl-design thead th{font:700 11px/1.6 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.06em;text-transform:uppercase;color:var(--accent);
+border-bottom:2px solid var(--accent);text-align:left;padding:6px 10px}
+.tpl-design tbody td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tpl-design tbody tr:nth-child(even){background:var(--code)}
+.tpl-design h2{border-bottom:2px solid var(--accent);padding-bottom:.15em}
+
+/* An ordinary fenced listing, in a box with its language and a copy button. RICH ONLY —
+   `plain` carries no template CSS by definition and stays a bare <pre>. The box owns the
+   border, radius and ground that `pre` supplies on its own elsewhere, so the bar and the
+   listing share one outline instead of stacking two. */
+.doc-code{margin:0 0 14px;border:1px solid var(--line);border-radius:10px;
+background:var(--code);overflow:hidden}
+.doc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+padding:5px 8px 5px 14px;border-bottom:1px solid var(--line)}
+.doc-code-lang{font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;color:var(--ink-3);
+overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-code-copy{flex:none;font:11.5px/1.4 ui-monospace,Menlo,Consolas,monospace;
+color:var(--ink-2);background:var(--surface);border:1px solid var(--line);border-radius:6px;
+padding:3px 10px;cursor:pointer}
+.doc-code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-code-copy[data-state=ok]{color:var(--accent);border-color:var(--accent)}
+.doc-code-copy[data-state=fail]{color:var(--ink-2);border-color:var(--ink-3)}
+.doc-code>pre{margin:0;border:0;border-radius:0;background:none}
+/* Paper cannot take a copy. Printing the control would print a button that does nothing. */
+@media print{.doc-code-copy{display:none}}
+
+:root{--accent:#b7e87f;}
+:root[data-theme=dark]{--accent:#b7e87f;}
+:root[data-theme=light]{--accent:#4f7d15;}
+@media print{:root,:root[data-theme=dark]{--accent:#4f7d15;}}
+</style>
+</head>
+<body class="tpl-design">
+<div class="wrap">
+<header>
+<div class="eyebrow">design artifact · updated 2026-09-02 18:30 MDT</div>
+<h1>Issue #59 — a minutes doc type and style for meeting minutes</h1>
+
+</header>
+<main>
+<div class="dz-lead"><h1>Issue #59 — a <code>minutes</code> doc type and style for meeting minutes</h1>
+<p>Design for the fourteenth template. It is a stylesheet change: a new declaration-only module, its registration, its documentation surfaces, and its two generated pages. The renderer is not touched.</p></div>
+<h2>The fork this design settles, and the evidence it settles it on</h2>
+<p>Issue #59 left one question open on purpose: <strong>how is a decision marked?</strong> Two fetched, in-use governance formats answer it in opposite ways.</p>
+<ul>
+<li>W3C&#x27;s bot convention (<code>openui/open-ui</code>, <code>json-ld/minutes</code>) tags a decision inline with <code>RESOLVED:</code>. These are <strong>one witness, not two</strong> — both run the same Zakim/RRSAgent bot pair.</li>
+<li>The Node.js TSC (<code>nodejs/TSC</code>) tags nothing. A reader infers a decision from prose. It is the genuinely independent second witness, and the more recent page.</li>
+</ul>
+<p><strong>Decision: tag explicitly. A decision gets its own typed region.</strong></p>
+<p>The tiebreaker is mechanical rather than aesthetic, which is why it is decisive here. This engine refuses a styled page that omits the blocks its style opens with (<code>check_style_devices</code>, #130, reading <code>blocks.FIRST_READ_DEVICES</code>), and every region on a page is a TYPED block. An untagged prose shape is not a thing this engine can render under a style at all — it needs <code>--skip-component-checks</code>, whose meaning is &quot;this document really is prose&quot;. Choosing the Node.js shape would make every minutes page take the escape hatch. So the W3C side wins on this platform, and the reason is the platform, not the vote count.</p>
+<h2>The sharper disagreement, and how this template serves both sides</h2>
+<p>Robert&#x27;s Rules says minutes record what was <strong>done</strong>, and that summarizing what was said is &quot;improper&quot;. The W3C convention keeps the <strong>full timestamped record of what was said</strong> and tags outcomes inside it. The two most-cited precedents disagree about what a minutes document IS.</p>
+<p><strong>Decision: Robert&#x27;s Rules wins on what the document IS. The goal the W3C convention serves — recoverable reasoning — is met by CITATIONS, not by a transcript.</strong></p>
+<p>A third, independent fetched source sits between them, and it is the reason this is a real middle path rather than a compromise. A nonprofit-law guide (<code>charitylawyerblog.com</code>, fetched 2026-09-02 for this design, which upgrades research item I1 from inferred to confirmed) says minutes &quot;should not be a transcript of all that was said at the meeting&quot;, but SHOULD carry &quot;a summary of key points from any reports given to the board&quot; and should document &quot;alternatives considered for important decisions&quot;.</p>
+<p>So the template provides an <strong>alternatives-considered</strong> region and <strong>no transcript region at all</strong>, and <code>timeline</code> is deliberately <strong>excluded</strong> from <code>DOC_TYPE_TAGS[&quot;minutes&quot;]</code>.</p>
+<p><strong>An earlier draft of this paragraph called that &quot;enforced rather than advised&quot;. It is not, and the overstatement was caught twice — by this design&#x27;s own self-review and by the cross-model review.</strong> <code>blocks.py:1296-1298</code> prints a warning and renders a rejected block <strong>anyway</strong>, and no strict mode exists. Measured with <code>/tmp/wf2-59-probe3.py</code>: rendering the 19-block cross-style fixture as <code>minutes</code> puts all nine rejected tags on the page, each with a <code>block type &#x27;timeline&#x27; is not accepted by doc type &#x27;minutes&#x27; — rendering it anyway</code> warning. <code>design-system</code> behaves identically, accepting 4 tags while its committed page carries 17, so this is the repository&#x27;s normal advisory behaviour rather than a defect.</p>
+<p>The honest statement, which the AC13 docstring carries in the same words: <strong>the template provides no dedicated transcript region and its type policy warns on <code>timeline</code>. Avoiding transcript-like prose inside an accepted block stays an authoring rule, and nothing checks it semantically.</strong></p>
+<p>There is exactly one place the exclusion really bites, and it is worth having: <code>test_template_bodies.py:463</code> asserts the ABSENCE of that warning, so any fixture in this repository that uses a block its type rejects turns the suite red. The policy is enforced against this project&#x27;s own documents, never against a user&#x27;s.</p>
+<p><strong>Summary-first has no committed-artifact precedent, and that is the point.</strong> Both W3C artifacts were read in full — the second specifically in an attempt to falsify this, which failed. In both, a reader must scan the transcript line by line to find a decision. This repository&#x27;s own design language requires the opposite: <code>docs/design-language.md</code> says the first-read column &quot;is the question each type answers in its opening screenful&quot;. A minutes style that made a reader scan would contradict the engine it ships in. So the divergence is forced by local convention and it fixes the exact defect the precedent carries. AC13 requires the module docstring to say so, name both precedents, and say why it diverges from each.</p>
+<h2>Vocabulary — one word for one thing (AC7)</h2>
+<table>
+<thead><tr><th>Word</th><th>Means</th><th>Never used for</th></tr></thead>
+<tbody>
+<tr><td><strong>agreed</strong></td><td>a premise the room accepted as true</td><td>a course of action</td></tr>
+<tr><td><strong>decided</strong></td><td>a course of action the room chose</td><td>a premise</td></tr>
+<tr><td><strong>action</strong></td><td>a thing one named person will do, by a date or an explicit completion condition</td><td>a decision</td></tr>
+<tr><td><strong>open</strong></td><td>a question the room did not answer</td><td>either register</td></tr>
+</tbody>
+</table>
+<p><code>settle</code> is not used for an agreement, per AC7 — it reads as a decision. <code>chose</code> appears only as a synonym inside prose, never as a register label.</p>
+<p><strong><code>resolved</code> is not this template&#x27;s decision marker.</strong> Borrowing it would imply this template follows a convention it diverges from. The peer consult sharpened the rule and it is adopted verbatim in effect: <code>resolved</code> appears <strong>only</strong> when reproducing the exact wording of a formal resolution, never as the generic marker. That keeps the word available for the one job Robert&#x27;s Rules actually needs it for — recording a motion&#x27;s exact wording — without claiming the W3C convention.</p>
+<p><strong>Why the two registers are worded differently, and why no field encodes it.</strong> Research item C6: two lanes looked for a practitioner vocabulary separating an agreed premise from a decided course of action, and neither found one. Practice makes the distinction by WORDING — an unvoted consensus takes a hedge phrase (&quot;it was the consensus that&quot;, &quot;each director present expressed his/her approval of&quot;, &quot;doubt was expressed as to&quot;), a vote takes a full motion record (&quot;the exact wording of the resolution, the names of proposers and seconders, and the names of those voting in favor of or contrary to the resolution&quot;). Both quotations are from the fetched nonprofit-law source. A stylesheet cannot enforce wording, so the template does the one thing it can: it gives the two a <strong>separate region each</strong>, and documents the wording convention in its own docstring. That is what the AC7 clause &quot;documents which words it uses&quot; buys.</p>
+<h2>Regions, in document order</h2>
+<p>Each is an existing block. No new block tag, per the scope in the issue.</p>
+<table>
+<thead><tr><th>#</th><th>Region</th><th>Block</th><th>Grammar</th><th>Why this block</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Meeting facts</td><td><code>chips</code> role <code>meetingbar</code></td><td>label, tone</td><td>the binding RONR 48:4 field list — kind of meeting, date, quorum, whether the previous minutes were approved</td></tr>
+<tr><td>2</td><td><strong>Attendees</strong></td><td><code>chips</code> role <code>attendees</code></td><td>name and role, tone</td><td>AC6. A row of short labels is exactly a chip row</td></tr>
+<tr><td>3</td><td><strong>The ledger</strong></td><td><code>stats</code></td><td>n, label, blank, blank, accent</td><td>the summary-first answer. See AC8 below — this is the region that carries the zero</td></tr>
+<tr><td>4</td><td><strong>Agreed premises</strong></td><td><code>findings</code></td><td>agreed, premise, why, trace tail</td><td>the only 4-field block, and its fourth field is a provenance tail — so a premise carries its citation in the markup rather than in prose</td></tr>
+<tr><td>5</td><td><strong>Decided courses</strong></td><td><code>verdict</code></td><td>decided, the course chosen</td><td>a key word plus text, one row per decision. That key word IS the inline marker this design chose. <strong>Gate-mandatory</strong> — see AC8 below</td></tr>
+<tr><td>6</td><td>Alternatives considered</td><td><code>options</code></td><td>title, for, against, stance</td><td>the words of the middle-path source, and its stance field marks the chosen one</td></tr>
+<tr><td>7</td><td>Action items</td><td><code>steps</code></td><td>id, what, who and by when</td><td>owner as TEXT, per the out-of-scope decision in the issue and the precedent recorded at <code>report.py</code> lines 17 to 19. Documented display form, from the peer consult: <code>Owner — action — due date or condition</code></td></tr>
+<tr><td>8</td><td>Open questions</td><td><code>callout</code> role <code>open</code></td><td>tone, title, then prose</td><td>what the room did not answer</td></tr>
+<tr><td>9</td><td>Provenance</td><td><code>provenance</code></td><td>label, value</td><td>where these minutes came from</td></tr>
+</tbody>
+</table>
+<h2>AC8 — the meeting that decided nothing</h2>
+<p>This is the criterion most likely to be got wrong, so it is designed for directly rather than tested for afterwards.</p>
+<p><strong>The mechanism: <code>FIRST_READ_DEVICES[&quot;minutes&quot;]</code> is <code>{&quot;chips&quot;, &quot;stats&quot;, &quot;verdict&quot;}</code> — so the decided register is MANDATORY on every minutes page, and a meeting that decided nothing carries it holding one neutral row.</strong></p>
+<p><strong>This reverses an earlier draft of this design, and the peer consult is why.</strong> That draft set <code>{&quot;chips&quot;, &quot;stats&quot;}</code> and left <code>verdict</code> out, on the reasoning that everything in the set becomes mandatory, so a page whose meeting decided nothing could not carry it. <strong>That reasoning was wrong.</strong> <code>lint.check_style_devices</code> says so in its own docstring at <code>lint.py:670</code> — &quot;What it proves is PRESENCE, never quality or position&quot;. The gate asks whether the block is on the page, not whether it holds a decision. So a <code>verdict</code> block with one row reading <code>none | No course of action was decided at this meeting.</code> satisfies the gate while recording that nothing was decided.</p>
+<p>Measured, not argued — <code>/tmp/wf2-59-probe2.py</code>, exit 0, 7 checks passed:</p>
+<table>
+<thead><tr><th>Probe</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td>AC8 page carrying a neutral <code>verdict</code> row, with <code>verdict</code> in the set</td><td>publishes, <code>check_style_devices</code> returns <code>[]</code></td></tr>
+<tr><td>the same page with the region OMITTED</td><td><strong>refused</strong>: &quot;the page is styled <code>minutes</code> ... <code>verdict</code> is missing&quot;</td></tr>
+<tr><td>decisions fabricated on the AC8 page</td><td>none — zero <code>decided</code> keys emitted</td></tr>
+<tr><td>the neutral row&#x27;s own state class</td><td><code>is-none</code>, so the template styles it separately</td></tr>
+</tbody>
+</table>
+<p>Two things this buys that the earlier draft did not:</p>
+<ol>
+<li><strong>AC6 holds on every page.</strong> The earlier draft&#x27;s decided-nothing page carried no decided region at all, which is not &quot;a register honestly empty&quot; — it is no register. AC6 asks for four distinct regions and AC8 asks for one of them to be empty; only a present-but-empty register satisfies both at once.</li>
+<li><strong>The gate can fire.</strong> With <code>verdict</code> in the set, omitting the decided register is refused by name. An absence assertion that cannot fail is not a gate.</li>
+</ol>
+<p><strong>Why the empty register reads as deliberate rather than broken</strong>, in two places at once: the ledger prints <code>0 | courses decided</code> as a NUMBER in the opening screenful beside <code>2 | premises agreed</code>, and the register itself states the absence in words. An absence rendered as a printed zero and a written sentence is a statement somebody made. That is the principle the repository already applies to <code>FIRST_READ_DEVICES</code> itself — <code>docs/design-language.md</code> says &quot;an empty requirement must always be a statement someone made, never the residue of a parser that matched nothing.&quot; The template&#x27;s CSS gives <code>.mn-decided .blk-row.is-none</code> a neutral treatment rather than a warning colour, so the empty state does not read as a fault.</p>
+<p><strong><code>findings</code> and <code>steps</code> are deliberately NOT in the set, and the peer proposal wanted them there.</strong> Its reason was the same four-region contract, and its own risk list names the cost: an empty-state <code>steps</code> &quot;without rendering that sentence as step 1&quot; needs a new engine-owned block variant, because <code>_steps</code> always emits <code>&lt;ol&gt;&lt;li&gt;</code>. <code>BLOCK_VARIANTS</code> only lets a template SELECT a renderer the engine already owns, so adding an empty-state renderer is a renderer change — which this issue puts out of scope. <code>findings</code> is excluded for the symmetric reason: a meeting can agree nothing, and AC8 guarantees the agreed register is populated only on that one page, not on all pages. So the line is: a register is gate-mandatory when EVERY minutes page must state something about it, and only the decided register meets that bar — Robert&#x27;s Rules makes minutes the record of what was DONE, so the done-ness must always be stated, even when the answer is &quot;nothing&quot;. Agreed premises and action items stay required regions of a NORMAL minutes page, exercised by the gallery page and asserted by the template test rather than by the publish gate.</p>
+<h2>The ranged trace citation</h2>
+<p>Research item C5: the one published placement convention found handles a <strong>single</strong> timecode, and says in its own words &quot;Pick a house style, write it down, and reuse it&quot; — so it is explicitly one vendor&#x27;s house style, not an authority. Meanwhile 90 of the first real document&#x27;s 120 traces carry a distinct end segment.</p>
+<p><strong>Decision: the citation lives in the <code>findings</code> fourth field (the provenance tail), styled by the <code>findings.tail</code> marker as <code>mn-trace</code>, and the docstring declares the form as this template&#x27;s own convention rather than as anybody&#x27;s standard.</strong> The form is <code>trace 22:32, segments 381 to 393</code>. No borrowed <code>RESOLVED:</code>-style token, and no claim of precedent — because there is none for a range.</p>
+<p>Two constraints on the wording, the second from the peer consult:</p>
+<ul>
+<li>The citation is placed at the END of the statement it supports, which is the one thing the vendor convention and this template agree on. The docstring says that end placement is a house convention, not a rule anybody published.</li>
+<li><strong>A trace identifier is not called a timecode unless it is one.</strong> <code>22:32</code> is a timecode; <code>segments 381 to 393</code> are transcript segment indices and are not. Conflating them would be the kind of false precision this whole document is trying to avoid.</li>
+</ul>
+<p>The citation is styled visually secondary and must wrap rather than overflow. It is never hover-only content: a citation a reader cannot see in print is not a citation.</p>
+<h2>File changes</h2>
+<table>
+<thead><tr><th>Path</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>scripts/render/templates/minutes.py</code></td><td><strong>new</strong>, declaration only: <code>NAME</code>, <code>FRAME</code>, <code>SECTIONS</code>, <code>MARKERS</code>, <code>CSS</code>. No <code>BEFORE_BODY</code> (a minutes page&#x27;s content is per-meeting, so there is no constant furniture), no <code>BLOCK_VARIANTS</code>, no script — <code>uat</code> stays the only interactive template</td></tr>
+<tr><td><code>scripts/render/templates/__init__.py</code></td><td>add <code>minutes</code> to the <code>from . import (...)</code> list and to <code>MODULES</code>, appended last in roster order</td></tr>
+<tr><td><code>scripts/render/blocks.py</code></td><td><code>DOC_TYPE_TAGS[&quot;minutes&quot;]</code> and <code>FIRST_READ_DEVICES[&quot;minutes&quot;]</code></td></tr>
+<tr><td><code>scripts/publish_doc.py</code></td><td>add <code>&quot;minutes&quot;</code> to <code>PURPOSES</code> and map <code>PURPOSE_STYLE[&quot;minutes&quot;]</code> to <code>&quot;minutes&quot;</code></td></tr>
+<tr><td><code>docs/design-language.md</code></td><td>one <code>minutes</code> row in <code>## Doc types</code>, both pinned columns</td></tr>
+<tr><td><code>README.md</code></td><td>TWO surfaces: a row in <code>## Choosing a --type</code>, and a gallery cell — which fills the empty cell now sitting beside <code>plain</code>, making that table exactly 7 full rows</td></tr>
+<tr><td><code>skills/design-doc-publish/SKILL.md</code></td><td>a <code>--type</code> table row naming the template, plus selection guidance longer than 12 characters</td></tr>
+<tr><td><code>scripts/tests/test_minutes_template.py</code></td><td><strong>new</strong>, shaped after <code>test_design_system_template.py</code></td></tr>
+<tr><td><code>scripts/tests/test_furniture_context.py</code></td><td>a CAPTURED <code>PRE_74</code> sha entry — there is no &quot;before&quot; for a style that did not exist, exactly as that file already records for <code>design-system</code></td></tr>
+<tr><td><code>scripts/tests/regen_docs_pages.py</code></td><td><code>PAGES</code> entries for the gallery pair, for this design doc, and for the Step-5 plan</td></tr>
+<tr><td><code>docs/examples/gallery/minutes.md</code>, <code>.html</code>, <code>.png</code></td><td><strong>new triple</strong> — the <code>.png</code> is required by <code>test_example_gallery.py::test_the_screenshot_exists</code>, which AC4 requires to pass</td></tr>
+<tr><td><code>docs/rendered-styles/minutes.html</code></td><td><strong>new</strong>, produced by <code>regen_rendered_styles.py</code>, which derives its style list from the registry</td></tr>
+<tr><td><code>docs/planning/campaign-log.md</code>, <code>.html</code></td><td>the inherited uncommitted pair, shipped in this PR</td></tr>
+</tbody>
+</table>
+<h2>FRAME values, and the reason for the width</h2>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>ground        var(--bg)                measure      960px
+gutter        0 22px 80px              header_pad   34px 0 16px
+header_rule   3px double var(--line)   header_gap   16px
+h1_size       clamp(21px,2.9vw,27px)</code></pre></div>
+<p>Six owned live slots, measured by <code>frame.owned_slots</code> in the probe cited below. The floor the gate sets is 3.</p>
+<p><strong><code>ground</code> is the flat default, DECLARED.</strong> A minutes page is an archival record, and a decorative wash on a record is wrong. This is the case the owner decision of 2026-08-02 was written for: the gate asks that a ground be DECIDED, not that it differ, and naming the default because it is right is the sanctioned answer.</p>
+<p><strong><code>measure</code> is 960px</strong>, which is unused — the gate requires that, because the clash dict is pinned to exactly <code>{&quot;1240px&quot;: [&quot;dashboard&quot;, &quot;uat&quot;]}</code> and a third collision fails by design. Taken today: 760 <code>spec</code>, 820 <code>report</code>, 880 <code>analysis</code>, 900 the default, 920 <code>review</code>, 980 <code>module-map</code>, 1000 <code>workflow</code>, 1040 <code>slide-deck</code>, 1080 <code>design</code>, 1120 <code>roadmap</code>, 1160 <code>design-system</code>, 1240 <code>dashboard</code> and <code>uat</code>. The width is the peer consult&#x27;s, and its reason is better than the 940px this design first picked: 960 &quot;accommodates register metadata and long trace ranges&quot; — the <code>findings</code> provenance tail carries a ranged citation, which is the longest inline element on the page, and 40px over the default buys it a line it would otherwise wrap. <code>header_rule</code> at 3px double is the masthead of a record, and it is the one slot here doing real visual work.</p>
+<h2>Failure modes</h2>
+<table>
+<thead><tr><th>Failure</th><th>Loud or silent</th><th>What surfaces it</th></tr></thead>
+<tbody>
+<tr><td>A minutes page omits <strong>both</strong> chip regions, or its ledger, or its decided register</td><td><strong>loud</strong> — publish refuses at stage 3, naming the missing block</td><td><code>check_style_devices</code>, already in place</td></tr>
+<tr><td>A minutes page omits <strong>only</strong> the attendee region, keeping the meeting-facts chips</td><td><strong>SILENT — it publishes</strong></td><td>nothing at publish time. See the note below</td></tr>
+<tr><td>A minutes page puts its regions in the wrong order</td><td><strong>SILENT</strong></td><td>nothing at publish time. See the note below</td></tr>
+<tr><td>The doc table and the code disagree</td><td><strong>loud</strong> — two exact-equality tests</td><td><code>test_first_read_devices_match_the_documented_column</code> and <code>test_doc_type_tags_match_the_documented_sets</code></td></tr>
+<tr><td>A future style introduces an unapproved duplicate measure, including reuse of 960px</td><td><strong>loud</strong></td><td>the pinned dict in <code>test_every_style_has_a_distinct_measure</code>, whose only sanctioned collision stays <code>{&quot;1240px&quot;: [&quot;dashboard&quot;, &quot;uat&quot;]}</code></td></tr>
+<tr><td>Adding this style moves some OTHER style&#x27;s bytes</td><td><strong>loud</strong></td><td><code>test_furniture_context.py</code>&#x27;s <code>PRE_74</code> oracle, which asserts every existing style is byte-identical to its captured sha. Adding a template must move nothing else, and that oracle is the check</td></tr>
+<tr><td>The new gallery pair ships unguarded</td><td><strong>loud</strong> — the regenerator refuses to write anything</td><td><code>regen_docs_pages.undeclared_pairs()</code></td></tr>
+<tr><td>An author writes an action owner and expects a real field</td><td><strong>silent</strong></td><td>out of scope by the issue; the docstring states owners are text, and <code>report.py</code> lines 17 to 19 record the same ceiling</td></tr>
+<tr><td>An author uses <code>settle</code> for an agreement</td><td><strong>silent</strong></td><td>prose, and unenforceable by a stylesheet. The docstring names the vocabulary, which is what AC7 asks for</td></tr>
+<tr><td>A synthesized <code>agreed</code> row upgrades ordinary discussion into a consensus nobody reached</td><td><strong>silent</strong></td><td>the peer consult&#x27;s first risk, and it is real. Requiring a hedge phrase and a trace mitigates it; stylesheet-only work cannot check the claim semantically</td></tr>
+<tr><td>The registers and the alternatives region drift apart during editing</td><td><strong>silent</strong></td><td>the registers are declared canonical in the docstring; <code>options</code> supplies context, never a restatement of an outcome</td></tr>
+</tbody>
+</table>
+<h3>The two silent rows above, and why they stay silent</h3>
+<p><strong>The publish gate cannot tell two fence roles of one tag apart.</strong> Meeting facts and Attendees are both the <code>chips</code> TAG, differing only by their fence role, and <code>FIRST_READ_DEVICES</code> is a set of TAGS. An earlier draft of the table above claimed a page omitting its attendee region is refused loudly. The cross-model review said that was false, and a probe confirmed the reviewer rather than the design — <code>/tmp/wf2-59-probe4.py</code>:</p>
+<table>
+<thead><tr><th>Page</th><th><code>check_style_devices</code></th></tr></thead>
+<tbody>
+<tr><td>both chip regions present</td><td>publishes</td></tr>
+<tr><td><strong>attendees dropped, meeting facts kept</strong></td><td><strong>publishes</strong></td></tr>
+<tr><td>meeting facts dropped, attendees kept</td><td>publishes</td></tr>
+<tr><td>both chip regions dropped</td><td>REFUSED</td></tr>
+</tbody>
+</table>
+<p>Region order is unchecked at publish time for the same reason: the gate reads a set, and a set has no order.</p>
+<p><strong>Owner decision, 2026-09-02: fix this in scope and state the residual, rather than widen the issue.</strong> The reviewer&#x27;s remedy was a minutes-specific publish-time validator requiring the two chip roles separately and checking region order on every page. That means editing <code>scripts/render/lint.py</code>, which this issue&#x27;s scope excludes — it admits only composition from the existing block vocabulary — and which every style shares. So:</p>
+<ul>
+<li>the table above now states what really happens, in both directions;</li>
+<li><code>test_minutes_template.py</code> asserts the attendee region is present and the four AC6 regions appear in document ORDER, against a rendered fixture;</li>
+<li>the PR body states the residual plainly: role-level and order-level structure is guarded by this repository&#x27;s own tests, not by the publish gate, so a page written outside this repository can still omit its attendee region and publish.</li>
+</ul>
+<p>That residual is <strong>noted, not filed</strong>. Under the workspace issue throttle a review finding becomes a GitHub issue only when the owner opens one, and on 2026-09-02 the owner chose the note.</p>
+<p><strong>What the policy maps do NOT prove, named by the peer consult and worth recording because two acceptance criteria read as though they do.</strong> Set membership in <code>DOC_TYPE_TAGS</code> and <code>FIRST_READ_DEVICES</code> cannot verify document ORDER, distinct headings, correct vocabulary, or honest content — and the golden SHA detects a rendering change, not a semantic one. AC3 and AC6 are satisfied by presence, so the region ORDER and DISTINCTNESS that AC6 actually asks for must be asserted directly by <code>test_minutes_template.py</code> against a rendered fixture, never inferred from the maps. That is a real requirement on the test, and it goes into the Step 5 plan.</p>
+<h2>Security implications</h2>
+<p>Nothing in this change accepts author text into a class attribute. Every <code>MARKERS</code> value is a fixed slug written in the module, and <code>_token()</code> already validates every author-supplied semantic token against <code>^[a-z0-9]+(?:-[a-z0-9]+)*$</code>, falling back to <code>note</code> with a warning. There is <strong>no <code>BEFORE_BODY</code></strong>, so this template emits no unescaped furniture at all — the one place a template can put bytes on a page without escaping is simply not used. <code>CSS</code> is a constant containing no author input and no colour literal.</p>
+<h2>Platform / external dependencies</h2>
+<div class="doc-code"><div class="doc-code-bar"><span class="doc-code-lang">code</span><button class="doc-code-copy" type="button" hidden>Copy</button></div><pre><code>platform_apis:
+- api: render_artifact(style=&quot;minutes&quot;) on the in-repo render registry
+  feasibility: verified via spike — /tmp/wf2-59-probe.py, run 2026-09-02, exit 0, 22 checks
+    passed and 0 failed. It injected this exact declaration into render._templates.TEMPLATES,
+    .CSS and .MARKERS, bound it with render._bind plus render._css_for exactly as
+    render/__init__.py does, then rendered both the full page (all nine region markers
+    emitted, body class tpl-minutes, no script tag) and the AC8 decided-nothing page.
+    frame.owned_slots returned 6 slots including measure, and the measure clash dict came
+    back unchanged.
+
+    CORRECTED AT STEP 11, and the correction matters more than the numbers. This entry
+    previously recorded the AC8 page as &quot;13133 bytes, carrying no mn-decided region&quot;. That
+    was the FIRST spike, taken while the draft design left `verdict` OUT of
+    FIRST_READ_DEVICES — the design the Step 3 peer consult then overturned. Leaving it here
+    preserved evidence for a rejected design directly beneath the design that replaced it,
+    and a reader could have accepted output violating both AC6 and AC8 on the strength of it.
+    Re-measured against the SHIPPED implementation: the AC8 page is 21849 bytes and DOES
+    carry mn-decided, holding exactly one blk-row is-none whose key is `none`, with no
+    `decided` key anywhere. The populated page is 21859 bytes. Byte counts from the first
+    spike are dropped rather than refreshed, because they measured an injected declaration
+    rather than the committed module and re-quoting them would imply a continuity that does
+    not exist.
+  failure: fail-loud
+- api: headless Chrome --screenshot for docs/examples/gallery/minutes.png
+  feasibility: verified via spike — run 2026-09-02 on Google Chrome 152.0.7977.64. The exact
+    shipped invocation reproduced THREE committed gallery PNGs byte for byte: design.png
+    (sha256 b7914e2f1c8b083025fa6371c900ac22e58c273700f266a5e4fef147a1702362, 125553 bytes,
+    matching the committed file&#x27;s own sha256 exactly), review.png and slide-deck.png. Every
+    committed gallery PNG is exactly 1280 x 1000, so this is a viewport shot rather than a
+    full-page one. Command:
+      google-chrome --headless --no-sandbox --disable-gpu --hide-scrollbars
+        --force-device-scale-factor=1 --window-size=1280,1000
+        --screenshot=&lt;out.png&gt; &quot;file://$PWD/&lt;page&gt;.html&quot;
+  failure: fail-loud
+  surface: test_example_gallery.py::test_the_screenshot_exists names a missing file, AND the
+    minutes template test decodes the new PNG and asserts 1280 x 1000 with a non-trivial byte
+    size — existence alone cannot detect a blank, stale or wrong-page capture.</code></pre></div>
+<p><strong>An earlier draft of the block above cited <code>existing-call-site</code> on the ground that the Playwright MCP tools were loaded in this session. Both reviews rejected that, correctly</strong> — loaded tool names are tool discovery, not an exercised call site, and #226 treats that as no better than <code>docs</code>. The correction went further than either review asked, because the first attempt failed usefully: the Playwright MCP browser refused with &quot;Browser is already in use ... use --isolated&quot;, since another session holds it. <strong>That browser was not killed.</strong> A headless-Chrome route was found instead, and it is the better evidence — reproducing three committed artifacts byte for byte proves not merely that a screenshot is possible but that this command is the recipe those files were made with.</p>
+<p>The repository has no committed screenshot recipe, which is why the existing 14 PNGs went stale after #58 with no test catching it. The command above is therefore recorded beside the gallery&#x27;s manifest entry, as a two-line comment.</p>
+<p>A second spike, <code>/tmp/wf2-59-probe2.py</code> (2026-09-02, exit 0, 7 checks passed), settled the first-read divergence against the REAL gate: it imported <code>render.lint.check_style_devices</code> and called it on rendered pages, confirming that the AC8 page publishes with a neutral <code>verdict</code> row and is refused by name without one. The first spike had called that function through a wrong attribute and got <code>None</code>, which proved nothing; that is corrected rather than smoothed.</p>
+<p>What no spike proves, and Step 8 must therefore measure for real: AC1&#x27;s end-to-end claim. The spikes exercise the renderer and the lint function, never the CLI&#x27;s own argument parsing, stamping and staging.</p>
+<p><strong>AC1 needs TWO runs, not one, and the cross-model review is why.</strong> AC1&#x27;s own text names <code>--type minutes --style minutes</code>, which passes the style by hand — so that command may never exercise <code>PURPOSE_STYLE[&quot;minutes&quot;]</code> at all, and a broken default mapping would sail through it. Reading the exit code alone also proves nothing about the page. So Step 8 runs:</p>
+<ol>
+<li><code>--type minutes</code> with <strong>no</strong> style override, then asserts the rendered page carries <code>class=&quot;tpl-minutes&quot;</code>, lands at the expected output path, and carries the mandatory first-read blocks. This is the run that actually tests the type-to-style mapping.</li>
+<li><code>--type minutes --style minutes</code>, the literal AC1 command, for explicit-argument handling.</li>
+</ol>
+<p>Both exit codes are recorded verbatim before AC1 is called met.</p>
+<h2>Multi-PR assessment</h2>
+<p><strong>One PR.</strong> The issue estimates 500 to 800 inserted lines and the change has no separable phase: a registration without its documentation row turns two exact-equality tests red, so the surfaces must land together or the suite is red in between.</p>
+<p><strong>Why the two campaign-log files belong in THIS issue, stated because the cross-model review asked and the earlier draft never answered.</strong> They are not incidental inherited work. That diff ADDS the section <code>## #59 — A minutes doc type and style, for meeting minutes</code> and rewrites the log&#x27;s stats strip to <code>59 | newest: filed, a minutes doc type and style</code>. <strong>The campaign log is issue #59&#x27;s own status surface</strong>, and the workspace manual requires a status surface to update inside its own issue&#x27;s PR and never in a trailing docs PR. The reviewer proposed splitting them out on the ground that no dependency was established — the dependency is real, and the defect was this document not stating it. Verified by reading <code>git diff docs/planning/campaign-log.md</code>, which names #59 twice.</p>
+<p>The <code>.html</code> travels with the <code>.md</code> for a second, independent reason: committing the markdown alone reproduces the exact defect that issue #56 existed to fix, and leaves <code>test_docs_pages_current.py</code> red.</p>
+<h2>Approaches weighed</h2>
+<p><strong>A. Compose from existing blocks, summary-first, decision tagged (CHOSEN).</strong> No renderer change and no new block tag: nine regions from eight existing tags. Effort: the estimated 500 to 800 lines, almost all of it CSS and documentation. Risk: medium, concentrated in the exact-equality doc pins and the new currency gate, both named above with the test that catches each.</p>
+<p><strong>B. Copy the W3C shape — a timestamped transcript with inline <code>RESOLVED:</code> tags.</strong> Rejected. It needs a per-line chronology, which means <code>timeline</code> in the accepted set; it puts the decision below the record, which contradicts the first-read design language of this engine; and Robert&#x27;s Rules calls it improper for an ordinary society&#x27;s minutes. It would also make the four distinct regions of AC6 impossible, because the whole document would be one region.</p>
+<p><strong>C. Widen the <code>steps</code> block with a fifth field for an action owner, then build on it.</strong> Rejected, and the issue rejected it first: it is a renderer change that reaches <code>spec</code> and <code>report</code> too, so it belongs in its own issue. The optional fourth field added by #39 is the precedent for how that would be done later.</p>
+<h2>Peer consult — provenance</h2>
+<p>One independent proposal was obtained through <code>review_runner.py consult</code>, backend <strong><code>gpt</code></strong>, reviewer model <strong><code>gpt-5.6-sol</code></strong>, author model <code>claude-opus-5[1m]</code>, status <code>success</code>, <code>backend_switched: false</code>, <code>input_sha256</code> verified against the problem file. A consult is always <code>diagnostic: true</code>, so it authorizes no fix round and no loop-back was charged. The proposal was written blind: the problem file carried the issue, the codebase analysis and the research, and this design&#x27;s own draft was on disk before the result was read.</p>
+<p><strong>Where it converged</strong> — independent agreement, which is the useful signal:</p>
+<ul>
+<li>Summary-first, with the four regions as distinct typed regions rather than a transcript.</li>
+<li>Do NOT adopt <code>RESOLVED:</code> as the generic decision marker.</li>
+<li>Vocabulary <code>agreed</code> / <code>decided</code> / <code>chose</code> / <code>action</code> / <code>open</code>, with <code>settle</code> forbidden.</li>
+<li>Action owners as text in the <code>steps</code> text field, because no block carries an owner field.</li>
+<li>The ranged trace form is a local convention with no published precedent, and must say so.</li>
+<li>Capture the new per-style golden SHA.</li>
+</ul>
+<p><strong>What was adopted from it, and it changed the design:</strong></p>
+<table>
+<thead><tr><th>Adopted</th><th>What it replaced</th></tr></thead>
+<tbody>
+<tr><td><code>verdict</code> in <code>FIRST_READ_DEVICES</code>, with a neutral empty row</td><td>this design&#x27;s <code>{chips, stats}</code>, whose reasoning about AC8 was measurably wrong — see the AC8 section</td></tr>
+<tr><td><code>measure: 960px</code></td><td>940px. The peer&#x27;s reason (register metadata and long trace ranges) is the better one</td></tr>
+<tr><td><code>resolved</code> reserved for reproducing a motion&#x27;s exact wording</td><td>a blanket ban on the word</td></tr>
+<tr><td>The owner display form <code>Owner — action — due date or condition</code></td><td>an unspecified &quot;owner as text&quot;</td></tr>
+<tr><td>&quot;A trace identifier must not be described as a timecode unless it actually is one&quot;</td><td>nothing — this distinction was missing</td></tr>
+<tr><td>The warning that set membership proves nothing about order, vocabulary or honesty</td><td>nothing. It became a requirement on the template test</td></tr>
+</tbody>
+</table>
+<p><strong>Where it was declined, with the reason:</strong></p>
+<ul>
+<li><strong><code>timeline</code> in the accepted set</strong>, for &quot;a concise chronological record ... not dialogue&quot;. Declined. A stylesheet&#x27;s only real power is what it refuses, and <code>timeline</code> IS the chronology block — so admitting it while claiming no transcript region would be a policy enforced by prose alone. The peer&#x27;s own eighth risk names the failure mode (&quot;recording alternatives can slide into discussion summaries&quot;). This is a genuine judgment call and the disagreement is recorded rather than resolved: if authors turn out to need a chronology, adding <code>timeline</code> later is a one-line stylesheet change.</li>
+<li><strong><code>findings</code> and <code>steps</code> in <code>FIRST_READ_DEVICES</code>.</strong> Declined for the reason the peer itself identified: the empty-state <code>steps</code> it requires needs a new engine-owned block variant, which is a renderer change and out of scope.</li>
+<li>**<code>header_rule: 2px solid currentColor</code>, <code>h1_size: clamp(2.25rem, 6vw, 4rem)</code> and a single-value <code>gutter</code> clamp.** Declined on family consistency. <code>currentColor</code> is not one of this engine&#x27;s tokens (<code>var(--line)</code> is), a 4rem h1 would be roughly double every other style&#x27;s ceiling, and <code>gutter</code> is a three-value shorthand whose middle value is the side gutter — a single clamp would silently change the top and bottom too.</li>
+<li><strong>Marker names like <code>agreed-register</code> and <code>empty-state</code>.</strong> Declined: every existing template prefixes its markers (<code>ds-</code>, <code>an-</code>, <code>rm-</code>, <code>dz-</code>), so <code>mn-</code> keeps the family readable.</li>
+</ul>
+
+</main>
+<footer>Last updated: 2026-09-02 18:30 MDT · generated by design-doc-publish — self-contained, no external resources.</footer>
+</div>
+<script>
+(function(){
+var boxes=document.querySelectorAll('.doc-code');
+if(!boxes.length)return;
+function fallback(text){
+var ta=document.createElement('textarea');
+ta.value=text;ta.setAttribute('readonly','');
+ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';
+document.body.appendChild(ta);ta.select();
+var ok=false;
+try{ok=document.execCommand('copy');}catch(e){ok=false;}
+document.body.removeChild(ta);
+return ok;
+}
+function flash(btn,label,state){
+btn.textContent=label;
+btn.setAttribute('data-state',state);
+window.clearTimeout(btn.getAttribute('data-timer'));
+btn.setAttribute('data-timer',window.setTimeout(function(){
+btn.textContent='Copy';btn.removeAttribute('data-state');},2000));
+}
+Array.prototype.forEach.call(boxes,function(box){
+var btn=box.querySelector('.doc-code-copy');
+var code=box.querySelector('code');
+if(!btn||!code)return;
+btn.hidden=false;
+btn.addEventListener('click',function(){
+var text=code.textContent;
+function done(ok){flash(btn,ok?'Copied':'Press Ctrl+C',ok?'ok':'fail');}
+if(navigator.clipboard&&window.isSecureContext){
+navigator.clipboard.writeText(text).then(function(){done(true);},
+function(){done(fallback(text));});
+}else{done(fallback(text));}
+});
+});
+})();
+</script>
+</body>
+</html>

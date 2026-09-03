@@ -186,6 +186,29 @@ def plan_doc(doc):
 
 
 @pytest.fixture
+def minutes_doc(doc):
+    """The same document, rewritten for `--type minutes`.
+
+    #130 requires each style's OWN first-read devices, and `minutes` opens with three:
+    `chips`, `stats` and `verdict`. `verdict` is in that set deliberately (#59), so EVERY
+    minutes page carries a decided register — a meeting that chose no course of action
+    carries one holding a single neutral row rather than omitting the register.
+    """
+    doc.write_text(
+        "The board agreed one premise and chose one course of action.\n\n"
+        "## Meeting\n\n"
+        "```chips meetingbar\n2026-03-18, 09:30 MDT | note\nquorum met | ok\n```\n\n"
+        "```chips attendees\nD. Ferreira - chair | ok\n```\n\n"
+        "```stats\n1 | premises agreed | | | accent\n1 | courses decided | | |\n```\n\n"
+        "## Agreed\n\n"
+        "```findings\nagreed | The gap started upstream | It was the consensus. | trace 09:41\n```\n\n"
+        "## Decided\n\n"
+        "```verdict\ndecided | Cap carrier retries before the peak.\n```\n",
+        encoding="utf-8")
+    return doc
+
+
+@pytest.fixture
 def run(monkeypatch, workspace, doc):
     """Invoke the real `main()` against a real repository with only HTTP faked.
 
@@ -1545,3 +1568,79 @@ class TestTelemetryCanReachThePublishPath:
         assert "&lt;script&gt;" in page
         assert '"><img' not in page
         assert page.count("<script") == 0
+
+
+class TestAC1TheMinutesTypeReachesItsTemplate:
+    """Issue #59 acceptance criterion 1, driven against the real CLI in BOTH forms.
+
+    AC1's own text names `--type minutes --style minutes`, which supplies the style BY HAND.
+    On its own that form could pass while `PURPOSE_STYLE["minutes"]` was broken or missing
+    entirely, so it does not actually test what the criterion is about. A cross-model review
+    of the implementation plan raised exactly that, and it was right.
+
+    So run 1 is the load-bearing one: `--type minutes` with NO `--style`, which is the only
+    invocation that exercises the default type-to-style mapping. Run 2 then proves the
+    explicit argument AGREES with the default rather than diverging from it.
+
+    This is a committed test rather than two exit codes in somebody's scrollback, which is
+    the other half of that review finding: AC1's evidence has to be repeatable and
+    reviewable, and a transcript line is neither.
+    """
+
+    # The stamp is wall-clock at minute resolution and `publish_doc` has no `--generated-at`,
+    # so two renders that straddle a minute boundary differ by design. Normalizing it is what
+    # keeps run 2's byte comparison a statement about the TEMPLATE rather than about the clock.
+    STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} [A-Z]{2,4}")
+
+    def _page(self, run, minutes_doc, out, *extra):
+        rc, _h = run("--dry-run", "--type", "minutes", "--out", str(out), *extra)
+        return rc, out
+
+    def test_the_type_alone_renders_and_passes_the_gate(self, run, minutes_doc, tmp_path):
+        """Run 1. No `--style`, so the page can only reach the minutes template through
+        PURPOSE_STYLE. rc 0 from a dry run means stages 1 to 3 all passed, and stage 3 is
+        the lint gate AC1 names."""
+        out = tmp_path / "run1.html"
+        rc, out = self._page(run, minutes_doc, out)
+        assert rc == 0, "the minutes type did not survive the render and lint stages"
+        assert out.is_file(), "the dry run rendered nothing to the output path"
+        assert 'class="tpl-minutes"' in out.read_text(encoding="utf-8"), (
+            "`--type minutes` did not resolve to the minutes template — PURPOSE_STYLE is the "
+            "only thing that can make it, since no --style was given")
+
+    def test_the_page_carries_every_first_read_device_its_style_opens_with(self, run,
+                                                                          minutes_doc,
+                                                                          tmp_path):
+        """The gate proves PRESENCE, so assert presence — and assert it through the gate
+        itself rather than re-implementing its judgement here."""
+        from render import blocks, lint
+        out = tmp_path / "devices.html"
+        rc, out = self._page(run, minutes_doc, out)
+        assert rc == 0
+        page = out.read_text(encoding="utf-8")
+        assert lint.check_style_devices(page) == [], "the publish gate refused the page"
+        # The BODY, never the whole page. Step 8a caught the first cut of this reading the
+        # complete HTML, whose embedded stylesheet already names `.blk-chips`, `.blk-stats`
+        # and `.blk-verdict` — measured, all three are in the <style> block alone. So the
+        # assertion was satisfied by the stylesheet and would have passed with every block
+        # gone from the document. The same slip cost `test_minutes_template.py` a false
+        # failure earlier in this issue, in the other direction.
+        body = re.search(r"<body[^>]*>(.*)</body>", page, re.S).group(1)
+        missing = [tag for tag in sorted(blocks.FIRST_READ_DEVICES["minutes"])
+                   if f"blk-{tag}" not in body]
+        assert not missing, f"first-read devices absent from the rendered page: {missing}"
+
+    def test_the_explicit_style_agrees_with_the_default(self, run, minutes_doc, tmp_path):
+        """Run 2, and the whole point of it: `--style minutes` must reproduce run 1 rather
+        than quietly diverge from it. A mapping that pointed somewhere else would make these
+        two pages differ while both exited 0."""
+        one = tmp_path / "one.html"
+        rc1, one = self._page(run, minutes_doc, one)
+        two = tmp_path / "two.html"
+        rc2, two = self._page(run, minutes_doc, two, "--style", "minutes")
+        assert (rc1, rc2) == (0, 0), f"exit codes were {(rc1, rc2)}, expected (0, 0)"
+        a = self.STAMP.sub("<stamp>", one.read_text(encoding="utf-8"))
+        b = self.STAMP.sub("<stamp>", two.read_text(encoding="utf-8"))
+        assert a == b, ("`--type minutes` and `--type minutes --style minutes` produced "
+                        "different pages, so the default mapping and the explicit argument "
+                        "disagree")
