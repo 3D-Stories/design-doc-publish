@@ -153,7 +153,7 @@ font-size:12px}
    for a meeting that decided nothing is printed here rather than omitted. */
 .tpl-minutes .mn-ledger{border-top:1px solid var(--line);border-bottom:1px solid var(--line);
 padding:16px 0;margin:0 0 26px}
-.tpl-minutes .mn-ledger .blk-stat{border:0;background:none;padding:0 14px 0 0}
+.tpl-minutes .mn-ledger .blk-item{border:0;background:none;padding:0 14px 0 0}
 
 /* The agreed register. Left-ruled in the accent, because an agreed premise is the thing a reader
    came for. The `agreed` word itself sits in the severity slot and is shown, not hidden. */

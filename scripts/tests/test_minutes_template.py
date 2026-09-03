@@ -370,6 +370,52 @@ class TestPolicy:
         assert out and "verdict" in out[0], f"the gate did not fire: {out}"
 
 
+class TestEveryRuleThisTemplateWritesCanActuallyMatch:
+    """A CSS rule naming a class the engine never emits is dead weight that LOOKS like styling.
+
+    Found by the recorded visual inspection of the gallery screenshot, not by any assertion
+    here: the ledger rendered as four bordered tiles although this template's own rule sets
+    `border:0;background:none` on them. The rule named `.blk-stat`, and the stats block emits
+    `.blk-item` — the class appeared nowhere in the render package except in that one rule.
+    Every marker test passed the whole time, because a marker test proves the classes this
+    template DECLARES reach the page and says nothing about the ones its CSS SELECTS.
+
+    Scoped to this template on purpose. A repository-wide version would be a better guard and
+    is a bigger change than #59; this one covers the file it ships with.
+    """
+
+    CLASS = re.compile(r"\.(blk-[a-z0-9-]+)")
+
+    def _selected(self):
+        """Every `blk-` class this template's CSS selects, read out of the selectors only.
+
+        The rule bodies are skipped, so a class named inside a `content:` string or a comment
+        is not mistaken for a selector.
+        """
+        css = _module().CSS
+        out = set()
+        for rule in css.split("}"):
+            head = rule.split("{")[0]
+            # Strip comments, which sit between rules and mention class names in prose.
+            head = re.sub(r"/\*.*?\*/", " ", head, flags=re.S)
+            out.update(self.CLASS.findall(head))
+        return out
+
+    def _emitted(self):
+        """The union of BOTH document shapes, so a class that only the populated page or only
+        the decided-nothing page carries still counts as reachable."""
+        out = set()
+        for md in (DOC, DECIDED_DOC):
+            out.update(re.findall(r'class="([^"]+)"', _render(md)))
+        return {c for group in out for c in group.split()}
+
+    def test_every_class_its_css_selects_reaches_a_rendered_page(self):
+        dead = sorted(self._selected() - self._emitted())
+        assert not dead, (
+            f"this template styles classes the engine never emits: {dead}. The rule is inert, "
+            "so the page does not look like the module says it does")
+
+
 class TestTheGalleryScreenshot:
     """AC4 requires `test_example_gallery.py` to pass, and that only checks the file EXISTS.
     A blank, stale or wrong-page capture would pass it silently, so decode the thing."""
