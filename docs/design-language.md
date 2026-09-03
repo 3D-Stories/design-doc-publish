@@ -261,6 +261,7 @@ already-escaped text).
 | `design-system` | `render_sections` | component + blocks + design-system    | none                     | a project's own design language, shown rather than tabulated — `--style design-system` / `--type tokens`.  |
 | `module-map` | `render_sections` | component + blocks + module-map          | none                     | what the parts are and what depends on what — `--style module-map` / `--type map`.                        |
 | `slide-deck` | `render_sections` | component + blocks + slide-deck          | none                     | something you present, one point per screen — `--style slide-deck` / `--type deck`.                       |
+| `minutes`   | `render_sections` | component + blocks + minutes             | none                     | what a meeting agreed and decided, and who owes what — `--style minutes` / `--type minutes`.              |
 
 That is the full ten-type roster from specs §4c.
 
