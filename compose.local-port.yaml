@@ -1,0 +1,29 @@
+# A loopback port for the harness, so the origin can be measured without Cloudflare in the way.
+#
+# WHY THIS FILE EXISTS. `compose.yaml` deliberately publishes no host port — cloudflared dials
+# outward, so nothing listens on the host and the slow-client surface stays out of reach. That is
+# right for production and wrong for measuring, because a timing taken through Cloudflare Access
+# measures Cloudflare too.
+#
+# The mapping used to live in a scratch file under /tmp. On 2026-09-15 that file was gone: /tmp is
+# cleaned on an age rule or on boot, so the only copy of the measurement route had evaporated while
+# the container it configured was still running. Recreating the container from committed
+# configuration alone would have silently dropped the port, and the first symptom would have been a
+# connection refused in the middle of a post-deploy measurement. Committing it here is the fix
+# (#65, owner rule: /tmp is not storage).
+#
+# It binds 127.0.0.1 ONLY. It adds no surface reachable from another host.
+#
+# Usage — this file is NOT applied by a bare `docker compose up`, so production is unchanged:
+#
+#   docker compose -f compose.yaml -f compose.local-port.yaml up -d --build
+#
+# then
+#
+#   curl -s -o /dev/null -H "Host: index.3dstories.ca" \
+#     -w "code=%{http_code} ttfb=%{time_starttransfer}s total=%{time_total}s bytes=%{size_download}\n" \
+#     "http://127.0.0.1:18081/"
+services:
+  harness:
+    ports:
+      - "127.0.0.1:18081:8080"
