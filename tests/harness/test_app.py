@@ -46,8 +46,24 @@ def app(tmp_path):
         blobs={(REPO, BLOB): PAGE, ("3D-Stories/rawgentic", BLOB): PAGE},
         commits={("3D-Stories/rawgentic", "HEAD"): "r" * 40},
         repos=["rawgentic"])
-    yield make_app(cfg=CFG, registry=reg, cache=cache, source=src)
+    built = make_app(cfg=CFG, registry=reg, cache=cache, source=src)
+    # #65: only the FIRST caller of a cold process builds the listing; a second one is refused
+    # with a 503 rather than joining the wait. `make_app` starts a boot warm thread, so an index
+    # request racing it would get that 503 at random. Wait for the listing to exist, so every
+    # test below asserts what it is about instead of a warm-up race.
+    _wait_until_index_is_warm(built)
+    yield built
     reg.close(); cache.close()
+
+
+def _wait_until_index_is_warm(app, timeout=5.0):
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        cap, _ = call(app, f"index.{ZONE}", "/")
+        if not cap["status"].startswith("503"):
+            return
+        _time.sleep(0.01)
 
 
 def call(app, host, path="/", method="GET", headers=None, body=b"", query=""):

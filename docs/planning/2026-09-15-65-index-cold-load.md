@@ -191,32 +191,48 @@ inputs are all independent of completion order.
 
 #### A shared failure must not be recorded as 61 local ones
 
-`DeadlineExceeded`, `BudgetExhausted` and `Unauthorized` are all **subclasses of `GitHubError`**
+`DeadlineExceeded` and `BudgetExhausted` are **subclasses of `GitHubError`**
 (`harness/github.py:46-63`), and **both** existing handlers catch the base class — the
 per-repository one at `convention.py:254-258` and **`_dates_for`'s own at `convention.py:239-240`**.
 
-So today an expired token makes all 61 repositories `unreadable`, `snapshot()` returns
-**successfully** with `rows: []`, and `app.py` renders a confident **empty index page** rather than
-the 503 it would render if the call had raised. Three fixes, all in this change:
+So an exhausted budget quietly becomes "unreadable" repositories and blank dates, and the walk
+carries on publishing a degraded listing as though it had succeeded. Concurrently that goes from
+bad to routine: the moment the shared budget is gone, all eight workers and every remaining
+repository fail that way at once.
 
 ```python
-_WALK_FATAL = (DeadlineExceeded, BudgetExhausted, Unauthorized)
+_WALK_FATAL = (DeadlineExceeded, BudgetExhausted)
 # in _dates_for AND in each phase task, BEFORE `except GitHubError`:
 except _WALK_FATAL:
     raise
 ```
 
-1. **Fatal errors are re-raised from both handlers** and fail the whole build.
-2. **Zero rows with a non-empty `unreadable` is an unconditional build failure** — it raises,
-   rather than merely declining to publish. Revision 2's guard only protected an *existing*
-   snapshot, so a cold start where every repository failed locally still published a confident
-   empty page. An org with genuinely no documents and no unreadable repositories still publishes
-   an empty listing, correctly, because nothing failed.
-3. **If every attempted date lookup failed, the build fails.** A single failure still lists its
-   document — see the carry-forward rule next. But a *systemic* date outage blanks every date, and
-   a blank date changes the generated hostname for any document whose filename carries no date, so
-   **shared links break**. "Every attempt failed" is the crisp line between one hiccup and an
-   outage.
+**`Unauthorized` is deliberately NOT in that tuple, and that corrects revision 3**, which put it
+there. GitHub answers 404 for a private repository the credential cannot see and **403 for a
+refusal or a rate limit**, and `HttpGitHub._classify` maps every 403 and 401 to `Unauthorized`
+(`github.py:236-247`). Making it fatal therefore lets ONE repository the token cannot read kill
+the entire index — precisely what
+`test_a_repository_that_cannot_be_read_does_not_empty_the_index` has forbidden since the index
+was written. A genuinely dead credential needs no special case: every repository fails, the build
+produces no rows, and guard 1 refuses to publish it.
+
+Three publication guards, each of which a test proved necessary:
+
+1. **A build that READ nothing is a failed build**, however many rows it carried forward. Not
+   "zero rows" — rows carried forward from the last good snapshot are not evidence that anything
+   was read. This is stronger than revision 3's guard, and it had to be: with carry-forward in
+   place, a build during a total outage would republish the previous rows and **reset the
+   snapshot's age**, so the listing would look permanently fresh, `max_stale_age` would never
+   fire, and the staleness bound would quietly stop existing. Found by the cool-off test, which
+   expected a failed refresh and got a successful one.
+2. **An org with genuinely no documents and no unreadable repositories still publishes an empty
+   listing**, correctly, because nothing failed.
+3. **If every attempted date lookup failed AND none could be carried forward, the build fails.**
+   It counts UNCOVERED failures, not failures. A single failure still lists its document — see
+   carry-forward next — and a *warm* build whose every lookup failed is fine, because each row
+   keeps the date it already had and the listing comes out byte-identical. Only a failure with no
+   previous row can actually move a URL, and a blank date does move it: it changes the generated
+   hostname of any document whose filename carries no date, so **shared links break**.
 
 #### Carry forward what the last good snapshot already knew
 
@@ -393,7 +409,8 @@ would need roughly 2,200 documents before the call cap bit.
 | A second cold caller arrives | `IndexBuilding` → **503 + `Retry-After: 5`**, worker released at once. |
 | A cold caller inside the cool-off | `IndexCoolingDown` → **503 + `Retry-After: <seconds left>`**. |
 | The shared budget runs out mid-walk | `DeadlineExceeded` / `BudgetExhausted` re-raised past **both** handlers, stop event set, pending futures cancelled. |
-| The credential is refused | `Unauthorized`, same path. An expired token now yields 503, not a confident empty index. |
+| The credential is refused everywhere | Every repository lands in `unreadable`, so the build reads nothing and guard 1 raises. An expired token yields 503, not a confident empty index. |
+| The credential is refused for ONE repository | That repository is `unreadable`, as it has always been. `Unauthorized` is not a fatal type, because GitHub answers 403 for a single-repository refusal too. |
 | One repository unreadable, warm build | Named in `unreadable[]`. **Its rows are carried forward from the previous snapshot**, so a transient hiccup cannot make its documents vanish. Its store rows are not pruned. |
 | One repository unreadable, cold build | Named in `unreadable[]`. Nothing to carry forward, so its documents are simply absent this build, as today. |
 | Every repository unreadable, zero rows | **Build failure**, cold or warm. Cold → 503; warm → the old snapshot stands. |
