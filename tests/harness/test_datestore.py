@@ -214,3 +214,29 @@ class TestThreads:
             t.join()
         assert errors == []
         assert s.get(("3D-Stories/r7", "docs/p24.html", "e" * 40)) == VALUE
+
+
+class TestTheLoggerItself:
+    def test_a_logging_callback_that_raises_does_not_break_the_never_raise_contract(self, tmp_path):
+        """The whole point of this class is that it cannot raise at a caller. A logger that
+        throws while REPORTING a storage failure would break exactly that, and during
+        `initialize` it would abort the boot — the one outcome #65 forbids."""
+        def angry(_message):
+            raise RuntimeError("the log sink is on fire")
+
+        s = DateStore("/proc/definitely-not-writable/index-dates.db", log=angry)
+        s.initialize()                                   # must not raise
+        assert s.available is False
+
+        good = DateStore(str(tmp_path / "ok.db"), log=angry)
+        good.initialize()
+        assert good.available is True
+
+        def boom(*_a, **_k):
+            raise sqlite3.OperationalError("disk is full")
+
+        good._conn = boom
+        good.put(KEY, VALUE)                             # must not raise
+        assert good.get(KEY) is None
+        good.prune([KEY], {KEY[0]})
+        assert good.available is False

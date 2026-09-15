@@ -401,6 +401,11 @@ class ConventionIndex:
             return _RepoWalk(repo, None, (), True)
         try:
             commit = self._source.commit(full, "HEAD", budget, http_timeout)
+            if stop.is_set():
+                # Checked again between the two calls, not only at entry: another worker can
+                # report a fatal error while this one's `commit` is in flight, and firing
+                # `tree` after that adds a request to an API already refusing them.
+                return _RepoWalk(repo, None, (), True)
             entries, truncated = self._source.tree(full, commit, budget, http_timeout,
                                                    recursive=True)
         except _WALK_FATAL:
@@ -592,9 +597,11 @@ class ConventionIndex:
     def snapshot(self, budget, *, http_timeout: float = 20.0) -> dict:
         """The listing. Never blocks once a snapshot exists.
 
-        Five outcomes, and the branch each takes is decided under one lock so two readers
-        cannot both elect themselves the builder.
+        Six outcomes — fresh, stale-and-served, stale-past-the-bound, cold-and-leading,
+        cold-while-another-builds, cold-inside-the-cool-off — and the branch each takes is
+        decided under one lock, so two readers can never both elect themselves the builder.
         """
+        deferred_log = None
         with self._lock:
             snap, at = self._snapshot, self._at
             now = self._monotonic()
@@ -621,7 +628,10 @@ class ConventionIndex:
                         self._building = True
                         lead = True
                 elif not self._building and self._cooling_for(now) <= 0:
-                    self._spawn(http_timeout)
+                    deferred_log = self._spawn(http_timeout)
+
+        if deferred_log is not None:
+            self._log_line(deferred_log)
 
         if lead:
             return self._run_build(budget, http_timeout)
@@ -648,8 +658,10 @@ class ConventionIndex:
         left = self._cooldown_until - now
         return math.ceil(left) if left > 0 else 0
 
-    def _spawn(self, http_timeout: float) -> None:
-        """Start a background build. The caller holds `self._lock`.
+    def _spawn(self, http_timeout: float):
+        """Start a background build; return a line to log AFTER the lock, or None.
+
+        The caller holds `self._lock`.
 
         `start()` can raise `RuntimeError` when the process cannot make another thread. If
         `_building` were left set by that, the target never runs its `finally` and every later
@@ -662,11 +674,18 @@ class ConventionIndex:
                 target=self._background, args=(http_timeout,),
                 name="index-refresh", daemon=True)
             thread.start()
-        except BaseException as exc:                   # noqa: BLE001 - a refusal to start
+        except Exception as exc:                       # noqa: BLE001 - a refusal to start
+            # `Exception`, not `BaseException`: this runs on the READER's thread, and
+            # swallowing a KeyboardInterrupt or a SystemExit there would be a different and
+            # worse bug than the one this handler exists for.
             self._building = False
             self._cooldown_until = self._monotonic() + self.REFRESH_COOLDOWN
-            self._log_line(f"index refresh could not start a thread: {exc!r}; "
-                           f"continuing to serve the previous listing")
+            # Returned, not logged here. `_log_line` writes to stderr, and this method is
+            # called with the index lock held, so logging inside it would put a blocking write
+            # between every reader and the snapshot they came for.
+            return (f"index refresh could not start a thread: {exc!r}; "
+                    f"continuing to serve the previous listing")
+        return None
 
     def _background(self, http_timeout: float) -> None:
         """Rebuild off the reader's thread. A failure here must never reach a reader.
@@ -693,7 +712,15 @@ class ConventionIndex:
             self._log_line(f"index refresh failed, keeping the previous listing: {exc!r}")
 
     def _run_build(self, budget, http_timeout: float):
-        """Build, then install atomically. Clears `_building` on every path."""
+        """Build, then install and release the flag in ONE critical section.
+
+        It used to take the lock twice — once in the `finally` to clear `_building`, once after
+        to install the snapshot. A caller arriving in the window between them saw no build in
+        flight and no new snapshot, elected itself, and ran a second walk that could then
+        overwrite the first result. That is the one-walk guarantee gone, and both cross-model
+        reviewers found it independently. There is no reason for two acquisitions: the failure
+        path and the success path set different fields, not different locks.
+        """
         built = None
         try:
             built = self._build(budget, http_timeout)
@@ -702,10 +729,10 @@ class ConventionIndex:
                 self._building = False
                 if built is None:
                     self._cooldown_until = self._monotonic() + self.REFRESH_COOLDOWN
-        with self._lock:
-            self._snapshot = built
-            self._at = self._monotonic()
-            self._cooldown_until = 0.0
+                else:
+                    self._snapshot = built
+                    self._at = self._monotonic()
+                    self._cooldown_until = 0.0
         return built
 
     def _carry_expired(self, repo: str, now: float) -> bool:

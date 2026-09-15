@@ -265,14 +265,20 @@ class HttpGitHub:
             return NotFound("GitHub reports this object does not exist")
         if status == 401:
             return Unauthorized("GitHub refused the credential (401)")
-        if status == 403:
+        if status in (403, 429):
             headers = exc.headers or {}
             try:
                 remaining = headers.get("x-ratelimit-remaining")
+                retry_after = headers.get("retry-after")
             except AttributeError:
-                remaining = None
-            if str(remaining) == "0":
-                return RateLimited("GitHub rate limit is exhausted (403)")
+                remaining, retry_after = None, None
+            # THREE signals, not one (#65 review). A PRIMARY limit sets
+            # `x-ratelimit-remaining: 0`. A SECONDARY limit does not — it answers 403 or 429
+            # with `Retry-After` and a full remaining count, so keying only on the first signal
+            # left the case that actually bites a burst of eight workers classified as an
+            # ordinary per-repository refusal.
+            if str(remaining) == "0" or retry_after is not None or status == 429:
+                return RateLimited(f"GitHub rate limit is exhausted ({status})")
             return Unauthorized("GitHub refused the request (403)")
         return Unavailable(f"GitHub returned {status}")
 

@@ -1101,3 +1101,99 @@ class TestReviewFindings65:
         src._errors[("3D-Stories/secret", "HEAD")] = Unavailable("hiccup")
         ConventionIndex("3D-Stories", src, store=store_).snapshot(budget())
         assert store_.get(dead) is None
+
+
+class TestStep11Findings:
+    def test_the_install_and_the_flag_release_are_ONE_critical_section(self):
+        """Both cross-model reviewers found this independently, and it is the reason this is a
+        source-shape assertion rather than a behaviour one.
+
+        `_run_build` used to take the lock twice — once in the `finally` to clear `_building`,
+        once afterwards to install the snapshot. A caller arriving between them saw no build in
+        flight AND no new snapshot, elected itself, and ran a second walk that could overwrite
+        the first result.
+
+        **A behavioural test cannot reach that window**, and pretending otherwise would be
+        worse than not testing it: between the two acquisitions no lock is held and no code of
+        this class runs, so there is nothing to hook and nothing to synchronize against. The
+        first version of this test spawned a reader from inside `_build` and passed identically
+        with the defect present — a test that cannot fail. So the invariant is asserted where it
+        actually lives: the method holds the lock exactly once, and the two writes cannot be
+        separated by anyone.
+        """
+        import inspect
+
+        source = inspect.getsource(ConventionIndex._run_build)
+        body = source.split('"""')[-1]              # past the docstring
+        assert body.count("with self._lock") == 1, (
+            "`_run_build` must install the snapshot and clear `_building` in ONE critical "
+            "section; a second acquisition reopens the duplicate-build window")
+
+    def test_a_concurrent_reader_during_a_cold_build_gets_one_walk_and_a_503(self):
+        """The behaviour that window would have broken, asserted for its own sake."""
+        src = index_source(rawgentic=["docs/a.html"])
+        idx = ConventionIndex("3D-Stories", src, ttl=900.0)
+        seen = []
+        real_build = idx._build
+
+        def watched(*a, **k):
+            def peek():
+                try:
+                    idx.snapshot(budget())
+                    seen.append("served")
+                except IndexBuilding:
+                    seen.append("IndexBuilding")
+            thread = threading.Thread(target=peek)
+            thread.start()
+            thread.join(5)
+            return real_build(*a, **k)
+
+        idx._build = watched
+        idx.snapshot(budget())
+        assert seen == ["IndexBuilding"], seen
+        assert idx._building is False
+        assert idx._snapshot is not None
+        assert src.tree_calls == 1
+
+    def test_the_stop_flag_is_checked_BETWEEN_the_two_calls_not_only_at_entry(self):
+        """`_walk_repo` checked cancellation only at entry, so a worker whose `commit` was in
+        flight when another worker went fatal still issued its `tree`.
+
+        The flag is set DURING `commit`, which is the only arrangement that discriminates: at
+        entry it is clear, so the entry check passes and the new check is the one under test.
+        An earlier version of this test pre-set the flag, hit the entry check, and passed
+        identically with the fix removed.
+
+        Asserted at the unit, deliberately. Cancellation is best-effort by nature — a worker
+        already past a check finishes the call it started — so an end-to-end assertion that NO
+        call happens after a fatal error overstates the guarantee and races the scheduler.
+        """
+        stop = threading.Event()
+
+        class SetsStopDuringCommit(FakeGitHub):
+            def commit(self, repo, ref, budget_, http_timeout: float = 20.0):
+                sha = super().commit(repo, ref, budget_, http_timeout)
+                stop.set()                    # another worker just went fatal
+                return sha
+
+        src = SetsStopDuringCommit(
+            trees={("3D-Stories/rawgentic", "r" * 40): [
+                {"path": "docs/a.html", "type": "blob", "mode": "100644",
+                 "sha": BLOB, "size": 10}]},
+            commits={("3D-Stories/rawgentic", "HEAD"): "r" * 40},
+            repos=["rawgentic"])
+        idx = ConventionIndex("3D-Stories", src, workers=2)
+
+        walk = idx._walk_repo("rawgentic", budget(), 20.0, stop)
+        assert src.commit_calls == 1, "the entry check must NOT have fired"
+        assert walk.unreadable is True
+        assert src.tree_calls == 0, "a worker resumed after the stop flag and still called tree"
+
+    def test_a_worker_that_never_sees_the_flag_walks_normally(self):
+        """The control. Without it the test above passes for a version that never calls tree."""
+        src = index_source(rawgentic=["docs/a.html"])
+        idx = ConventionIndex("3D-Stories", src, workers=2)
+        walk = idx._walk_repo("rawgentic", budget(), 20.0, threading.Event())
+        assert walk.unreadable is False
+        assert len(walk.docs) == 1
+        assert src.tree_calls == 1

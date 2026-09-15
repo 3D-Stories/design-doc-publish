@@ -555,3 +555,40 @@ class TestLastCommitDate:
         gh, _ = self.make(body=b'[{"commit": {}}]')
         assert gh.last_commit_date("owner/repo", "docs/a.html",
                                    Budget(60.0, 10, lambda: 0.0)) is None
+
+
+class TestRateLimitClassification:
+    """#65. A walk shares one credential across eight workers, so telling a GLOBAL refusal from
+    a per-repository one decides whether the whole build is abandoned or one repository is.
+    """
+
+    @staticmethod
+    def _403(headers, status=403):
+        import urllib.error
+        return urllib.error.HTTPError("u", status, "Forbidden", headers, None)
+
+    def test_a_primary_limit_sets_remaining_to_zero(self):
+        from harness.github import HttpGitHub, RateLimited
+        assert isinstance(
+            HttpGitHub._classify(self._403({"x-ratelimit-remaining": "0"})), RateLimited)
+
+    def test_a_SECONDARY_limit_carries_retry_after_and_a_full_remaining_count(self):
+        """The case that actually bites a burst of eight workers. GitHub answers a secondary
+        limit with `Retry-After` and a healthy remaining count, so keying only on
+        `remaining == 0` left it classified as an ordinary per-repository refusal — and a
+        refusal that affects every worker would then be recorded as sixty local failures."""
+        from harness.github import HttpGitHub, RateLimited
+        got = HttpGitHub._classify(
+            self._403({"x-ratelimit-remaining": "4931", "retry-after": "60"}))
+        assert isinstance(got, RateLimited)
+
+    def test_a_429_is_a_rate_limit_whatever_its_headers_say(self):
+        from harness.github import HttpGitHub, RateLimited
+        assert isinstance(HttpGitHub._classify(self._403({}, status=429)), RateLimited)
+
+    def test_a_plain_403_stays_a_per_repository_refusal(self):
+        """Not every 403 is global. GitHub answers one for a repository this credential may
+        not read, and treating that as fatal would let a single repository kill the index."""
+        from harness.github import HttpGitHub, RateLimited, Unauthorized as Unauth
+        got = HttpGitHub._classify(self._403({"x-ratelimit-remaining": "4999"}))
+        assert isinstance(got, Unauth) and not isinstance(got, RateLimited)

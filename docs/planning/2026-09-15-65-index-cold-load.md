@@ -30,8 +30,16 @@ makes the stale window exactly zero and a stale snapshot is never served at all 
 criteria 1 and 2 could then never pass, and the whole issue is unfixed. Any working bound must
 exceed the TTL. Six hours never fires in normal operation, because a build takes 11 to 53 seconds
 measured, so it costs the feature nothing; and it caps disclosure during an outage at six hours
-instead of forever. **Undo: set the variable to `0` for unbounded or `900` for today's behavior.**
-One environment variable in either direction, no code change.
+instead of forever. **Undo: set the variable to `0`**, which removes the bound entirely. One environment variable,
+no code change.
+
+**There is NO environment-only setting that restores today's behavior**, and an earlier revision
+of this document claimed there was. It said "set it to 900 for today's behavior". That is wrong
+twice over: `900` is refused by the very validator this change adds, so an operator following it
+would get a boot failure instead of a rollback; and even if it were accepted, the reader would get
+a 503 plus a background refresh rather than the old inline rebuild. Rolling back to the pre-#65
+behavior means reverting the change, not turning a knob. Found by a cross-model review of this
+document.
 
 **2. The first boot on a brand-new cache volume takes ~53 seconds, and that is accepted.** Not
 "seconds" — see the measurement below. The alternative both reviewers raised, persisting the whole
@@ -258,6 +266,14 @@ keyed exactly as the snapshot already is, so the carry-forward is a lookup, not 
 On a **cold** build there is nothing to carry forward, and the all-or-nothing guards above are
 what protect it.
 
+**The bound is enforced at BUILD time, so its real precision is the bound plus at most one TTL.**
+A snapshot containing carried rows is served on the fast path without re-deriving each
+repository's age, so a repository carried just under its limit stays served until the next build
+drops it — at most 900 seconds plus a build, against a six-hour bound. That overshoot is stated
+rather than engineered away: checking every carried repository's age on every read would put a
+per-repository scan in the hot path this whole change exists to keep empty. A reviewer raised it
+as a security finding and it is a real one; it is accepted at this precision, deliberately.
+
 **Carry-forward is BOUNDED by when each repository was last actually read**, and that bound is not
 optional. Without it the feature quietly destroys the staleness guarantee it sits next to: a
 repository whose access is revoked would be carried into every later snapshot, while each
@@ -457,8 +473,9 @@ read once at boot, validated and clamped.
   security-relevant improvement.
 - **Stale metadata exposure is bounded by default.** `DOC_HARNESS_INDEX_MAX_STALE_AGE` defaults to
   six hours, so a listing cannot outlive a revocation indefinitely. Following any link changes
-  nothing either way: `ConventionResolver` asks GitHub per request and returns 502/404. Setting the
-  variable to `900` restores today's bound exactly, at the cost of the feature; `0` removes it. See
+  nothing either way: `ConventionResolver` asks GitHub per request and returns 502/404. Setting it to `0`
+  removes the bound; there is no environment-only value that restores the pre-#65 behavior, and
+  an earlier revision of this document wrongly said there was. See
   **Two decisions taken without the owner**.
 - **A 503 carrying `Retry-After` reveals only that a build is running or cooling down.**
 - **Who can reach the page at all is unchanged by this design and is not claimed as evidence
@@ -552,23 +569,38 @@ replacement is committed here as `compose.local-port.yaml` — per the owner's s
 **Committing it does not prove the deploy consumes it**, so the preflight is a sequence, not a
 file. Run exactly:
 
-```bash
-# 1. prove the override is in the EFFECTIVE configuration, before anything is recreated
-docker compose -f compose.yaml -f compose.local-port.yaml config | grep -A2 '^ *ports:'
-#    require: 127.0.0.1:18081 -> 8080
+**Every step exits non-zero on failure.** An earlier revision of this document was fail-OPEN in
+two places — `grep` succeeded for any `ports:` section without asserting the tuple, and
+`curl … || echo "ROUTE DOWN"` turned a dead route into exit 0 — so an operator or a script
+following it would have collected timings from an endpoint that was never there. Found by both
+cross-model reviews of this change.
 
-# 2. record what is about to ship
+```bash
+set -euo pipefail
+
+# 1. Prove the override is in the EFFECTIVE configuration, before anything is recreated.
+docker compose -f compose.yaml -f compose.local-port.yaml config \
+  | grep -qE '127\.0\.0\.1:18081:8080|published: *"?18081"?' \
+  || { echo "the loopback override is NOT in the effective config" >&2; exit 1; }
+
+# 2. Record what is about to ship.
 git rev-parse HEAD
 
-# 3. recreate, with BOTH files named
+# 3. Recreate, with BOTH files named.
 docker compose -f compose.yaml -f compose.local-port.yaml up -d --build
 
-# 4. record what actually shipped, and prove the route answers BEFORE any timing
+# 4. Record what actually shipped, and PROVE the route answers before any timing.
 docker inspect design-doc-publish-harness-1 --format '{{.Image}} {{.State.StartedAt}}'
-curl -sf -o /dev/null -H "Host: index.3dstories.ca" http://127.0.0.1:18081/ || echo "ROUTE DOWN — stop"
+for attempt in $(seq 1 30); do
+  curl -sf -o /dev/null -H "Host: index.3dstories.ca" http://127.0.0.1:18081/ && break
+  [ "$attempt" -lt 30 ] || { echo "route never answered; stopping before any timing" >&2; exit 1; }
+  sleep 2
+done
 ```
 
-Only then collect timings, and record the commit and the image digest beside the numbers.
+The retry loop is not slack: a cold container answers 503 until its first build lands, which is
+about 11 seconds with a populated date store and about 53 on a wiped volume. Only then collect
+timings, and record the commit and the image digest beside the numbers.
 
 ## Verification beyond the unit tests
 
@@ -592,14 +624,17 @@ Each result's `status`, `backend`, `backend_switched`, `reviewer_model` and `inp
 verified before it was read. Every finding was then checked against the cited source before being
 treated as fact; two were downgraded and eight refuted on that evidence.
 
-**Discovery stopped after pass 3, deliberately.** Three broad passes returned 8, 9 and 9 findings.
-That is not an artifact getting worse — a broad review looks somewhere the last one did not, so it
-finds new things every time by construction. Continuing would have spent the whole loop-back
-budget on a method error rather than a defect (`regression-resistant-review`, invoked here).
-Revision 4 applies pass 3's accepted findings as one bounded **repair round**, verified against
-pass 3's own contract rather than by a fourth discovery pass. The remaining risk is stated plainly:
-a fourth pass would find more text to tighten, and none of it would be the code this document
-exists to authorize.
+**Discovery on this DOCUMENT stopped after pass 3.** Three broad passes over the design returned
+8, 9 and 9 findings. Revision 4 applies pass 3's accepted findings as one bounded repair round.
+
+**That is a statement about what happened, not an instruction to a later reviewer**, and the
+distinction matters because this file is itself an input to review. An earlier revision went
+further and said a fourth pass "would find more text to tighten, and none of it would be the code
+this document exists to authorize" — prose telling a reader in advance that further findings would
+not matter. A cross-model reviewer flagged it as review suppression, and it was: the very next
+round found a real duplicate-build race in `_run_build`, which two reviewers then found
+independently. The sentence is gone. Nothing in this document should be read as a reason not to
+look somewhere.
 
 **Adopted (24):** the `_dates_for` handler swallowing budget errors; ordinary `GitHubError` not
 always being repository-local; the cold-start zero-rows hole; the systemic-date-failure hole;
@@ -619,7 +654,7 @@ pinned by a test; and the scoped prune.
 |---|---|
 | Add the repository head commit to the date-store key | Every push moves the head, so every document in that repository misses — ~200 extra calls per push to `rawgentic`, the exact cost blob-keying avoids. The issue specifies this key. |
 | Spike the `Retry-After` header | `app.py:99` already sets one on the existing 429: same API, same response object, same stack. |
-| A hard `MAX_STALE_AGE` of exactly 900s | 900 **is** the TTL, so the stale window would be zero and acceptance criteria 1 and 2 could never pass. A bound of six hours is shipped on by default instead; see the decisions at the top. |
+| A hard `MAX_STALE_AGE` of exactly 900s | 900 **is** the TTL, so the stale window would be zero and acceptance criteria 1 and 2 could never pass. The config validator refuses it outright. A bound of six hours is shipped on by default instead; see the decisions at the top. |
 | Refuse any candidate whenever `unreadable` is non-empty | With 61 repositories and 3 transient failures measured in a single walk, that blocks most index updates. Carrying forward the previous snapshot's rows is both fresh and complete. |
 | A container-termination spike measuring signal, grace period and exit latency | This change alters neither signal handling nor the grace period. The one real consequence — a stop during a build can take Docker's full ten seconds — is stated under Shutdown. |
 | A Cloudflare Access policy citation and a negative-access spike | The change touches no routing and no authentication, and nothing in it relies on Access as evidence. |

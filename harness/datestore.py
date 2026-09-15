@@ -104,11 +104,19 @@ class DateStore:
             if self._reported:
                 return
             self._reported = True
-        if self._log is not None:
+        if self._log is None:
+            return
+        try:
             self._log(
                 f"index date store unavailable after {operation} on {self.path}: {exc!r}. "
                 f"Falling back to in-memory dates; the listing is unaffected and a restart "
                 f"will re-ask GitHub for them.")
+        except Exception:                              # noqa: BLE001 - see below
+            # The whole contract of this class is that it never raises at a caller. A logging
+            # callback that throws while REPORTING a storage failure would break exactly that,
+            # and during `initialize` it would abort the boot — the one outcome #65 forbids.
+            # There is nowhere left to report this, so it is dropped rather than re-raised.
+            pass
 
     # ---- reads and writes ------------------------------------------------------------
 
