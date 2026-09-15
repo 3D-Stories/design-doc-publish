@@ -53,7 +53,9 @@ def build(env=None):
     registry.initialize()
     cache = BlobCache(cfg.cache_dir, max_bytes=cfg.cache_max_bytes)
     cache.initialize()
-    log = lambda m: print(m, file=sys.stderr, flush=True)   # noqa: E731 - one expression
+    def log(message):
+        print(message, file=sys.stderr, flush=True)
+
     # Beside the blob cache, on the volume compose.yaml calls "disposable: rebuilds from GitHub
     # by design" — never on the durable registry volume, which is for data that cannot be
     # recomputed. Losing this file costs one slow boot: measured 52.66s against 11.30s with it.

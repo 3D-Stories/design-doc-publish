@@ -518,8 +518,14 @@ class TestStaleWhileRevalidate:
         src.fail_with = Unavailable("github is down")
         clock.t += 901.0
         assert idx.snapshot(budget()) is first          # no exception reaches here
-        _settle(lambda: idx.snapshot(budget()) is first)
+
+        # The settle predicate must NOT be "the snapshot is still `first`" — that is true from
+        # the moment the refresh is kicked, so the test would finish before the injected
+        # failure happened and pass without checking anything (review finding, 2026-09-15).
+        # Wait for the build to actually END, then assert what survived it.
+        assert _settle(lambda: idx._building is False), "the refresh never finished"
         assert idx.snapshot(budget()) is first
+        assert idx._cooldown_until > clock.t, "a failed build must start the cool-off"
 
     def test_without_a_refresh_budget_a_stale_read_rebuilds_inline_exactly_as_before(self):
         """The opt-in seam. Every pre-#65 caller keeps its old semantics."""
@@ -984,3 +990,114 @@ class TestDateStoreIntegration:
 def _entry_for_blob(path, blob="z" * 40):
     from harness.github import TreeEntry
     return TreeEntry(path=path, type="blob", mode="100644", blob_id=blob, size=10)
+
+
+class TestReviewFindings65:
+    """Findings from the cross-model code review of this change. Each one is a real path that
+    the tests written alongside the implementation did not reach."""
+
+    def test_a_refresh_budget_factory_that_raises_does_not_freeze_the_index(self):
+        """`self._refresh_budget()` is evaluated BEFORE `_run_build` is entered, so a factory
+        that raises never reaches that method's `finally`. `_building` would stay set for the
+        life of the process, every later stale reader would trigger no walk at all, and the
+        index would freeze on its last snapshot — the same freeze the `thread.start()` guard
+        prevents, one level further down."""
+        src = gate_source(rawgentic=["docs/a.html"])
+        clock = FakeClock()
+        calls = {"n": 0}
+
+        def broken_budget():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("no budget for you")
+            return budget()
+
+        idx = swr_index(src, monotonic=clock, refresh_budget=broken_budget)
+        first = idx.snapshot(budget())
+        clock.t += 901.0
+        assert idx.snapshot(budget()) is first
+        assert _settle(lambda: idx._building is False), "the build flag was never cleared"
+
+        clock.t += 61.0                                  # past the cool-off the failure started
+        idx.snapshot(budget())
+        assert _settle(lambda: idx.snapshot(budget()) is not first), "the index froze"
+
+    def test_a_rate_limit_is_fatal_while_a_single_repository_refusal_is_not(self):
+        """GitHub answers 403 for both. One is this repository's problem; the other is every
+        repository's, and swallowing it records sixty readable repositories as unreadable and
+        publishes that as a success."""
+        from harness.github import RateLimited
+
+        limited = index_source(a=["docs/a.html"], b=["docs/b.html"])
+        limited._errors[("3D-Stories/b", "HEAD")] = RateLimited("rate limit exhausted")
+        with pytest.raises(RateLimited):
+            ConventionIndex("3D-Stories", limited).snapshot(budget())
+
+        refused = index_source(a=["docs/a.html"], b=["docs/b.html"])
+        refused._errors[("3D-Stories/b", "HEAD")] = Unauthorized("cannot read that repository")
+        snap = ConventionIndex("3D-Stories", refused).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["a-a"]
+        assert snap["unreadable"] == ["b"]
+
+    def test_the_403_that_means_rate_limited_is_classified_as_such(self):
+        """Pins `HttpGitHub._classify`, because the whole split above rests on it."""
+        import urllib.error
+
+        from harness.github import HttpGitHub, RateLimited, Unauthorized as Unauth
+
+        def err(headers):
+            return urllib.error.HTTPError("u", 403, "Forbidden", headers, None)
+
+        limited = HttpGitHub._classify(err({"x-ratelimit-remaining": "0"}))
+        plain = HttpGitHub._classify(err({"x-ratelimit-remaining": "4999"}))
+        assert isinstance(limited, RateLimited)
+        assert isinstance(plain, Unauth) and not isinstance(plain, RateLimited)
+
+    def test_a_repository_unread_for_longer_than_the_bound_stops_being_carried(self):
+        """The Critical. Carry-forward plus a resetting snapshot age meant a repository whose
+        access was revoked stayed listed for ever while `max_stale_age` never fired for it —
+        the bound the operator set would have covered the snapshot and not its contents."""
+        src = gate_source(rawgentic=["docs/a.html"], saystory=["docs/b.html"])
+        clock = FakeClock()
+        idx = swr_index(src, monotonic=clock, max_stale_age=3600.0)
+        first = idx.snapshot(budget())
+        assert sorted(r["name"] for r in first["rows"]) == ["rawgentic-a", "saystory-b"]
+
+        src._errors[("3D-Stories/saystory", "HEAD")] = Unauthorized("access revoked")
+
+        previous = first
+        for _ in range(3):                                # three refreshes over four hours
+            clock.t += 1801.0
+            idx.snapshot(budget())
+            assert _settle(lambda: idx.snapshot(budget()) is not previous), "refresh stalled"
+            previous = idx.snapshot(budget())
+
+        assert [r["name"] for r in previous["rows"]] == ["rawgentic-a"]
+        assert previous["unreadable"] == ["saystory"]
+
+    def test_a_brief_failure_inside_the_bound_still_carries(self):
+        src = gate_source(rawgentic=["docs/a.html"], saystory=["docs/b.html"])
+        clock = FakeClock()
+        idx = swr_index(src, monotonic=clock, max_stale_age=3600.0)
+        first = idx.snapshot(budget())
+        src._errors[("3D-Stories/saystory", "HEAD")] = Unauthorized("hiccup")
+        clock.t += 901.0
+        idx.snapshot(budget())
+        assert _settle(lambda: idx.snapshot(budget()) is not first), "refresh stalled"
+        assert sorted(r["name"] for r in idx.snapshot(budget())["rows"]) == [
+            "rawgentic-a", "saystory-b"]
+
+    def test_pruning_runs_even_when_one_repository_could_not_be_read(self, tmp_path):
+        """The live cold walk saw three transient failures in one pass of 61 repositories, so
+        requiring a wholly clean walk meant the store would essentially never be pruned."""
+        from harness.datestore import DateStore
+
+        store_ = DateStore(str(tmp_path / "d.db"))
+        store_.initialize()
+        dead = ("3D-Stories/rawgentic", "docs/gone.html", "f" * 40)
+        store_.put(dead, ("2020-01-01", "2020-01-01"))
+
+        src = index_source(rawgentic=["docs/a.html"], secret=["docs/b.html"])
+        src._errors[("3D-Stories/secret", "HEAD")] = Unavailable("hiccup")
+        ConventionIndex("3D-Stories", src, store=store_).snapshot(budget())
+        assert store_.get(dead) is None

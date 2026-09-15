@@ -201,20 +201,25 @@ bad to routine: the moment the shared budget is gone, all eight workers and ever
 repository fail that way at once.
 
 ```python
-_WALK_FATAL = (DeadlineExceeded, BudgetExhausted)
+_WALK_FATAL = (DeadlineExceeded, BudgetExhausted, RateLimited)
 # in _dates_for AND in each phase task, BEFORE `except GitHubError`:
 except _WALK_FATAL:
     raise
 ```
 
-**`Unauthorized` is deliberately NOT in that tuple, and that corrects revision 3**, which put it
-there. GitHub answers 404 for a private repository the credential cannot see and **403 for a
-refusal or a rate limit**, and `HttpGitHub._classify` maps every 403 and 401 to `Unauthorized`
-(`github.py:236-247`). Making it fatal therefore lets ONE repository the token cannot read kill
-the entire index — precisely what
-`test_a_repository_that_cannot_be_read_does_not_empty_the_index` has forbidden since the index
-was written. A genuinely dead credential needs no special case: every repository fails, the build
-produces no rows, and guard 1 refuses to publish it.
+**403 is split, and the split is the whole point.** GitHub answers 403 both for "this credential
+may not read this repository" and for "you have made too many requests". Revision 3 made
+`Unauthorized` fatal, which would let ONE unreadable repository kill the entire index — precisely
+what `test_a_repository_that_cannot_be_read_does_not_empty_the_index` has forbidden since the
+index was written. Revision 4's first attempt made it non-fatal, which swallowed a mid-walk rate
+limit as sixty local failures and published that as a success. Neither is right, because the two
+cases are genuinely different and `HttpGitHub._classify` can already tell them apart by
+`x-ratelimit-remaining`. So a new **`RateLimited(Unauthorized)`** carries the global case and is
+fatal; plain `Unauthorized` stays local. Every existing `except Unauthorized` is unchanged,
+because it is a subclass.
+
+A genuinely dead credential still needs no special case: every repository fails, the build reads
+nothing, and guard 1 refuses to publish it.
 
 Three publication guards, each of which a test proved necessary:
 
@@ -252,6 +257,17 @@ unreadable this build, and the `(added, updated)` pair for any key whose lookup 
 keyed exactly as the snapshot already is, so the carry-forward is a lookup, not a merge heuristic.
 On a **cold** build there is nothing to carry forward, and the all-or-nothing guards above are
 what protect it.
+
+**Carry-forward is BOUNDED by when each repository was last actually read**, and that bound is not
+optional. Without it the feature quietly destroys the staleness guarantee it sits next to: a
+repository whose access is revoked would be carried into every later snapshot, while each
+successful build reset the snapshot's own age, so `max_stale_age` would never fire for exactly the
+repository it most needed to cover. The index keeps `_repo_verified[repo]` on the monotonic clock,
+updates it only on a successful walk, and refuses to carry a repository unread for longer than
+`max_stale_age`. A dropped repository is logged by name, because a document disappearing from the
+listing is the kind of change nobody notices until somebody asks where their page went. With
+`max_stale_age` set to 0 the operator has asked for no bound at all, and carry-forward is
+unbounded too — the two settings have to mean the same thing.
 
 Rejected: the reviewer's stricter rule — refuse the whole candidate whenever `unreadable` is
 non-empty and a prior snapshot exists. With 61 repositories and a measured 3 transient failures in
@@ -342,10 +358,11 @@ future restart with a permanent blank date for a document that has one.
 **Every value reaches SQL as a bound parameter.** Paths come from GitHub tree entries — external
 data. Probed: `docs/it's 100% "odd".html` round-trips through `?` parameters.
 
-**Pruning is scoped to the repositories actually walked.** `prune(live_keys, walked_repos)` deletes
-rows whose `repo` was walked successfully but whose full key was not observed, so a permanently
-unreadable repository neither blocks pruning for everyone else nor loses its own rows on no
-evidence. Probed: the walked repository's stale rows went 77 → 1 while an unwalked repository's 77
+**Pruning is scoped to the repositories actually READ**, not gated on a wholly clean walk.
+`prune(live_keys, read_repos)` deletes rows whose `repo` was read successfully but whose full key
+was not observed. Gating it on "no repository failed" was the first implementation and it was
+wrong in practice: the live cold walk measured **three transient repository failures in a single
+pass of 61**, so pruning would essentially never have run and the store would grow for ever. Probed: the walked repository's stale rows went 77 → 1 while an unwalked repository's 77
 were untouched.
 
 #### The known limitation, named rather than designed away
@@ -370,7 +387,7 @@ to avoid. The issue also specifies this key explicitly.
 
 | File | Change |
 |---|---|
-| `harness/github.py` | `Budget` takes an `RLock` around `remaining`, `check`, `spend_call`, `socket_timeout`. |
+| `harness/github.py` | `Budget` takes an `RLock` around `remaining`, `check`, `spend_call`, `socket_timeout`. New `RateLimited(Unauthorized)`, returned by `_classify` when `x-ratelimit-remaining` is `0`. |
 | `harness/datestore.py` | **New.** `DateStore`. Stdlib only. |
 | `harness/convention.py` | `IndexBuilding` / `IndexCoolingDown` / `IndexTooStale`; two locks; the cold leader/follower split; the background build with cool-off; the two-phase pool walk with cancellation; `_WALK_FATAL` in both handlers; the three publication guards; the `DateStore` read-through. |
 | `harness/app.py` | The three 503 classes handled before the existing `except GitHubError`. Pass `refresh_budget`, the store, the worker count and `max_stale_age` into `ConventionIndex`. `make_app` gains `date_store=None`. |

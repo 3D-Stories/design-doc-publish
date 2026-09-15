@@ -49,7 +49,18 @@ class Unavailable(GitHubError):
 
 
 class Unauthorized(GitHubError):
-    """The credential was refused, or the rate limit is exhausted."""
+    """The credential was refused for this object."""
+
+
+class RateLimited(Unauthorized):
+    """The rate limit is exhausted. A subclass, so every existing `except Unauthorized` is
+    unchanged, but callers that must tell a GLOBAL refusal from a per-object one can (#65).
+
+    GitHub answers 403 both for "this credential may not read this repository" and for "you
+    have made too many requests". The first is one repository's problem; the second is every
+    repository's, and a walk that treats it as local records sixty perfectly readable
+    repositories as unreadable and publishes the result as a success.
+    """
 
 
 class ResponseTooLarge(GitHubError):
@@ -261,7 +272,7 @@ class HttpGitHub:
             except AttributeError:
                 remaining = None
             if str(remaining) == "0":
-                return Unauthorized("GitHub rate limit is exhausted (403)")
+                return RateLimited("GitHub rate limit is exhausted (403)")
             return Unauthorized("GitHub refused the request (403)")
         return Unavailable(f"GitHub returned {status}")
 

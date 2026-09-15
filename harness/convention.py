@@ -20,7 +20,8 @@ import re
 import threading
 import time
 
-from .github import BudgetExhausted, DeadlineExceeded, GitHubError, Unavailable
+from .github import (BudgetExhausted, DeadlineExceeded, GitHubError, RateLimited,
+                     Unavailable)
 from .manifest import Asset, content_type_for
 from .registry import ActiveDeployment
 
@@ -206,14 +207,18 @@ def label_for(repo: str, repo_path: str, *, fallback_date: str | None = None) ->
 #: walk AND in `_dates_for`, so an exhausted budget quietly became "unreadable" repositories and
 #: blank dates, and the walk carried on publishing a degraded listing as though it had succeeded.
 #:
-#: `Unauthorized` is deliberately NOT here, and that is a correction to an earlier draft of this
-#: change. GitHub answers 404 for a private repository the credential cannot see and 403 for a
-#: refusal or a rate limit, and `_classify` maps every 403 and 401 to `Unauthorized` — so
-#: treating it as fatal would let ONE repository the token cannot read kill the entire index,
-#: which is exactly what `test_a_repository_that_cannot_be_read_does_not_empty_the_index`
-#: exists to forbid. A genuinely global credential failure needs no special case: every
-#: repository fails, the build produces no rows, and the zero-rows guard refuses to publish it.
-_WALK_FATAL = (DeadlineExceeded, BudgetExhausted)
+#: `RateLimited` is here and its parent `Unauthorized` is NOT, and the split is the point.
+#: GitHub answers 403 both for "this credential may not read this repository" and for "you have
+#: made too many requests". The first is ONE repository's problem, and treating it as fatal
+#: would let a single unreadable repository kill the whole index — exactly what
+#: `test_a_repository_that_cannot_be_read_does_not_empty_the_index` forbids. The second is every
+#: repository's, and treating it as local records sixty readable repositories as unreadable and
+#: publishes that as a success. `HttpGitHub._classify` tells them apart by
+#: `x-ratelimit-remaining`, so this module does not have to guess.
+#:
+#: A genuinely dead credential still needs no special case: every repository fails, the build
+#: reads nothing, and guard 1 refuses to publish it.
+_WALK_FATAL = (DeadlineExceeded, BudgetExhausted, RateLimited)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -304,9 +309,14 @@ class ConventionIndex:
         # Dates are keyed on the BLOB, not the path. 618 documents is 618 extra calls on a cold
         # walk; keying on content means a refresh only pays for the files that actually changed.
         # Guarded by its OWN lock, which is never held across a GitHub or a SQLite call.
-        self._dates: dict[tuple, str] = {}
+        self._dates: dict[tuple, tuple] = {}
         self._dates_lock = threading.Lock()
-        self._stop = threading.Event()
+        # When each repository was last READ successfully, on the monotonic clock. Carry-forward
+        # is bounded by this: without it, a repository whose access is revoked keeps its rows in
+        # every later snapshot while the snapshot's own age keeps resetting, so `max_stale_age`
+        # never fires for it and the disclosure bound this class advertises silently stops
+        # existing for exactly the repository it most needed to cover.
+        self._repo_verified: dict = {}
 
     def _dates_for(self, full_repo: str, entry, budget, http_timeout: float) -> tuple:
         """`(added, updated, failed)` for this file.
@@ -340,7 +350,7 @@ class ConventionIndex:
             added, updated = self._source.file_dates(
                 full_repo, entry.path, budget, http_timeout)
         except _WALK_FATAL:
-            # These three are NOT this document's problem — they are the whole build's. The
+            # These are NOT this document's problem — they are the whole build's. The
             # base-class handler below used to swallow them here, so an exhausted budget
             # became blank dates and the walk carried on publishing a degraded listing.
             raise
@@ -355,7 +365,7 @@ class ConventionIndex:
 
     # ---- the two-phase walk ----------------------------------------------------------
 
-    def _run_phase(self, items, work):
+    def _run_phase(self, items, work, stop):
         """Run `work` over `items` through one bounded pool, in submission order out.
 
         Results come back indexed, so completion order never reaches the caller. On the first
@@ -375,7 +385,7 @@ class ConventionIndex:
                 except _WALK_FATAL as exc:
                     if fatal is None:
                         fatal = exc
-                        self._stop.set()
+                        stop.set()
                         for pending in futures:
                             pending.cancel()
                 except concurrent.futures.CancelledError:
@@ -384,10 +394,10 @@ class ConventionIndex:
             raise fatal
         return [done[i] for i in range(len(items)) if i in done]
 
-    def _walk_repo(self, repo: str, budget, http_timeout: float):
+    def _walk_repo(self, repo: str, budget, http_timeout: float, stop):
         """Phase 1: one repository's commit and tree, reduced to its listable documents."""
         full = "%s/%s" % (self._owner, repo)
-        if self._stop.is_set():
+        if stop.is_set():
             return _RepoWalk(repo, None, (), True)
         try:
             commit = self._source.commit(full, "HEAD", budget, http_timeout)
@@ -413,7 +423,7 @@ class ConventionIndex:
         docs = tuple(group[0] for _, group in sorted(seen.items()) if len(group) == 1)
         return _RepoWalk(repo, commit, docs, False)
 
-    def _date_job(self, job, budget, http_timeout: float):
+    def _date_job(self, job, budget, http_timeout: float, stop):
         """Phase 2: one document's dates. Flattened across repositories on purpose.
 
         One task per REPOSITORY looked obvious and was measured 3.2x slower — 170.87s against
@@ -421,14 +431,13 @@ class ConventionIndex:
         its own task and the largest repository becomes the entire critical path.
         """
         repo, entry = job
-        if self._stop.is_set():
+        if stop.is_set():
             return (repo, entry, "", "", True)
         full = "%s/%s" % (self._owner, repo)
         added, updated, failed = self._dates_for(full, entry, budget, http_timeout)
         return (repo, entry, added, updated, failed)
 
-    def _build(self, budget, *args, **kwargs) -> dict:
-        http_timeout = args[0] if args else kwargs.get("http_timeout", 20.0)
+    def _build(self, budget, http_timeout: float = 20.0) -> dict:
         with self._lock:
             previous = self._snapshot
         # Rows of the last good listing, by repository and by document, so a transient failure
@@ -440,18 +449,22 @@ class ConventionIndex:
                 prev_by_repo.setdefault(row["project"], []).append(row)
                 prev_by_doc[(row["project"], row["title"])] = row
 
-        self._stop = threading.Event()
+        # One stop flag per BUILD, passed down rather than stored on the object: two builds
+        # cannot overlap today, and an attribute reassigned per build is a clobber waiting for
+        # the day that stops being true.
+        stop = threading.Event()
         repos = sorted(self._source.repos(self._owner, budget))
         walks = self._run_phase(
-            repos, lambda repo: self._walk_repo(repo, budget, http_timeout))
+            repos, lambda repo: self._walk_repo(repo, budget, http_timeout, stop), stop)
 
         jobs = [(walk.repo, entry) for walk in walks for entry in walk.docs]
         dated = self._run_phase(
-            jobs, lambda job: self._date_job(job, budget, http_timeout))
+            jobs, lambda job: self._date_job(job, budget, http_timeout, stop), stop)
         by_entry = {(repo, entry.path): (added, updated, failed)
                     for repo, entry, added, updated, failed in dated}
 
-        rows, projects, unreadable, carried = [], [], [], []
+        rows, projects, unreadable, carried, dropped = [], [], [], [], []
+        now = self._monotonic()
         # Rows this build actually READ, as opposed to rows it carried forward. The difference
         # is what tells a real refresh from a refresh that read nothing at all.
         fresh_rows = 0
@@ -464,11 +477,19 @@ class ConventionIndex:
                 unreadable.append(walk.repo)
                 # Carry the last good rows for this repository. Without this, one hiccup drops
                 # every document it holds from the listing until the next successful build.
+                #
+                # BOUNDED by when it was last actually read. A repository whose access is
+                # revoked would otherwise be carried forward for ever while each successful
+                # build reset the snapshot's age, so `max_stale_age` would never fire for it.
+                # The bound the operator set has to mean something per repository, not only
+                # for the snapshot as a whole.
                 kept = prev_by_repo.get(walk.repo, [])
-                if kept:
+                if kept and not self._carry_expired(walk.repo, now):
                     rows.extend(kept)
                     projects.append(walk.repo)
                     carried.append(walk.repo)
+                elif kept:
+                    dropped.append(walk.repo)
                 continue
             listed = False
             for entry in walk.docs:
@@ -501,6 +522,7 @@ class ConventionIndex:
                 fresh_rows += 1
             if listed:
                 projects.append(walk.repo)
+            self._repo_verified[walk.repo] = now
 
         # Publication guard 1: a build that read NOTHING is a failed build, however many rows
         # it carried forward.
@@ -530,16 +552,28 @@ class ConventionIndex:
                 "every document date lookup failed while building the listing and none could "
                 "be carried forward, so every generated hostname would lose its date")
 
-        if self._store is not None and not unreadable:
-            # Only a COMPLETE walk knows the live set. A repository that could not be read
-            # says nothing about which of its rows are dead.
-            live = [(("%s/%s" % (self._owner, walk.repo)), entry.path, entry.blob_id)
-                    for walk in walks for entry in walk.docs]
-            self._store.prune(live, {"%s/%s" % (self._owner, w.repo) for w in walks})
+        if self._store is not None:
+            # Scoped to the repositories actually READ, which is what the store's own contract
+            # asks for. Requiring a wholly clean walk instead was wrong in practice: the live
+            # cold-walk measurement saw three transient failures in one pass of 61
+            # repositories, so pruning would almost never have run and the store would grow
+            # for ever. A repository that could not be read is simply left alone — it says
+            # nothing about which of its rows are dead.
+            read = [walk for walk in walks if not walk.unreadable]
+            if read:
+                live = [(("%s/%s" % (self._owner, walk.repo)), entry.path, entry.blob_id)
+                        for walk in read for entry in walk.docs]
+                self._store.prune(live, {"%s/%s" % (self._owner, w.repo) for w in read})
 
         if carried:
             self._log_line("index build carried forward the previous rows for: "
                            + ", ".join(sorted(carried)))
+        if dropped:
+            # Loud, because a document disappearing from the listing is exactly the kind of
+            # change nobody notices until somebody asks where their page went.
+            self._log_line(
+                "index build DROPPED repositories whose last successful read is older than "
+                "the configured maximum listing age: " + ", ".join(sorted(dropped)))
 
         rows.sort(key=lambda r: r["name"])
         # The generation is derived from the ROWS, so the ETag changes exactly when the listing
@@ -635,9 +669,26 @@ class ConventionIndex:
                            f"continuing to serve the previous listing")
 
     def _background(self, http_timeout: float) -> None:
-        """Rebuild off the reader's thread. A failure here must never reach a reader."""
+        """Rebuild off the reader's thread. A failure here must never reach a reader.
+
+        `_building` is cleared HERE as well as in `_run_build`, because the budget factory is
+        evaluated before `_run_build` is entered: a factory that raises would otherwise never
+        reach that `finally`, and the flag would stay set for the life of the process. Every
+        later stale reader would then trigger no walk at all and the index would freeze on its
+        last snapshot — the same freeze the `thread.start()` guard exists to prevent, one level
+        further down. Clearing twice is harmless; clearing never is not.
+        """
         try:
-            self._run_build(self._refresh_budget(), http_timeout)
+            budget = self._refresh_budget()
+        except BaseException as exc:                   # noqa: BLE001 - never kill the thread
+            with self._lock:
+                self._building = False
+                self._cooldown_until = self._monotonic() + self.REFRESH_COOLDOWN
+            self._log_line(f"index refresh could not build a budget: {exc!r}; "
+                           f"continuing to serve the previous listing")
+            return
+        try:
+            self._run_build(budget, http_timeout)
         except BaseException as exc:                   # noqa: BLE001 - never kill the thread
             self._log_line(f"index refresh failed, keeping the previous listing: {exc!r}")
 
@@ -656,6 +707,22 @@ class ConventionIndex:
             self._at = self._monotonic()
             self._cooldown_until = 0.0
         return built
+
+    def _carry_expired(self, repo: str, now: float) -> bool:
+        """Has this repository gone unread for longer than a listing may be stale?
+
+        `max_stale_age` of 0 means the operator asked for no bound at all, so carry-forward is
+        unbounded too — the two settings have to agree, or the knob would mean one thing for
+        the snapshot and another for a repository inside it.
+        """
+        if not self._max_stale_age:
+            return False
+        seen = self._repo_verified.get(repo)
+        if seen is None:
+            # Never read successfully by THIS process. There is nothing to date the carry
+            # against, so it is not carried.
+            return True
+        return (now - seen) > self._max_stale_age
 
     def _log_line(self, message: str) -> None:
         if self._log is not None:
