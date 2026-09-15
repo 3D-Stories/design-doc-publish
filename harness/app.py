@@ -22,7 +22,7 @@ from .routing import CONTROL_LABEL, INDEX_LABEL, RouteError, resolve_host
 from .serving import Response, serve
 from .github import Budget, GitHubError, NotFound, Unauthorized
 from .convention import (ConventionIndex, ConventionResolver, DocumentAmbiguous,
-                         TreeTruncated)
+                         IndexBuilding, IndexCoolingDown, IndexTooStale, TreeTruncated)
 
 
 def _plain(status: int, message: str, extra: dict | None = None) -> Response:
@@ -38,17 +38,13 @@ def _not_found() -> Response:
 
 
 def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source,
-             log=None):
+             log=None, date_store=None):
     """Build the WSGI callable over already-constructed collaborators."""
     publish_slots = threading.BoundedSemaphore(cfg.max_concurrent_publishes)
     # Owner decision D38: a document is reachable the moment its file exists in a repository.
     # The registry is still consulted FIRST, so a published deployment keeps winning and nothing
     # that works today changes.
     resolver = ConventionResolver(cfg.github_owner, source)
-    # The index walks the repositories for the same reason: a convention-resolved document has
-    # no registry row, so a registry-derived listing shows nothing that anybody can actually
-    # reach. Cached hard, because one refresh costs two calls per repository.
-    index = ConventionIndex(cfg.github_owner, source)
 
     def _log(message: str) -> None:
         if log is not None:
@@ -56,10 +52,34 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
 
 
     def _index_budget() -> Budget:
-        """The index walk is two calls per repository plus one per document whose blob it has
-        not dated yet. On this account that is roughly 540 calls the first time and a few dozen
-        afterwards, so it gets its own budget rather than a serving request's."""
+        """The index walk's own budget, deliberately not a serving request's.
+
+        Both bounds are MEASURED rather than inherited (#65, 2026-09-15, against the real
+        account with an empty date store). A full cold walk of 61 repositories and 618
+        documents spent **738 calls of the 3,000** and finished with **429.1 seconds of the
+        600 remaining**. The site would need roughly 2,200 documents before the call cap bit.
+
+        The deadline is WALL-CLOCK, so walking concurrently does not consume more of it — the
+        same walk went from 170.87s to 52.66s and used less of this budget, not more. A
+        populated date store cuts it again, to 11.30s, because the 618 date calls do not
+        happen at all.
+        """
         return Budget(cfg.http_timeout * 30, cfg.max_github_calls * 10)
+
+    # The index walks the repositories for the same reason: a convention-resolved document has
+    # no registry row, so a registry-derived listing shows nothing that anybody can actually
+    # reach. Cached hard, because one refresh costs two calls per repository.
+    #
+    # `refresh_budget` is what turns stale-while-revalidate ON (#65). Without it the class
+    # rebuilds a stale listing inline, on the reader's request, exactly as it did before —
+    # which is why `TestIndexWiring` asserts this call rather than trusting it: the fix can be
+    # perfectly correct inside the class and completely dead in the service.
+    index = ConventionIndex(cfg.github_owner, source,
+                            refresh_budget=_index_budget,
+                            store=date_store,
+                            workers=cfg.index_workers,
+                            max_stale_age=cfg.index_max_stale_age,
+                            log=_log)
 
     def _warm_index() -> None:
         """Build the listing once at boot, in the background.
@@ -109,6 +129,19 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
             try:
                 snapshot = index.snapshot(_index_budget(),
                                           http_timeout=cfg.http_timeout)
+            except IndexBuilding as exc:
+                # A cold process is building the listing and this caller is not the leader.
+                # Refusing at once is the point: enough blocked readers would occupy every
+                # waitress worker, and DOCUMENT requests never touch the index at all.
+                return _plain(503, str(exc), {"Retry-After": "5"})
+            except IndexCoolingDown as exc:
+                # A build failed recently. The number is real, not a guess, so a client that
+                # honours Retry-After comes back exactly when another build may start.
+                return _plain(503, str(exc), {"Retry-After": str(exc.retry_after)})
+            except IndexTooStale as exc:
+                # The operator has bounded how old a listing may be served. Saying it is too
+                # old is the truth; serving it would quietly outlive that bound.
+                return _plain(503, str(exc), {"Retry-After": "60"})
             except GitHubError:
                 # The listing could not be built. A blank index would read as "no documents
                 # exist", which is a lie, so this says the truth instead.

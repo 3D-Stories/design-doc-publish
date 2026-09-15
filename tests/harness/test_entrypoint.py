@@ -273,6 +273,40 @@ class TestBuildWiring:
         assert callable(app)
         lock.close()
 
+    def test_build_puts_the_date_store_on_the_disposable_cache_volume(self, tmp_path):
+        """#65. The store must land on the volume compose.yaml calls disposable, next to the
+        blob cache — never on the durable registry volume, which is for data that cannot be
+        recomputed. And it must reach `make_app`, or the persistence is dead code."""
+        import os
+
+        from harness.__main__ import build
+        cache_dir = tmp_path / "cache"
+        cfg, app, lock = build({
+            "DOC_HARNESS_GITHUB_TOKEN": "g", "DOC_HARNESS_PUBLISH_TOKEN": "p",
+            "DOC_HARNESS_REGISTRY_PATH": str(tmp_path / "r.db"),
+            "DOC_HARNESS_CACHE_DIR": str(cache_dir),
+        })
+        try:
+            assert os.path.exists(str(cache_dir / "index-dates.db"))
+        finally:
+            lock.close()
+
+    def test_a_date_store_that_cannot_be_opened_does_not_stop_the_boot(self, tmp_path):
+        """The one outcome #65 forbids outright. An unwritable cache volume is a warming
+        problem, never a serving one."""
+        from harness.__main__ import build
+        cfg, app, lock = build({
+            "DOC_HARNESS_GITHUB_TOKEN": "g", "DOC_HARNESS_PUBLISH_TOKEN": "p",
+            "DOC_HARNESS_REGISTRY_PATH": str(tmp_path / "r2.db"),
+            "DOC_HARNESS_CACHE_DIR": str(tmp_path / "cache2"),
+            "DOC_HARNESS_INDEX_WORKERS": "4",
+        })
+        try:
+            assert callable(app)
+            assert cfg.index_workers == 4
+        finally:
+            lock.close()
+
     def test_build_does_not_require_a_server(self, tmp_path):
         """Step 11 F9. The old assertion was `... or True`, so it could never fail.
 
@@ -302,3 +336,32 @@ class TestBuildWiring:
         with pytest.raises(ConfigError):
             build({"DOC_HARNESS_PUBLISH_TOKEN": "p",
                    "DOC_HARNESS_CACHE_DIR": str(tmp_path / "cache")})
+
+
+class TestLocalPortOverride:
+    """#65. The origin measurement needs a loopback port, and the override that provided one
+    used to live under /tmp. By the time this issue was opened that file had evaporated, so
+    recreating the container from committed configuration alone would silently have dropped
+    the port — and the first symptom would have been a connection refused in the middle of a
+    post-deploy measurement.
+    """
+
+    def _text(self):
+        return (pathlib.Path(__file__).resolve().parents[2] / "compose.local-port.yaml").read_text()
+
+    def test_the_override_is_committed(self):
+        assert "18081" in self._text()
+
+    def test_it_binds_loopback_only(self):
+        # The whole design is that nothing listens on a routable address; cloudflared dials
+        # outward. An override that published 0.0.0.0 would undo that for a measurement.
+        text = self._text()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- ") and "8080" in stripped:
+                assert stripped.startswith('- "127.0.0.1:'), stripped
+
+    def test_the_base_compose_still_publishes_nothing(self):
+        # The override is opt-in: `docker compose up` alone must be unchanged.
+        base = (pathlib.Path(__file__).resolve().parents[2] / "compose.yaml").read_text()
+        assert "18081" not in base
