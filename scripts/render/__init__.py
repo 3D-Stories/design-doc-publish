@@ -363,6 +363,16 @@ _ROADMAP_STYLE = """
 # dark ground (owner report 2026-08-22). lint.PAIRS already rates --accent on --bg for
 # exactly this ("the eyebrow and links are text"); test_link_color.py pins the rule.
 _COMPONENT_STYLE = """
+/* #WIDE-TABLE: a table is the one block that cannot be made narrower by wrapping.
+   Its columns have a minimum width, and `width:100%` does not stop that minimum
+   exceeding the viewport. MEASURED on the q4-vs-q5 report at a 390px viewport:
+   16 tables, the widest 400px, pushing the WHOLE PAGE 30px sideways. `pre` already
+   scrolled internally; `table` did not.
+   This lives in the COMPONENT layer, not in `_STYLE`, deliberately. `_STYLE` is the
+   stylesheet AC5 freezes and `plain` carries it with no layer on top, so a rule added
+   there would re-baseline a frozen promise to fix a report-style page. */
+@media (max-width:560px){table{display:block;width:auto;max-width:100%;overflow-x:auto}}
+
 :root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
 :root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
 :root[data-theme=light]{--sev-crit:#b91c1c;--sev-crit-bg:#fdecec;--sev-high:#c2410c;--sev-high-bg:#fdeee2;--sev-med:#955a06;--sev-med-bg:#f8f2e2;--sev-low:#4b5a63;--sev-low-bg:#eef1f3;--req-c:#0f766e;--req-c-bg:#e6f2f0}
