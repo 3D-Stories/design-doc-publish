@@ -84,6 +84,28 @@ FIXTURE = (SCRIPTS / "tests" / "fixtures" / "crossstyle.md").read_text(encoding=
 # `plain` renders a typed fence as a code listing and never invokes the block engine, so its pin
 # came back EQUAL — the same containment signal #133, #134 and #171 each relied on.
 PRE_74 = {
+    # WIDE-TABLE RE-PINNED THE THIRTEEN NON-PLAIN STYLES, and `plain` is untouched — which is the
+    # containment this oracle exists to prove, in the same shape #171 had. A table is the one block
+    # that cannot be made narrower by wrapping: its columns have a minimum width, and `width:100%`
+    # does not stop that minimum exceeding the viewport. MEASURED on the pc-llm q4-vs-q5 report at a
+    # 390px viewport: 16 tables, the widest 400px, document scrollWidth 420 against clientWidth 390,
+    # so the WHOLE PAGE slid 30px sideways. `pre` already scrolled internally; `table` did not.
+    #
+    # The rule went into `_COMPONENT_STYLE`, the SHARED layer every non-plain style receives, and
+    # deliberately NOT into `_STYLE`. `_STYLE` is the stylesheet AC5 freezes and `plain` carries it
+    # with no layer on top, so a mobile table rule there would have re-baselined a frozen promise to
+    # fix a report-style page. The `_STYLE` sha in `test_tokens.py` did NOT move, which is the
+    # independent corroboration that no CSS drifted in with this.
+    #
+    # The moved bytes were READ, not trusted. A unified diff of every regenerated page against a
+    # fresh render totals 350 lines ADDED, 0 removed and 0 CHANGED across 35 files — 10 lines per
+    # file, exactly the size of the added block, and every distinct added line appears exactly 35
+    # times. Nothing else drifted in.
+    #
+    # Verified in a real browser afterwards: at 390px the overflow went 30px -> 0 and 0 of the 16
+    # tables extend past the page edge. CONTROL at 1440px: overflow still 0 and the first table
+    # still computes `display: table`. The media query stops at 560px, so desktop is untouched.
+    #
     # #148 RE-PINNED ALL THIRTEEN (2026-08-05), and the reason is the FIXTURE, not the engine.
     #
     # The cross-style fixture was missing FOUR of the seventeen block tags — `phases`, `flow`,
@@ -150,7 +172,7 @@ PRE_74 = {
     # doc type whose purpose is separating confirmed from inferred. The fix lands at the
     # shared `render_sections` call site, so it reaches this resolver by the same line;
     # `templates/analysis.py` has documented this defect and asked for exactly that since #76.
-    "analysis": "4d5d91b9d73235af9ccb8998b02739c41cc4782cc1556e17ebf26ae9b9789f8b",
+    "analysis": "0bb2a4ce67b4e6e76da84a5cd661c13cf1a6ac055554b39772b80e4a0eadef07",
     # #68 moved roadmap on purpose — TWICE, once per PR of the child, and each move is the
     # deliberate rebuild the issue asks for. PR 1 added the `composition` block and its CSS;
     # PR 2 added the `phases` band that contains it. Re-pinned rather than re-derived: this
@@ -183,26 +205,26 @@ PRE_74 = {
     # (a 64-char hash, a slash-joined issue run) breaks rather than pushing the badge wide
     # (a full-page 2381px scroll on a 780px viewport, owner-reported). Only the roadmap template
     # carries `blk-ph-badge`, so no other style moves; `crossstyle.sh` is the "only mine moved" guard.
-    "roadmap": "45aa43a4c7534691dcdc3bd715ad011d72ef6b7eda4b29452fbd3694578ef3eb",
+    "roadmap": "e196ecc4d825e2fd342d2e5ad24f2eb2605fe7317fa3b3e10b9fe2797b74c9fa",
     # #76 rebuild — re-pinned; see the header note above.
-    "report": "7cde215e701d7921fc5f037a0fde1333025f4a1e8b240ac7c24e0c3e1d582cd7",
-    "design": "825b0358604eb8230a6d9d63922e86a948c3a42271fc1aa2c97178e9e4eb531e",
+    "report": "37e6dda06a2ac85d4b790fa13896a7509a6abe7059ae161c60a59589946dffce",
+    "design": "a45b732510c1b4fbef72d10e58a2917cc8d499f0cd75184a67da584958f52caa",
     # #90 moved it: `dashboard` shares `roadmap_status_chip`, so the same fix reaches it.
     # That sharing is why this could not be folded into #68 — see the issue's own note.
-    "dashboard": "c860f50a35361782ef7e08b37b82cdad1f88def27768aafd6c37724daeb69581",
-    "review": "5a95a41f0a41d17c08449a062f6278fb95cec89df25551315286124ca3ded792",
-    "spec": "a92fdec42603510d262c4fcec57542799161d897aa65f531f2eedd7166ea2e4d",
+    "dashboard": "d0b93af85fedc623a4c832b5c64516a70389905bef2795ff1a38200d58408bca",
+    "review": "4bc27e104489523eb871b7303b75728898ade824648782ae68e8bd9983def1b5",
+    "spec": "f5ada1fef5067255e1febfe835a8dac6ceaab28d4dfa69da3327f9d6930cf606",
     # #75 moved `uat` on purpose — the frozen-target rebuild. Re-pinned with the reason
     # beside it, the same treatment #68 gave `roadmap` (D57/D61). `plain` has not moved and
     # its own pin is untouched; the per-PR "only my style moved" guard is `crossstyle.sh`.
-    "uat": "81a7e13ccedc10a2f91d977b0f4adb9df936e32d83ecda24c2a9a6d920b34080",
-    "workflow": "f89175e9061d92ece0afa4d4ff93f1092c06bf5079df5b4264fae3c2823cfac3",
+    "uat": "9e78223598838afe5ebef39fe21aea41682eaf405e1f1f0af22c1078f998ad67",
+    "workflow": "0ead75507a8cd2c31e43884018e10134b8cc3dd36af74967294a37ac63c0fba3",
     # #42 adds this style, so its pin is CAPTURED here rather than inherited — there is no
     # "before" for a style that did not exist. What the oracle guards from now on is that
     # nothing else moves it.
-    "design-system": "d3efa262cdeaa15597e49724f5b82444ab22674e2730a7eb2028ca325cd92ff8",
-    "module-map": "f60156143d6f4bb881b8361dec3ee59f42f642291511d420845826ac8a251c18",
-    "slide-deck": "c1205f74a1c31d4395ab01af14d05dd4b180cc5914e9404aee561c973d4f96ea",
+    "design-system": "d17f10887006d31f352ead015bf7dc01cf8c2339dac8305f751f3241a6d5abaf",
+    "module-map": "956910d672354e2f16b8be034a0f9970c210b9873e2f929b2b244b7cb7295603",
+    "slide-deck": "1ae233f3c1366a8a606411442cfa893318b40edb5c7463c1b281750c7b732aff",
     # #59 adds this style, so its pin is CAPTURED here rather than inherited — there is no
     # "before" for a style that did not exist, the same treatment #42 gave `design-system`.
     # What the oracle guards from now on is that nothing else moves it.
@@ -215,7 +237,7 @@ PRE_74 = {
     # Captured with THIS file's own `_sha` recipe (title="T", generated_at="x", no doc id),
     # not with `regen_rendered_styles.py`'s. Two recipes live in this tree for different jobs
     # and the header above records what happens when the wrong one is used.
-    "minutes": "3389cc902e4af127be567e705fadb37e008e09172ae556c05281820f4c99ae81",
+    "minutes": "1d4c1ceff91c4856ff23d96dee8bb30606319439387728e370c3a50330015243",
 }
 
 PACK = {"accent": {"light": "#1e5f7a", "dark": "#7fd4f0"}}
