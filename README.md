@@ -409,7 +409,7 @@ Two settings, both validated at start-up:
 | Variable | Default | Notes |
 |---|---|---|
 | `DOC_HARNESS_INDEX_WORKERS` | `8` | 1..32. Outside that the service refuses to start, naming the variable. It is never clamped to a boundary — a mistyped 64 that quietly became 32 is a setting you cannot see is wrong. |
-| `DOC_HARNESS_INDEX_MAX_STALE_AGE` | `21600` (6 h) | How old a listing may be before the index answers 503 instead of serving it. `0` removes the bound. A positive value at or below the 900-second TTL is refused, because it would leave no window in which a stale listing is ever served. |
+| `DOC_HARNESS_INDEX_MAX_STALE_AGE` | `21600` (6 h) | How old a listing may be before the index answers 503 instead of serving it, counted only once a refresh has actually FAILED. A listing nobody has opened is never refused, however old it is: a refresh runs only when a reader arrives, so age alone cannot tell an outage from a quiet night. `0` removes the bound. A positive value at or below the 900-second TTL is refused, because it would leave no window in which a stale listing is ever served. |
 
 Design, its three cross-model review rounds, and the measurements:
 [`docs/planning/2026-09-15-65-index-cold-load.md`](docs/planning/2026-09-15-65-index-cold-load.md).

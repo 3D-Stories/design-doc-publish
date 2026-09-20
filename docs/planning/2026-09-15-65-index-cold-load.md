@@ -25,6 +25,18 @@ genuinely removes an existing disclosure bound.
 age the index answers `IndexTooStale` → 503 until a build succeeds. `0` means no bound and is an
 explicit operator opt-in.
 
+**Amended 2026-09-20, before merge.** The paragraph below reasoned from how long a build
+*takes* and never from how often one *runs*. A refresh only runs when a reader arrives, so the
+bound was reachable with GitHub perfectly healthy: on `index.3dstories.ca` a night with no
+visitor aged the listing past six hours, and the next morning's first load was a 503 blaming
+GitHub for a walk nobody had attempted — the reload right behind it succeeded, because the
+refused request is itself what starts the refresh. Reproduced with a healthy source and no
+failure anywhere (`test_a_quiet_period_is_not_an_outage`). The bound now refuses only once a
+refresh has actually failed. **What that costs:** during a real outage the first reader past the
+bound is served the stale listing rather than a 503, because that reader's own request is what
+discovers the outage. Exposure is therefore bounded at six hours **plus one request**, which is
+one request more than this document promised below.
+
 **Why six hours and not the reviewer's 900.** The TTL is already 900 seconds, so a bound of 900
 makes the stale window exactly zero and a stale snapshot is never served at all — acceptance
 criteria 1 and 2 could then never pass, and the whole issue is unfixed. Any working bound must
@@ -472,7 +484,10 @@ read once at boot, validated and clamped.
   it is a 503. A blank index is indistinguishable from "the org has no documents", so this is a
   security-relevant improvement.
 - **Stale metadata exposure is bounded by default.** `DOC_HARNESS_INDEX_MAX_STALE_AGE` defaults to
-  six hours, so a listing cannot outlive a revocation indefinitely. Following any link changes
+  six hours, so a listing cannot outlive a revocation indefinitely. Per the 2026-09-20 amendment
+  above the real bound is six hours **plus one request**: the bound refuses only once a refresh
+  has actually failed, and it is the first reader past six hours whose own request discovers the
+  failure. Following any link changes
   nothing either way: `ConventionResolver` asks GitHub per request and returns 502/404. Setting it to `0`
   removes the bound; there is no environment-only value that restores the pre-#65 behavior, and
   an earlier revision of this document wrongly said there was. See

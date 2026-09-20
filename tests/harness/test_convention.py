@@ -650,6 +650,10 @@ class TestMaxStaleAge:
 
         clock.t += 901.0
         assert idx.snapshot(budget())["rows"]          # stale but inside the bound
+        # The bound now fires on EVIDENCE that refreshing fails, never on the listing's age
+        # alone, so the failed refresh that read started has to have landed before it can
+        # refuse. Age alone could not tell a real outage from a night with no visitor.
+        assert _settle(lambda: idx._refresh_failing), "the failed refresh never landed"
         clock.t += 3601.0
         with pytest.raises(IndexTooStale):
             idx.snapshot(budget())
@@ -662,6 +666,51 @@ class TestMaxStaleAge:
         src.fail_with = Unavailable("down")
         clock.t += 999999.0
         assert idx.snapshot(budget())["rows"]
+
+    def test_a_quiet_period_is_not_an_outage(self):
+        """The falsifying case the rest of this class cannot reach.
+
+        Every other test here breaks the source BEFORE advancing the clock, so each one can
+        only confirm that the bound fires when GitHub really is down. None of them asks what
+        happens when GitHub is perfectly healthy and the listing simply went unread. That is
+        the ordinary night of a personal index: a refresh only runs when a reader arrives, so
+        an unvisited listing ages past the bound with no failure anywhere, and the next reader
+        was refused under a message blaming GitHub for a walk nobody had attempted.
+        """
+        src = gate_source(rawgentic=["docs/a.html"])
+        clock = FakeClock()
+        idx = swr_index(src, monotonic=clock, max_stale_age=3600.0)
+        first = idx.snapshot(budget())
+
+        # The source is never broken. `fail_with` is left alone deliberately.
+        clock.t += 7201.0                              # twice the bound, entirely unread
+
+        assert idx.snapshot(budget())["rows"] == first["rows"]
+
+    def test_a_recovered_refresh_disarms_the_bound(self):
+        """The other half of the same flag, and the one that would fail silently.
+
+        If a success never cleared it, a single failed refresh would arm the bound for the
+        life of the process, and a service whose GitHub came back would go on refusing every
+        listing it was asked for until somebody restarted it.
+        """
+        src = gate_source(rawgentic=["docs/a.html"])
+        clock = FakeClock()
+        idx = swr_index(src, monotonic=clock, max_stale_age=3600.0)
+        first = idx.snapshot(budget())
+
+        src.fail_with = Unavailable("down")
+        clock.t += 901.0
+        idx.snapshot(budget())
+        assert _settle(lambda: idx._refresh_failing), "the failed refresh never landed"
+
+        src.fail_with = None                           # GitHub comes back
+        clock.t += 901.0
+        idx.snapshot(budget())
+        assert _settle(lambda: idx._refresh_failing is False), "the refresh never recovered"
+
+        clock.t += 7201.0                              # a long quiet gap AFTER recovery
+        assert idx.snapshot(budget())["rows"] == first["rows"]
 
     def test_the_bound_is_honoured_when_a_refresh_thread_cannot_start(self):
         """The one path that returns the stale snapshot from outside the normal branch."""

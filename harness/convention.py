@@ -306,6 +306,9 @@ class ConventionIndex:
         self._lock = threading.RLock()
         self._building = False
         self._cooldown_until = 0.0
+        # True once a refresh has FAILED with no later one succeeding. `max_stale_age` refuses
+        # on this and the age together, never on the age alone — see `snapshot`.
+        self._refresh_failing = False
         # Dates are keyed on the BLOB, not the path. 618 documents is 618 extra calls on a cold
         # walk; keying on content means a refresh only pays for the files that actually changed.
         # Guarded by its OWN lock, which is never held across a GitHub or a SQLite call.
@@ -643,10 +646,18 @@ class ConventionIndex:
                 # Only reachable if a concurrent build failed between the two locked sections.
                 raise IndexBuilding(
                     "the document listing is still being built; retry shortly")
-            if self._max_stale_age and (self._monotonic() - at) > self._max_stale_age:
+            # Gated on a refresh having actually FAILED, never on age alone. A refresh runs
+            # only when a reader arrives, so an unread listing ages past the bound with GitHub
+            # perfectly healthy. Measured on index.3dstories.ca: a night with no visitor made
+            # the next morning's first load a 503 blaming GitHub for a walk nobody had
+            # attempted, and the reload right behind it succeeded — because the refused
+            # request is itself what started the refresh. Age cannot tell silence from an
+            # outage. `_refresh_failing` is the part that knows, so the bound asks it.
+            if (self._max_stale_age and self._refresh_failing
+                    and (self._monotonic() - at) > self._max_stale_age):
                 raise IndexTooStale(
                     "the document listing is older than this service is allowed to serve; "
-                    "GitHub has not been reachable for a while")
+                    "refreshing it keeps failing")
             return snap
 
     def _cooling_for(self, now: float) -> int:
@@ -680,6 +691,9 @@ class ConventionIndex:
             # worse bug than the one this handler exists for.
             self._building = False
             self._cooldown_until = self._monotonic() + self.REFRESH_COOLDOWN
+            # A refresh that cannot start is a refresh that failed. Left out, a process that
+            # can no longer make threads would serve one listing for ever, whatever its age.
+            self._refresh_failing = True
             # Returned, not logged here. `_log_line` writes to stderr, and this method is
             # called with the index lock held, so logging inside it would put a blocking write
             # between every reader and the snapshot they came for.
@@ -703,6 +717,7 @@ class ConventionIndex:
             with self._lock:
                 self._building = False
                 self._cooldown_until = self._monotonic() + self.REFRESH_COOLDOWN
+                self._refresh_failing = True
             self._log_line(f"index refresh could not build a budget: {exc!r}; "
                            f"continuing to serve the previous listing")
             return
@@ -729,10 +744,12 @@ class ConventionIndex:
                 self._building = False
                 if built is None:
                     self._cooldown_until = self._monotonic() + self.REFRESH_COOLDOWN
+                    self._refresh_failing = True
                 else:
                     self._snapshot = built
                     self._at = self._monotonic()
                     self._cooldown_until = 0.0
+                    self._refresh_failing = False
         return built
 
     def _carry_expired(self, repo: str, now: float) -> bool:
