@@ -290,3 +290,95 @@ class TestTheSetupCommandItPrints:
         assert "${CLAUDE_PLUGIN_ROOT}" not in user_config.SETUP_COMMAND
         assert user_config.SETUP_COMMAND.count("setup.py") == 1
         assert str(SCRIPTS) in user_config.SETUP_COMMAND
+
+
+class TestTheEnvFileTheSecretsLiveIn:
+    """`.env` exists so a publish is reproducible by somebody who did not type the token.
+
+    Before it, `DOC_HARNESS_PUBLISH_TOKEN` had to be exported by hand every time, and on the
+    author's own machine the value survived nowhere but inside a running container. The
+    harness already reads this file — `docker compose` does it unasked — so the publisher
+    reading the same file is what makes one value serve both halves.
+    """
+
+    def _env(self, tmp_path, name, body):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_it_fills_a_variable_that_is_not_set(self, scrubbed, tmp_path):
+        f = self._env(tmp_path, "a.env", "DOC_HARNESS_PUBLISH_TOKEN=abc123\n")
+        environ = {}
+        used = user_config.load_env(files=[f], environ=environ)
+        assert environ["DOC_HARNESS_PUBLISH_TOKEN"] == "abc123"
+        assert used == f
+
+    def test_a_variable_already_set_wins(self, scrubbed, tmp_path):
+        """An explicit `export` in the caller's shell stays the last word. Otherwise a file
+        on disk could silently redirect a publish the operator thought they had aimed."""
+        f = self._env(tmp_path, "a.env", "DOC_HARNESS_PUBLISH_TOKEN=from-file\n")
+        environ = {"DOC_HARNESS_PUBLISH_TOKEN": "from-shell"}
+        user_config.load_env(files=[f], environ=environ)
+        assert environ["DOC_HARNESS_PUBLISH_TOKEN"] == "from-shell"
+
+    def test_only_doc_harness_names_are_loaded(self, scrubbed, tmp_path):
+        """A `.env` sitting beside an installed plugin must not be able to set PATH."""
+        f = self._env(tmp_path, "a.env",
+                      "PATH=/evil\nLD_PRELOAD=/evil.so\nDOC_HARNESS_ZONE=example.ca\n")
+        environ = {}
+        user_config.load_env(files=[f], environ=environ)
+        assert environ == {"DOC_HARNESS_ZONE": "example.ca"}
+
+    def test_the_first_file_that_exists_wins(self, scrubbed, tmp_path):
+        first = self._env(tmp_path, "first.env", "DOC_HARNESS_ZONE=first.ca\n")
+        second = self._env(tmp_path, "second.env", "DOC_HARNESS_ZONE=second.ca\n")
+        environ = {}
+        used = user_config.load_env(files=[first, second], environ=environ)
+        assert environ["DOC_HARNESS_ZONE"] == "first.ca"
+        assert used == first
+
+    def test_no_file_at_all_is_not_an_error(self, scrubbed, tmp_path):
+        """Exporting by hand stays a supported way to run. An absent file is that case."""
+        environ = {}
+        assert user_config.load_env(files=[tmp_path / "nope.env"], environ=environ) is None
+        assert environ == {}
+
+    def test_it_reads_the_shapes_an_operator_actually_writes(self, scrubbed, tmp_path):
+        """`export` prefixes, comments, blank lines, and quotes a password manager brought
+        along. A token with a stray quote fails later as a 401, which is hours from here."""
+        f = self._env(tmp_path, "a.env", "\n".join([
+            "# the deploy secrets",
+            "",
+            "export DOC_HARNESS_PUBLISH_TOKEN='quoted-value'",
+            '  DOC_HARNESS_ZONE = "spaced.ca"  ',
+            "DOC_HARNESS_CONTROL_URL=http://127.0.0.1:18081  # trailing words are part of a URL",
+            "NOT_AN_ASSIGNMENT",
+        ]) + "\n")
+        environ = {}
+        user_config.load_env(files=[f], environ=environ)
+        assert environ["DOC_HARNESS_PUBLISH_TOKEN"] == "quoted-value"
+        assert environ["DOC_HARNESS_ZONE"] == "spaced.ca"
+        assert environ["DOC_HARNESS_CONTROL_URL"].startswith("http://127.0.0.1:18081")
+
+    def test_the_working_directory_is_never_searched(self, scrubbed, tmp_path):
+        """publish_doc.py runs with its cwd set to the repository BEING PUBLISHED. A `.env`
+        there is a file that repository controls, and the publish token is precisely what it
+        must not be able to set."""
+        (tmp_path / ".env").write_text("DOC_HARNESS_PUBLISH_TOKEN=hostile\n", encoding="utf-8")
+        assert Path.cwd() == tmp_path                      # the fixture put us here
+        assert (tmp_path / ".env") not in user_config.env_files()
+
+    def test_it_looks_beside_the_scripts_and_beside_the_config(self, scrubbed):
+        """Two real invocations: from this checkout, and from an installed plugin."""
+        found = user_config.env_files()
+        assert SCRIPTS.parent / ".env" in found
+        assert user_config.config_file().parent / ".env" in found
+
+    def test_it_honours_the_config_path_this_run_already_resolved(self, scrubbed, tmp_path):
+        """This module promises one run cannot read two different config files. Re-resolving
+        inside `env_files` is exactly how that promise would break, so it is passed in."""
+        chosen = tmp_path / "elsewhere" / "config.json"
+        found = user_config.env_files(config_path=chosen)
+        assert chosen.parent / ".env" in found
+        assert user_config.config_file().parent / ".env" not in found

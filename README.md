@@ -346,7 +346,9 @@ docker compose up --build
 ```
 
 `docker compose` reads `.env` from this directory on its own, and `.gitignore` keeps it out of
-git. **Prefer it to exporting the two variables**, which is how this service spent its first
+git. **`scripts/publish_doc.py` reads the same file**, through `user_config.load_env()`, so the
+publish token is written once and serves both halves. A variable you have already exported still
+wins. **Prefer it to exporting the two variables**, which is how this service spent its first
 weeks: the tokens then lived only inside the running container, and nobody who had not typed
 them could restart it. `.env.example` documents exactly which GitHub permissions the read-only
 token needs.
