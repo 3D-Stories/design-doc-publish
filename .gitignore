@@ -23,3 +23,17 @@ index/index.html
 /var-doc-harness/
 harness-local-cache/
 harness-local-registry.db*
+
+# The deploy secrets. `docker compose` reads this file automatically from the project
+# directory, which is the whole point: before it existed the two tokens lived ONLY inside
+# the running container, and a restart could not be reproduced by anyone who had not typed
+# them in the first place. Ignored rather than merely absent, because a blanket `git add`
+# is exactly how a token reaches a public repository. `.env.example` is tracked and holds
+# names only.
+.env
+.env.*
+!.env.example
+
+# Scratch from the mandatory post-deploy browser smoketest. The tool writes snapshots and
+# console logs here on every run; the screenshots it is asked to keep go to docs/smoke/.
+.playwright-cli/

@@ -341,10 +341,15 @@ Design and its review history:
 ### Running it
 
 ```bash
-export DOC_HARNESS_GITHUB_TOKEN=...     # fine-grained, read-only, covering every doc repo
-export DOC_HARNESS_PUBLISH_TOKEN=...    # the control-host bearer
+cp .env.example .env        # then fill both values in .env
 docker compose up --build
 ```
+
+`docker compose` reads `.env` from this directory on its own, and `.gitignore` keeps it out of
+git. **Prefer it to exporting the two variables**, which is how this service spent its first
+weeks: the tokens then lived only inside the running container, and nobody who had not typed
+them could restart it. `.env.example` documents exactly which GitHub permissions the read-only
+token needs.
 
 The service **refuses to start** without either secret, naming the one that is missing. It also
 takes an exclusive lock on its cache volume and refuses to start if another process holds it: the
