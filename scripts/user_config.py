@@ -99,6 +99,89 @@ def config_file(*, cli_value=UNSET) -> Path:
     return base / "design-doc-publish" / "config.json"
 
 
+#: Only names carrying this prefix reach the process environment. A `.env` sitting beside an
+#: installed plugin must not be able to set `PATH` or `LD_PRELOAD`, and a prefix is the
+#: narrowest rule that still lets the harness and the publisher share one file.
+ENV_PREFIX = "DOC_HARNESS_"
+
+#: `export ` is tolerated on purpose: the README told people to export these for months, so
+#: the first thing anybody does is paste those exact lines into a file.
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$")
+
+
+def env_files(*, config_path: Path | None = None) -> list[Path]:
+    """Every `.env` a run will consider, most specific first.
+
+    `config_path` is the one this run already resolved. It is a parameter rather than a
+    second `config_file()` call because this module promises a single run cannot read two
+    different config files, and re-resolving here is exactly how that promise would break.
+
+    Two candidates, one per real invocation: from this checkout, and from an installed
+    plugin beside its own config. The working directory is deliberately NOT among them.
+    `publish_doc.py` runs with its cwd set to the repository BEING PUBLISHED, so a `.env`
+    there is a file that repository controls — and the publish token is precisely what a
+    repository must not be able to set.
+
+    Resolution happens at CALL time, like everything else in this module.
+    """
+    beside_config = (Path(config_path) if config_path is not None else config_file()).parent
+    return [_HERE.parent / ".env", beside_config / ".env"]
+
+
+def parse_env_file(text: str) -> dict[str, str]:
+    """The `DOC_HARNESS_*` assignments in a `.env`, as a mapping.
+
+    One pair of matching quotes is stripped, because a password manager brings them along
+    and a token with a stray quote does not fail here — it fails hours later as a 401 that
+    nobody connects back to a quote.
+
+    A trailing `#` is NOT treated as a comment. Dotenv implementations disagree about that,
+    and a URL may legitimately carry one, so cutting at `#` would silently corrupt a value.
+    A whole-line comment still starts the line, which is the form anybody actually writes.
+    """
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        match = _ENV_LINE.match(line)
+        if match is None:
+            continue
+        key, raw = match.group(1), match.group(2).strip()
+        if not key.startswith(ENV_PREFIX):
+            continue
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+            raw = raw[1:-1]
+        found[key] = raw
+    return found
+
+
+def load_env(*, config_path: Path | None = None, files=None, environ=None) -> Path | None:
+    """Fill absent `DOC_HARNESS_*` values from the first `.env` that exists.
+
+    Returns the file used, or `None` when none exists. Absence is a NORMAL state and never a
+    refusal: exporting by hand stays a supported way to run, and it is what every caller did
+    before this existed.
+
+    A value already in the environment is never overwritten. Whoever exported it meant it,
+    and a file on disk silently redirecting a publish is the failure this ordering prevents.
+    """
+    environ = os.environ if environ is None else environ
+    for path in (env_files(config_path=config_path) if files is None else files):
+        path = Path(path)
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            # Warned, not raised, and matching how `load()` treats a config it cannot read:
+            # a publish that still has its variables exported must not be stopped by a file
+            # it did not need. Silence would hide a 000-mode file for ever, so it is said.
+            print(f"user_config: ignoring {path} ({e.__class__.__name__})", file=sys.stderr)
+            continue
+        for key, value in parse_env_file(text).items():
+            environ.setdefault(key, value)
+        return path
+    return None
+
+
 def load(config_path: Path) -> dict:
     """The config as a mapping, or ``{}``.
 

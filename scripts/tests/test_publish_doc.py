@@ -1644,3 +1644,25 @@ class TestAC1TheMinutesTypeReachesItsTemplate:
         assert a == b, ("`--type minutes` and `--type minutes --style minutes` produced "
                         "different pages, so the default mapping and the explicit argument "
                         "disagree")
+
+
+class TestTheEnvFileIsActuallyWiredIn:
+    """A loader that works perfectly and is never called is the failure this repo has
+    already had once: the stale-while-revalidate fix was correct inside `ConventionIndex`
+    and would have been dead in the service, which is why `TestIndexWiring` exists. Same
+    shape, same guard. These read the source, because the alternative is trusting it."""
+
+    def test_main_loads_the_env_before_it_reads_the_environment(self):
+        src = (SCRIPTS / "publish_doc.py").read_text(encoding="utf-8")
+        assert "CONFIG.load_env(" in src, "main never calls the loader"
+        loaded_at = src.index("CONFIG.load_env(")
+        for reader in ("control_base(os.environ)", "assert_credentials(os.environ",
+                       'os.environ["DOC_HARNESS_PUBLISH_TOKEN"]'):
+            assert loaded_at < src.index(reader), (
+                f"{reader} is read before the .env is loaded, so the file cannot supply it")
+
+    def test_the_resolved_config_path_is_passed_through(self):
+        """`user_config` promises one run cannot read two different config files. Calling
+        `load_env()` bare would re-resolve it and break that promise silently."""
+        src = (SCRIPTS / "publish_doc.py").read_text(encoding="utf-8")
+        assert "CONFIG.load_env(config_path=config_path)" in src

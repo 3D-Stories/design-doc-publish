@@ -1673,6 +1673,18 @@ def main(argv=None) -> int:
 
     try:
         config_path = CONFIG.config_file(cli_value=args.config)
+
+        # The secrets, before anything reads them. `DOC_HARNESS_PUBLISH_TOKEN` and
+        # `DOC_HARNESS_CONTROL_URL` used to be exported by hand on every publish, and on the
+        # author's own machine the token survived nowhere but inside a running container —
+        # so a restart could not be reproduced by anyone who had not typed it. The harness
+        # reads this same `.env` unasked, because `docker compose` does, which is what lets
+        # one value serve both halves. An already-exported variable still wins, and no file
+        # at all is a normal state: this cannot break a caller who exports.
+        env_file = CONFIG.load_env(config_path=config_path)
+        if env_file is not None:
+            print(f"publish_doc: 0/6 read DOC_HARNESS_* from {env_file}")
+
         workspace = CONFIG.workspace_file(cli_value=args.workspace_file,
                                           config_path=config_path)
 
