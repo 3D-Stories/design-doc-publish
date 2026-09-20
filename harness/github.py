@@ -22,6 +22,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -48,7 +49,18 @@ class Unavailable(GitHubError):
 
 
 class Unauthorized(GitHubError):
-    """The credential was refused, or the rate limit is exhausted."""
+    """The credential was refused for this object."""
+
+
+class RateLimited(Unauthorized):
+    """The rate limit is exhausted. A subclass, so every existing `except Unauthorized` is
+    unchanged, but callers that must tell a GLOBAL refusal from a per-object one can (#65).
+
+    GitHub answers 403 both for "this credential may not read this repository" and for "you
+    have made too many requests". The first is one repository's problem; the second is every
+    repository's, and a walk that treats it as local records sixty perfectly readable
+    repositories as unreadable and publishes the result as a success.
+    """
 
 
 class ResponseTooLarge(GitHubError):
@@ -64,36 +76,54 @@ class BudgetExhausted(GitHubError):
 
 
 class Budget:
-    """The end-to-end bound on ONE publish: wall-clock and call count together."""
+    """The end-to-end bound on ONE operation: wall-clock and call count together.
+
+    **The lock is REENTRANT, and that is not a style choice** (#65). `spend_call` calls
+    `check`, and so does `socket_timeout`; a plain `threading.Lock` around all four methods
+    deadlocks on the first call instead of failing, which is a hang rather than an error.
+    `test_spend_call_re_enters_check_so_the_lock_must_be_reentrant` is what catches that.
+
+    **Why lock at all.** Since #65 one Budget is shared across the index walk's thread pool,
+    so `spend_call` — a check-then-act over a read-modify-write — is a data race by
+    construction. It is a DEFENSIVE fix, honestly: on CPython 3.12 with the GIL the loss was
+    not reproducible (16 threads x 1500 increments, four trials, a 1e-7 switch interval and a
+    yielding clock, zero lost). It stops being theoretical on a free-threaded build, and the
+    cost is one uncontended acquire against a ~1.4-second network round trip.
+    """
 
     def __init__(self, deadline_seconds: float, max_calls: int,
                  clock: Callable[[], float] = time.monotonic):
         self._clock = clock
         self._deadline = clock() + deadline_seconds
         self._max_calls = max_calls
+        self._lock = threading.RLock()
         self.calls_spent = 0
 
     def remaining(self) -> float:
-        return self._deadline - self._clock()
+        with self._lock:
+            return self._deadline - self._clock()
 
     def check(self) -> None:
-        if self.remaining() <= 0:
-            raise DeadlineExceeded(
-                "the publish exceeded its end-to-end deadline and was abandoned; nothing was "
-                "activated")
+        with self._lock:
+            if self.remaining() <= 0:
+                raise DeadlineExceeded(
+                    "the publish exceeded its end-to-end deadline and was abandoned; nothing "
+                    "was activated")
 
     def spend_call(self) -> None:
-        self.check()
-        if self.calls_spent >= self._max_calls:
-            raise BudgetExhausted(
-                f"the publish reached its cap of {self._max_calls} GitHub calls and was "
-                f"abandoned; nothing was activated")
-        self.calls_spent += 1
+        with self._lock:
+            self.check()
+            if self.calls_spent >= self._max_calls:
+                raise BudgetExhausted(
+                    f"the publish reached its cap of {self._max_calls} GitHub calls and was "
+                    f"abandoned; nothing was activated")
+            self.calls_spent += 1
 
     def socket_timeout(self, http_timeout: float) -> float:
         """Never let one call outlive the whole publish (finding C2)."""
-        self.check()
-        return max(0.001, min(http_timeout, self.remaining()))
+        with self._lock:
+            self.check()
+            return max(0.001, min(http_timeout, self.remaining()))
 
 
 _SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -235,14 +265,20 @@ class HttpGitHub:
             return NotFound("GitHub reports this object does not exist")
         if status == 401:
             return Unauthorized("GitHub refused the credential (401)")
-        if status == 403:
+        if status in (403, 429):
             headers = exc.headers or {}
             try:
                 remaining = headers.get("x-ratelimit-remaining")
+                retry_after = headers.get("retry-after")
             except AttributeError:
-                remaining = None
-            if str(remaining) == "0":
-                return Unauthorized("GitHub rate limit is exhausted (403)")
+                remaining, retry_after = None, None
+            # THREE signals, not one (#65 review). A PRIMARY limit sets
+            # `x-ratelimit-remaining: 0`. A SECONDARY limit does not — it answers 403 or 429
+            # with `Retry-After` and a full remaining count, so keying only on the first signal
+            # left the case that actually bites a burst of eight workers classified as an
+            # ordinary per-repository refusal.
+            if str(remaining) == "0" or retry_after is not None or status == 429:
+                return RateLimited(f"GitHub rate limit is exhausted ({status})")
             return Unauthorized("GitHub refused the request (403)")
         return Unavailable(f"GitHub returned {status}")
 

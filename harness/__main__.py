@@ -16,6 +16,7 @@ import sys
 from .app import make_app
 from .cache import BlobCache
 from .config import ConfigError, load_config
+from .datestore import DateStore
 from .github import HttpGitHub
 from .registry import Registry
 
@@ -52,9 +53,20 @@ def build(env=None):
     registry.initialize()
     cache = BlobCache(cfg.cache_dir, max_bytes=cfg.cache_max_bytes)
     cache.initialize()
+    def log(message):
+        print(message, file=sys.stderr, flush=True)
+
+    # Beside the blob cache, on the volume compose.yaml calls "disposable: rebuilds from GitHub
+    # by design" — never on the durable registry volume, which is for data that cannot be
+    # recomputed. Losing this file costs one slow boot: measured 52.66s against 11.30s with it.
+    #
+    # `initialize()` NEVER raises. An unwritable cache volume is a warming problem, not a
+    # serving one, and failing the boot over it is the outcome #65 forbids outright.
+    dates = DateStore(os.path.join(cfg.cache_dir, "index-dates.db"), log=log)
+    dates.initialize()
     source = HttpGitHub(cfg.github_token, cfg.github_api)
     app = make_app(cfg=cfg, registry=registry, cache=cache, source=source,
-                   log=lambda m: print(m, file=sys.stderr, flush=True))
+                   log=log, date_store=dates)
     return cfg, app, lock
 
 

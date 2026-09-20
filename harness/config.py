@@ -38,6 +38,8 @@ class HarnessConfig:
     publish_deadline: float
     max_github_calls: int
     max_concurrent_publishes: int
+    index_workers: int
+    index_max_stale_age: int
     threads: int
     channel_timeout: int
     connection_limit: int
@@ -66,6 +68,64 @@ def _number(env: Mapping[str, str], name: str, default, cast):
         raise ConfigError(f"{name} must be a number, got {raw!r}") from None
     if value <= 0:
         raise ConfigError(f"{name} must be greater than zero, got {value!r}")
+    return value
+
+
+#: The index snapshot's TTL, in `ConventionIndex`. Named here because a staleness bound at or
+#: below it makes the stale window exactly zero, which would leave the index rebuilding on the
+#: reader's request while LOOKING configured — the whole defect #65 exists to remove.
+_INDEX_TTL_SECONDS = 900
+
+#: GitHub's secondary rate limits punish burst concurrency, and 8 is a measured starting point
+#: rather than an optimum, so the knob has a ceiling. One mistyped digit should not be able to
+#: open a 500-way burst at the API.
+_MAX_INDEX_WORKERS = 32
+
+
+def _index_workers(env: Mapping[str, str]) -> int:
+    """1..32, REJECTED rather than clamped outside it.
+
+    A mistyped 64 that quietly became 32 is a setting the operator cannot see is wrong, and
+    every other refusal in this file names its variable and stops.
+    """
+    value = _number(env, "DOC_HARNESS_INDEX_WORKERS", 8, int)
+    if not 1 <= value <= _MAX_INDEX_WORKERS:
+        raise ConfigError(
+            f"DOC_HARNESS_INDEX_WORKERS must be between 1 and {_MAX_INDEX_WORKERS}, got "
+            f"{value}. GitHub's secondary rate limits punish burst concurrency, so the pool "
+            f"is bounded rather than trusted.")
+    return value
+
+
+def _index_max_stale_age(env: Mapping[str, str]) -> int:
+    """How old a listing may be before it is refused. `0` means no bound.
+
+    `_number` refuses anything `<= 0`, and `0` is a meaningful value here, so this parses its
+    own. A POSITIVE value at or below the TTL is refused: the snapshot only becomes stale at
+    the TTL, so such a bound leaves no window in which a stale listing is ever served, and
+    stale-while-revalidate would silently do nothing.
+    """
+    raw = env.get("DOC_HARNESS_INDEX_MAX_STALE_AGE")
+    if raw is None or not str(raw).strip():
+        return 21600                      # six hours; see docs/planning/2026-09-15-65-*.md
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        raise ConfigError(
+            f"DOC_HARNESS_INDEX_MAX_STALE_AGE must be a whole number of seconds, got "
+            f"{raw!r}") from None
+    if value == 0:
+        return 0
+    if value < 0:
+        raise ConfigError(
+            f"DOC_HARNESS_INDEX_MAX_STALE_AGE must not be negative, got {value}. Use 0 to "
+            f"serve a stale listing for as long as an outage lasts.")
+    if value <= _INDEX_TTL_SECONDS:
+        raise ConfigError(
+            f"DOC_HARNESS_INDEX_MAX_STALE_AGE ({value}) must be greater than the index TTL of "
+            f"{_INDEX_TTL_SECONDS} seconds. A listing only becomes stale at the TTL, so a "
+            f"bound at or below it leaves no window in which a stale listing is served and "
+            f"the index would go back to rebuilding on the reader's request.")
     return value
 
 
@@ -124,6 +184,8 @@ def load_config(env: Mapping[str, str]) -> HarnessConfig:
         publish_deadline=_number(env, "DOC_HARNESS_PUBLISH_DEADLINE", 120.0, float),
         max_github_calls=_number(env, "DOC_HARNESS_MAX_GITHUB_CALLS", 300, int),
         max_concurrent_publishes=max_concurrent_publishes,
+        index_workers=_index_workers(env),
+        index_max_stale_age=_index_max_stale_age(env),
         threads=threads,
         channel_timeout=_number(env, "DOC_HARNESS_CHANNEL_TIMEOUT", 60, int),
         connection_limit=_number(env, "DOC_HARNESS_CONNECTION_LIMIT", 100, int),

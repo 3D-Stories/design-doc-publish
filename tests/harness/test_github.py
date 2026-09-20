@@ -61,6 +61,84 @@ class TestBudget:
         b2 = Budget(deadline_seconds=100.0, max_calls=5, clock=lambda: 0.0)
         assert b2.socket_timeout(20.0) == pytest.approx(20.0)
 
+    def test_concurrent_callers_cannot_lose_a_call(self):
+        """#65. One `Budget` is shared across the index walk's thread pool, so the counter
+        must survive concurrent `spend_call`.
+
+        **This guard does not go red on the unsynchronized version, and saying so is the
+        point.** `spend_call` is a check-then-act over a read-modify-write, which is a real
+        data race by construction — but on CPython 3.12 with the GIL it was not reproducible:
+        16 threads x 1500 increments, four trials, `sys.setswitchinterval(1e-7)`, and a clock
+        that calls `time.sleep(0)` to force a GIL release inside `check()`, all lost exactly
+        zero. So this is a defensive fix the issue asked for, pinned by an invariant test —
+        not a reproduction of an observed loss.
+
+        It earns its place anyway, because it stops being theoretical the moment the GIL does:
+        on a free-threaded build the same bytecode interleaves for real. The cap is set above
+        the total so `BudgetExhausted` cannot fire and hide the assertion.
+        """
+        import threading
+
+        threads, per_thread = 8, 400
+        b = Budget(deadline_seconds=60.0, max_calls=threads * per_thread + 1, clock=lambda: 0.0)
+        start = threading.Barrier(threads)
+
+        def worker():
+            start.wait()
+            for _ in range(per_thread):
+                b.spend_call()
+
+        ts = [threading.Thread(target=worker) for _ in range(threads)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert b.calls_spent == threads * per_thread
+
+    def test_the_cap_still_binds_when_many_threads_race_it(self):
+        """The check-then-act must never let more than `max_calls` through.
+
+        This is the half with teeth: whatever the scheduler does, exactly `max_calls` callers
+        succeed and the rest raise. It fails loudly if the lock is ever removed on a runtime
+        where the interleaving is real.
+        """
+        import threading
+
+        cap = 50
+        b = Budget(deadline_seconds=60.0, max_calls=cap, clock=lambda: 0.0)
+        start = threading.Barrier(16)
+        ok = []
+        lock = threading.Lock()
+
+        def worker():
+            start.wait()
+            for _ in range(20):
+                try:
+                    b.spend_call()
+                except BudgetExhausted:
+                    return
+                with lock:
+                    ok.append(1)
+
+        ts = [threading.Thread(target=worker) for _ in range(16)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert len(ok) == cap
+        assert b.calls_spent == cap
+
+    def test_spend_call_re_enters_check_so_the_lock_must_be_reentrant(self):
+        """A plain `Lock` here deadlocks: `spend_call` calls `check`, and `socket_timeout` too.
+
+        Without this, the obvious fix — one `threading.Lock` around all four methods — hangs
+        the whole walk on its first call instead of failing.
+        """
+        b = Budget(deadline_seconds=60.0, max_calls=5, clock=lambda: 0.0)
+        b.spend_call()
+        assert b.socket_timeout(20.0) == pytest.approx(20.0)
+        assert b.calls_spent == 1
+
 
 class TestTreeWalk:
     def test_it_resolves_a_nested_path_to_its_blob(self, budget):
@@ -477,3 +555,40 @@ class TestLastCommitDate:
         gh, _ = self.make(body=b'[{"commit": {}}]')
         assert gh.last_commit_date("owner/repo", "docs/a.html",
                                    Budget(60.0, 10, lambda: 0.0)) is None
+
+
+class TestRateLimitClassification:
+    """#65. A walk shares one credential across eight workers, so telling a GLOBAL refusal from
+    a per-repository one decides whether the whole build is abandoned or one repository is.
+    """
+
+    @staticmethod
+    def _403(headers, status=403):
+        import urllib.error
+        return urllib.error.HTTPError("u", status, "Forbidden", headers, None)
+
+    def test_a_primary_limit_sets_remaining_to_zero(self):
+        from harness.github import HttpGitHub, RateLimited
+        assert isinstance(
+            HttpGitHub._classify(self._403({"x-ratelimit-remaining": "0"})), RateLimited)
+
+    def test_a_SECONDARY_limit_carries_retry_after_and_a_full_remaining_count(self):
+        """The case that actually bites a burst of eight workers. GitHub answers a secondary
+        limit with `Retry-After` and a healthy remaining count, so keying only on
+        `remaining == 0` left it classified as an ordinary per-repository refusal — and a
+        refusal that affects every worker would then be recorded as sixty local failures."""
+        from harness.github import HttpGitHub, RateLimited
+        got = HttpGitHub._classify(
+            self._403({"x-ratelimit-remaining": "4931", "retry-after": "60"}))
+        assert isinstance(got, RateLimited)
+
+    def test_a_429_is_a_rate_limit_whatever_its_headers_say(self):
+        from harness.github import HttpGitHub, RateLimited
+        assert isinstance(HttpGitHub._classify(self._403({}, status=429)), RateLimited)
+
+    def test_a_plain_403_stays_a_per_repository_refusal(self):
+        """Not every 403 is global. GitHub answers one for a repository this credential may
+        not read, and treating that as fatal would let a single repository kill the index."""
+        from harness.github import HttpGitHub, RateLimited, Unauthorized as Unauth
+        got = HttpGitHub._classify(self._403({"x-ratelimit-remaining": "4999"}))
+        assert isinstance(got, Unauth) and not isinstance(got, RateLimited)

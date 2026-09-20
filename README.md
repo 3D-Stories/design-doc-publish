@@ -386,6 +386,34 @@ the Access scope needs an owner decision between a narrower wildcard and a maint
 and the slow-client check inherited from #34 is **not discharged** — it has numbers and pass
 criteria but no proven way to observe the origin yet.
 
+### The index, and why a reader never waits for it (#65)
+
+`index.3dstories.ca` lists every document across the whole organisation, built by walking the
+repositories rather than reading the registry. Measured at the origin on 2026-09-15, the first
+load after its 900-second cache expired took **93.697s** and the next took 0.071s — the same
+301,664-byte page. The listing was being rebuilt inline, on the reader's request, by a serial
+walk of 61 repositories.
+
+It is not any more. Past the TTL the listing already in hand is returned immediately and a
+rebuild runs on a background thread, so **only the very first caller of a cold process ever
+waits**; a second one gets a 503 with `Retry-After` rather than occupying a worker that document
+requests also need. The walk runs in two phases through a bounded pool, and the dates it
+collects are cached on the disposable volume so a restart does not re-ask GitHub for all 618 of
+them.
+
+Measured against the real account with the new code: a cold build on a wiped volume takes
+**54.4s**, a restart with the cache in place **11.4s**, and a warm read is not a build at all.
+
+Two settings, both validated at start-up:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DOC_HARNESS_INDEX_WORKERS` | `8` | 1..32. Outside that the service refuses to start, naming the variable. It is never clamped to a boundary — a mistyped 64 that quietly became 32 is a setting you cannot see is wrong. |
+| `DOC_HARNESS_INDEX_MAX_STALE_AGE` | `21600` (6 h) | How old a listing may be before the index answers 503 instead of serving it, counted only once a refresh has actually FAILED. A listing nobody has opened is never refused, however old it is: a refresh runs only when a reader arrives, so age alone cannot tell an outage from a quiet night. `0` removes the bound. A positive value at or below the 900-second TTL is refused, because it would leave no window in which a stale listing is ever served. |
+
+Design, its three cross-model review rounds, and the measurements:
+[`docs/planning/2026-09-15-65-index-cold-load.md`](docs/planning/2026-09-15-65-index-cold-load.md).
+
 ### Its one dependency, and why the tests do not need it
 
 The container installs exactly one pinned runtime dependency, `waitress==3.0.2`, and

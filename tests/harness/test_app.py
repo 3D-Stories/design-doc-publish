@@ -46,8 +46,24 @@ def app(tmp_path):
         blobs={(REPO, BLOB): PAGE, ("3D-Stories/rawgentic", BLOB): PAGE},
         commits={("3D-Stories/rawgentic", "HEAD"): "r" * 40},
         repos=["rawgentic"])
-    yield make_app(cfg=CFG, registry=reg, cache=cache, source=src)
+    built = make_app(cfg=CFG, registry=reg, cache=cache, source=src)
+    # #65: only the FIRST caller of a cold process builds the listing; a second one is refused
+    # with a 503 rather than joining the wait. `make_app` starts a boot warm thread, so an index
+    # request racing it would get that 503 at random. Wait for the listing to exist, so every
+    # test below asserts what it is about instead of a warm-up race.
+    _wait_until_index_is_warm(built)
+    yield built
     reg.close(); cache.close()
+
+
+def _wait_until_index_is_warm(app, timeout=5.0):
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        cap, _ = call(app, f"index.{ZONE}", "/")
+        if not cap["status"].startswith("503"):
+            return
+        _time.sleep(0.01)
 
 
 def call(app, host, path="/", method="GET", headers=None, body=b"", query=""):
@@ -217,3 +233,106 @@ class TestStep11EncodedAssetNames:
         cap, served = call(app, f"proj-design-3.{ZONE}", "/")
         assert cap["status"].startswith("200"), cap["status"]
         assert served == PAGE
+
+
+class TestIndexWiring:
+    """#65. The fix can be entirely correct inside `ConventionIndex` and entirely dead in the
+    service, because the new behaviour is opt-in: without a `refresh_budget` the class rebuilds
+    inline exactly as it always did. That silence is the risk, so it is asserted here.
+    """
+
+    def _index(self, app_obj):
+        # `make_app` returns a closure; the index is reachable through its cell contents.
+        from harness.convention import ConventionIndex
+        for cell in app_obj.__closure__ or ():
+            value = cell.cell_contents
+            if isinstance(value, ConventionIndex):
+                return value
+            for inner in getattr(value, "__closure__", None) or ():
+                if isinstance(inner.cell_contents, ConventionIndex):
+                    return inner.cell_contents
+        raise AssertionError("no ConventionIndex reachable from the app closure")
+
+    def test_the_index_is_given_a_refresh_budget_so_a_reader_never_waits(self, app):
+        index = self._index(app)
+        assert index._refresh_budget is not None
+        made = index._refresh_budget()
+        assert made.remaining() > 0
+
+    def test_the_index_is_given_the_configured_worker_count_and_stale_bound(self, app):
+        index = self._index(app)
+        assert index._workers == CFG.index_workers
+        assert index._max_stale_age == CFG.index_max_stale_age
+
+    def test_the_index_is_given_the_date_store_when_one_is_supplied(self, tmp_path):
+        from harness.datestore import DateStore
+        reg = Registry(str(tmp_path / "r2.db")); reg.initialize()
+        cache = BlobCache(str(tmp_path / "c2"), max_bytes=100000); cache.initialize()
+        store = DateStore(str(tmp_path / "d.db")); store.initialize()
+        built = make_app(cfg=CFG, registry=reg, cache=cache,
+                         source=FakeGitHub(repos=[]), date_store=store)
+        assert self._index(built)._store is store
+        reg.close(); cache.close()
+
+
+class TestIndexUnavailableResponses:
+    """Each of the three refusals gets its OWN body, because they are three different things
+    for a reader to do about: wait a moment, wait a minute, or tell somebody GitHub is down."""
+
+    def _failing_app(self, tmp_path, error):
+        reg = Registry(str(tmp_path / "r3.db")); reg.initialize()
+        cache = BlobCache(str(tmp_path / "c3"), max_bytes=100000); cache.initialize()
+        built = make_app(cfg=CFG, registry=reg, cache=cache, source=FakeGitHub(repos=[]))
+        import harness.convention as conv
+        for cell in built.__closure__ or ():
+            value = cell.cell_contents
+            if isinstance(value, conv.ConventionIndex):
+                index = value
+                break
+            found = None
+            for inner in getattr(value, "__closure__", None) or ():
+                if isinstance(inner.cell_contents, conv.ConventionIndex):
+                    found = inner.cell_contents
+            if found is not None:
+                index = found
+                break
+
+        def boom(*_a, **_k):
+            raise error
+        index.snapshot = boom
+        return built, reg, cache
+
+    def test_a_build_in_flight_is_a_503_that_says_so_and_when_to_retry(self, tmp_path):
+        from harness.convention import IndexBuilding
+        app_, reg, cache = self._failing_app(
+            tmp_path, IndexBuilding("the document listing is still being built; retry shortly"))
+        cap, body = call(app_, f"index.{ZONE}", "/")
+        assert cap["status"].startswith("503")
+        assert cap["headers"]["Retry-After"] == "5"
+        assert b"still being built" in body
+        reg.close(); cache.close()
+
+    def test_a_cool_off_carries_the_real_number_of_seconds_left(self, tmp_path):
+        from harness.convention import IndexCoolingDown
+        app_, reg, cache = self._failing_app(
+            tmp_path, IndexCoolingDown("cooling down", 37))
+        cap, body = call(app_, f"index.{ZONE}", "/")
+        assert cap["status"].startswith("503")
+        assert cap["headers"]["Retry-After"] == "37"
+        reg.close(); cache.close()
+
+    def test_a_snapshot_past_the_bound_says_the_listing_is_too_old(self, tmp_path):
+        from harness.convention import IndexTooStale
+        app_, reg, cache = self._failing_app(tmp_path, IndexTooStale("too old"))
+        cap, body = call(app_, f"index.{ZONE}", "/")
+        assert cap["status"].startswith("503")
+        assert b"too old" in body or b"older" in body
+        reg.close(); cache.close()
+
+    def test_an_ordinary_github_failure_keeps_the_original_message(self, tmp_path):
+        from harness.github import Unavailable
+        app_, reg, cache = self._failing_app(tmp_path, Unavailable("down"))
+        cap, body = call(app_, f"index.{ZONE}", "/")
+        assert cap["status"].startswith("503")
+        assert b"could not be built from GitHub" in body
+        reg.close(); cache.close()
