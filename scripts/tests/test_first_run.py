@@ -215,3 +215,99 @@ class TestPublishingBeforeSetup:
                             "--project", "payments-api", "--type", "design", "--ref", "1",
                             "--title", "Payments rollout design", "--dry-run")
         assert proc.returncode == 0, proc.stderr
+
+
+class TestPublishingIsOptional:
+    """#72 defect 2. An unset `DOC_HARNESS_CONTROL_URL` is not a failure.
+
+    Owner decision 2026-08-24, recorded in `~/rawgentic/CLAUDE.md`, superseding the
+    2026-07-24 Vercel decision: *"Committing IS publishing ... the self-hosted doc harness
+    serves any committed docs/ html straight from GitHub"*, and *"Publishing is OPTIONAL"*.
+    Merging the pull request is enough. `publish_doc.py` is a pin-and-verify step on top.
+
+    `setup.py --check` already said the right thing — *"Publishing needs
+    DOC_HARNESS_CONTROL_URL and DOC_HARNESS_PUBLISH_TOKEN in the environment. Rendering
+    alone needs neither"* — while `publish_doc.py` exited 25 on the same state. These tests
+    make the two agree.
+
+    `stranger` is the right fixture and not a heavier one: the criterion is about a machine
+    with NOTHING configured, and a monkeypatched variable on the author's own machine cannot
+    establish that.
+    """
+
+    def _configured_stranger(self, stranger):
+        """A stranger who has run setup, and therefore has a workspace but NO harness."""
+        stranger.run(SETUP, "--init-workspace")
+        stranger.run(SETUP, "--add-project", "payments-api")
+        doc = stranger.tmp / "design.md"
+        doc.write_text(
+            "## Heading\n\nSome body text.\n\n"
+            "```callout\nwarn | Read this first\nOne real component.\n```\n\n"
+            "```options\nDebounce | Smallest diff | Re-done per call site | chosen\n```\n",
+            encoding="utf-8")
+        return doc
+
+    def _publish(self, stranger, doc, *extra):
+        return stranger.run(PUBLISH, "--md", str(doc), "--out", str(stranger.tmp / "o.html"),
+                            "--project", "payments-api", "--type", "design", "--ref", "1",
+                            "--title", "Payments rollout design", *extra)
+
+    def test_an_unset_control_url_renders_lints_and_exits_zero(self, stranger):
+        """AC1. The whole command, on a machine with no harness, is a SUCCESS."""
+        doc = self._configured_stranger(stranger)
+        proc = self._publish(stranger, doc)
+
+        assert proc.returncode == 0, (
+            f"an unset DOC_HARNESS_CONTROL_URL must not fail the command, got "
+            f"{proc.returncode}\n{proc.stdout}\n{proc.stderr}")
+        assert (stranger.tmp / "o.html").is_file(), "the page must still be rendered"
+
+    def test_it_says_committing_is_what_publishes(self, stranger):
+        """The exit code alone is not the fix. A reader who saw exit 25 for a year needs the
+        message to tell them the page is served from the commit."""
+        doc = self._configured_stranger(stranger)
+        proc = self._publish(stranger, doc)
+        said = proc.stdout + proc.stderr
+
+        assert "commit" in said.lower(), (
+            "the report must name committing as the thing that publishes")
+        assert "not published" in said.lower() or "no harness" in said.lower(), (
+            "it must be honest that the pin-and-verify step did not run")
+
+    def test_it_never_reaches_provenance_so_it_needs_no_repository(self, stranger):
+        """Astra's point, and the reason the branch sits before stage 4 rather than at
+        stage 5: `assert_head_reachable` runs `git fetch`, so a stage-5 branch would still
+        require a pushed repository to reach a verdict about NOT publishing.
+
+        The document here is in no git repository at all. Exit 0 proves git never ran.
+        """
+        doc = self._configured_stranger(stranger)
+        proc = self._publish(stranger, doc)
+
+        assert proc.returncode == 0, proc.stderr
+        assert "4/6" not in proc.stdout, "provenance must not have run"
+        assert "not a git repository" not in (proc.stdout + proc.stderr).lower()
+
+    def test_an_explicitly_requested_publish_still_refuses(self, stranger):
+        """The other half of the criterion, and the reason `--publish` exists at all.
+
+        Exit 0 for "I did not publish" is only honest when nobody ASKED for a publish. A
+        caller who did ask must still get a non-zero verdict, and it stays 25 — the code
+        that has always meant "the control URL is unset and nothing was published".
+        """
+        doc = self._configured_stranger(stranger)
+        proc = self._publish(stranger, doc, "--publish")
+
+        assert proc.returncode == 25, (
+            f"a REQUESTED publish that cannot run must fail, got {proc.returncode}\n"
+            f"{proc.stdout}\n{proc.stderr}")
+        assert "DOC_HARNESS_CONTROL_URL" in proc.stderr, "the refusal must name the variable"
+
+    def test_the_dry_run_is_unchanged(self, stranger):
+        """Guard. `--dry-run` already exited 0 here, and this change must not quietly turn it
+        into a different code path with the same exit."""
+        doc = self._configured_stranger(stranger)
+        proc = self._publish(stranger, doc, "--dry-run")
+
+        assert proc.returncode == 0, proc.stderr
+        assert "--dry-run" in proc.stdout, "the dry run must still say it stopped early"

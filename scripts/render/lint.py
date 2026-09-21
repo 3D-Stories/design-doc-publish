@@ -47,6 +47,36 @@ def check_stamp(html: str) -> list[str]:
     return ["no America/Edmonton timestamp (YYYY-MM-DD HH:MM MDT/MST) in the footer or eyebrow"]
 
 
+def stamp_of(html: str) -> str | None:
+    """The stamp this renderer wrote into `html`, or `None` (#72).
+
+    `publish_doc.py` reads a previously rendered page to recover the stamp it carries, so a
+    re-render can reproduce those bytes instead of restamping from the clock and failing the
+    stage-4 blob comparison. This is the reader for that.
+
+    **It lives HERE, beside `check_stamp`, on purpose.** Both answer the same question —
+    where does a page's stamp live — and they share `STAMP` and `_FURNITURE` rather than
+    each carrying a copy. A second, differently-shaped answer is exactly the drift this
+    codebase keeps paying for, and it would let the gate and the reader disagree about the
+    same page. A date quoted in body prose is not a stamp, and this never returns one.
+
+    **`None` unless the page speaks with one voice.** No furniture stamp, or two different
+    stamps across the eyebrow and the footer, both give `None` — a page this function cannot
+    speak for must not have a stamp guessed for it. The caller then falls back to the clock,
+    which is always safe.
+
+    **No entity decoding is needed, and that is structural rather than lucky.** `STAMP`
+    matches only digits, hyphens, a colon, spaces and `MDT`/`MST`. `html.escape` rewrites
+    none of those, so the escaped and unescaped forms of any stamp it can match are the same
+    string.
+    """
+    found = set()
+    for region in _FURNITURE:
+        for m in region.finditer(html):
+            found.update(STAMP.findall(m.group(0)))
+    return found.pop() if len(found) == 1 else None
+
+
 # --- 2. the title -------------------------------------------------------------------
 
 _TITLE = re.compile(r"<title>(.*?)</title>", re.S | re.I)

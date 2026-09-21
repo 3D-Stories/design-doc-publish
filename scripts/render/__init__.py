@@ -36,18 +36,24 @@ hard breaks (a line ending in 2+ spaces becomes a `<br>`), standard markdown
 semantics (changed in #344; single-line paragraphs are unchanged).
 
 Datetime default is mountain time (owner preference for rawgentic reports,
-#174); pass `generated_at` for a deterministic stamp.
+#174). For a deterministic stamp, pass `generated_at`, or export `SOURCE_DATE_EPOCH`
+(#72) — the reproducible-builds convention, honoured here so that re-rendering the
+same source produces the same bytes. `generated_at` wins over the variable.
 """
 from __future__ import annotations
 
 import argparse
 import html
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from string import Template as _Template
+
+_ZONE = "America/Edmonton"
+_STAMP_FORMAT = "%Y-%m-%d %H:%M %Z"
 
 
 def _mountain_now() -> str:
@@ -57,11 +63,55 @@ def _mountain_now() -> str:
     would read an hour slow and mislabel 'MST' during daylight time)."""
     try:
         from zoneinfo import ZoneInfo
-        now = datetime.now(ZoneInfo("America/Edmonton"))
-        return now.strftime("%Y-%m-%d %H:%M %Z")
+        now = datetime.now(ZoneInfo(_ZONE))
+        return now.strftime(_STAMP_FORMAT)
     except Exception:
         # Fallback if tzdata is unavailable: UTC, honestly labelled (never a wrong MST/MDT).
         return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+_EPOCH_DIGITS = re.compile(r"[0-9]+")
+
+
+def _source_date_epoch(env=None) -> str | None:
+    """`SOURCE_DATE_EPOCH` as this renderer's stamp, or `None` when it is unset (#72).
+
+    The reproducible-builds convention
+    (https://reproducible-builds.org/specs/source-date-epoch/): a build that would otherwise
+    read the clock uses this value instead, so the same inputs give the same bytes.
+
+    **Why this renderer needs it.** `publish_doc.py` RE-RENDERS before it publishes, and
+    stage 4 compares git blob ids, which cannot be normalized. A stamp one minute newer than
+    the committed one is a different blob and a refused publish. Measured 2026-09-21 against
+    5.2.0: two renders differed by `08:50` versus `08:52`, and nothing else.
+
+    **A malformed value RAISES rather than falling back to the clock.** The spec says a
+    consumer SHOULD exit non-zero, and the quiet alternative is worse than usual here: the
+    caller asked for reproducibility, so a clock-stamped page would look reproducible and
+    race anyway. The next refusal would then name a timestamp nobody could explain.
+
+    **An unavailable `America/Edmonton` raises too, and only on this path.** `_mountain_now`
+    keeps its honest UTC fallback, because an ordinary render wants a real stamp more than a
+    matching one. A DETERMINISTIC render cannot accept that fallback: two machines would
+    format one epoch differently, which is the single thing this function exists to prevent.
+    """
+    raw = (os.environ if env is None else env).get("SOURCE_DATE_EPOCH")
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not _EPOCH_DIGITS.fullmatch(text):
+        raise ValueError(
+            "SOURCE_DATE_EPOCH must be a whole number of seconds since the Unix epoch, not "
+            f"{raw!r}. Unset it to stamp from the clock instead.")
+    try:
+        from zoneinfo import ZoneInfo
+        moment = datetime.fromtimestamp(int(text), ZoneInfo(_ZONE))
+        return moment.strftime(_STAMP_FORMAT)
+    except Exception as e:
+        raise ValueError(
+            f"SOURCE_DATE_EPOCH={raw!r} could not be read as an {_ZONE} datetime: {e}. A "
+            "deterministic render has no honest fallback here, because another machine "
+            "would format the same value differently.") from e
 
 
 # --- inline markdown (escape-first: input here is ALREADY html.escape'd) ---
@@ -609,7 +659,12 @@ def render_artifact(markdown: str, *, title: str, subtitle: str = "",
     Non-plain templates stamp ``<body class="tpl-<style>">`` and inject their CSS
     blocks; plain keeps a bare ``<body>`` (byte-stable). Unknown styles fall back to
     plain rendering and get no body class."""
-    stamp = generated_at or _mountain_now()
+    # #72 precedence, and each rung is pinned by `test_render_reproducible.py`: an explicit
+    # `generated_at` wins, because a caller who named a stamp meant it and a stray exported
+    # variable must never override it. Then `SOURCE_DATE_EPOCH`, the reproducible-builds
+    # convention. Then the clock, unchanged — a render that asked for neither still wants a
+    # real datetime.
+    stamp = generated_at or _source_date_epoch() or _mountain_now()
     # #75: resolved BEFORE anything reads the title, so the `<title>` element, the storage slug
     # and the duplicate-h1 check all see the separator-free form. `h1_html` is the only consumer
     # of the split, and for the nine styles that do not declare `HEADLINE` it is exactly
@@ -782,9 +837,20 @@ def main(argv=None) -> int:
     if args.project:
         pack = _resolve_pack(args.project,
                              Path(args.workspace_file) if args.workspace_file else None)
-    html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
-                               telemetry=tel, generated_at=args.generated_at,
-                               style=args.style, doc_id=args.doc_id, vdl=pack)
+    try:
+        html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
+                                   telemetry=tel, generated_at=args.generated_at,
+                                   style=args.style, doc_id=args.doc_id, vdl=pack)
+    except ValueError as e:
+        # #72, cross-model review finding 4. `_source_date_epoch` refuses a malformed value
+        # rather than falling back to the clock, which is right — but every other refusal in
+        # this function is one legible line and a code, and this one was a raw traceback.
+        # Measured: `SOURCE_DATE_EPOCH=oops render-doc --md a.md --out a.html --title T`
+        # printed a stack and exited 1, on a command that rendered fine before #72.
+        # `publish_doc.py` already converts the same error into a stage-1 refusal; this is
+        # the renderer CLI's equivalent.
+        print(f"render_artifact: {e}", file=sys.stderr)
+        return 2
     open(args.out, "w", encoding="utf-8").write(html_out)
     return 0
 

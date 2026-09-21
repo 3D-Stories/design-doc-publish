@@ -163,10 +163,14 @@ python3 scripts/render-doc --md hello.md --out hello.html --title "Hello"
 > then publish. Publishing an uncommitted page refuses at stage 4 rather than shipping something
 > nobody can fetch.
 >
-> Two environment variables drive it: `DOC_HARNESS_CONTROL_URL` (required, no default) and
-> `DOC_HARNESS_PUBLISH_TOKEN`. Since 4.0.0 the harness also serves BY CONVENTION: a document
-> whose html file exists in a repository is reachable at its derived hostname with no publish
-> step at all — publishing remains the way to pin a page and to verify it end to end.
+> **Publishing is OPTIONAL, and this paragraph used to say the opposite (#72).** The harness
+> serves BY CONVENTION since 4.0.0: a document whose html file exists in a repository is
+> reachable at its derived hostname with no publish step at all. Committing the pair is what
+> puts the page up. Two environment variables drive the optional pin-and-verify run,
+> `DOC_HARNESS_CONTROL_URL` and `DOC_HARNESS_PUBLISH_TOKEN`; with neither set, `publish_doc.py`
+> renders, lints, says it did not publish and exits **0**. `--publish` demands the run instead,
+> and an unset control URL is then exit 25. The line this replaced called the control URL
+> "required, no default", which contradicted the convention sentence beside it.
 >
 > **Publishing from anywhere but the harness host needs two more (#54).** Off that host there is
 > no loopback address to reach, so `DOC_HARNESS_CONTROL_URL` names the public control host
@@ -228,8 +232,11 @@ python3 "$DDP/scripts/publish_doc.py" --md docs/planning/my-doc.md \
   --title "My design doc" --project my-project --type design --ref 42
 ```
 
-Render, lint, deploy and verify, in one command. `--dry-run` lints without publishing. The exit
-code is the verdict.
+Render and lint, then — only when a doc harness is configured — pin the page to a commit and verify
+it live. The exit code is the verdict. **You do not need that second half**: committing the `.md`
+and the `.html` is what publishes the page, so with no `DOC_HARNESS_*` set this renders, lints, says
+it did not publish, and exits **0**. `--dry-run` stops before any network call. `--publish` demands
+the pin-and-verify run and fails when it cannot happen.
 
 ## Prerequisites
 

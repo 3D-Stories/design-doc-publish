@@ -35,13 +35,21 @@ could pass on one clone and fail on another, which is the defect it exists to re
 
 **The stamp is pinned here, not read from the page.** Taking the stamp out of the artifact
 under test would be circular — the same circularity that rules out reading the title from it.
-The cost is real and is documented rather than hidden: `publish_doc.py` re-renders with the
-current wall clock and has no `--generated-at`, and it writes the file before its `--dry-run`
-check, so publishing a covered page rewrites the stamp and turns this guard red. That is the
-guard telling the truth. The authoring flow is:
+This stays true after #72, and deliberately: `publish_doc.py` gained stamp continuity, which
+DOES read the artifact, and this guard must not borrow it. A guard that recovered its expected
+stamp from the file it is checking could never fail on a wrong one.
+
+**#72 removed the friction this paragraph used to document, and shrank the authoring flow.**
+It used to read: `publish_doc.py` re-renders with the current wall clock, and it writes the
+file before its `--dry-run` check, so publishing a covered page rewrote the stamp and turned
+this guard red on a page nobody meant to change. That was finding S4-3 of #56, deferred as
+High. `publish_doc.py` now reuses the stamp already in the output file whenever re-rendering
+with it reproduces those bytes exactly, so publishing an UNCHANGED covered page no longer
+touches it. Step 2 below is therefore needed only when the page's content genuinely changed.
+The authoring flow is:
 
     1. edit the markdown
-    2. bump that page's `stamp` below
+    2. bump that page's `stamp` below — only when the page's content actually changed
     3. python3 scripts/tests/regen_docs_pages.py
     4. commit the markdown, this file and the regenerated HTML together
 
