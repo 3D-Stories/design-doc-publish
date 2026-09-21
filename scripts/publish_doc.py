@@ -1328,13 +1328,35 @@ def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
     repository. Nothing is trusted because it is on disk: an uncommitted page that reproduces
     still faces the unchanged stage-4 blob check, which refuses it.
 
-    **The residual, named rather than discovered later.** The stamp now means *this rendered
-    artifact last changed then*, which is very slightly weaker than *this document last
-    changed then*. Change only a referenced image and the HTML is identical, so the page keeps
-    its old stamp while the picture on it is new. Minute precision costs a little the same way:
-    two real changes inside one minute share a stamp. Both are narrower than the defect they
-    replace, which restamped every page on every run whether or not anything had changed. An
-    operator who wants a fresh stamp anyway exports `SOURCE_DATE_EPOCH`.
+    **Residual 1 — the stamp means the ARTIFACT, not the document.** *This rendered artifact
+    last changed then* is very slightly weaker than *this document last changed then*. Change
+    only a referenced image and the HTML is identical, so the page keeps its old stamp while
+    the picture on it is new (cross-model review finding 8; `stage_assets` makes image
+    references a supported feature, and no committed page in this repo uses one today). Minute
+    precision costs a little the same way: two real changes inside one minute share a stamp.
+    Both are narrower than the defect they replace, which restamped every page on every run
+    whether anything had changed or not. An operator who wants a fresh stamp exports
+    `SOURCE_DATE_EPOCH`.
+
+    **Residual 2 — a hand-edited stamp now survives the verifier, and the obvious fix does
+    not fix it** (cross-model review finding 2, CONFIRMED). Hand-edit a committed page's two
+    furniture stamps to a format-valid but false datetime and commit it: `check_stamp` is
+    satisfied, continuity recovers the false stamp, the re-render reproduces those exact
+    bytes, and the publish verifies and exits 0. Before #72, stage 1 always restamped, so any
+    hand edit produced a working-tree/HEAD mismatch and stage 4 refused.
+
+    That protection was INCIDENTAL — a side effect of the defect being fixed here, not a
+    designed check — and it is worth being clear about what it was worth. Committing IS
+    publishing, so anyone able to commit that page had already published it; what is lost is
+    only this command's ability to notice afterwards. A body hand-edit is still caught, because
+    the candidate then differs from the snapshot and the clock stamp breaks the blob match.
+
+    The review proposed recovering the stamp from `HEAD` instead of the working tree. That was
+    measured against its own scenario and REJECTED: the falsified page in that scenario IS
+    committed, so `HEAD` holds it too and the outcome is identical. Catching it needs an
+    independent source of truth for when the page last changed — the blob's own commit date —
+    which means git at stage 1, which the dry run's contract forbids. Left bounded rather than
+    half-fixed.
 
     `render_artifact` stays independent of the filesystem and of git. Continuity is file
     orchestration, which is this function's job. `SOURCE_DATE_EPOCH` is the separate,
@@ -1360,7 +1382,15 @@ def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
 
     page = None
     previous = _previous_page_bytes(out_path)
-    if previous is not None and not (os.environ.get("SOURCE_DATE_EPOCH") or "").strip():
+    # `is not None`, NOT a truthiness or `.strip()` test — #72, cross-model review finding 3.
+    # The renderer treats an EMPTY `SOURCE_DATE_EPOCH` as malformed and raises. A guard that
+    # read empty as "unset" made the two disagree, and the verdict then depended on something
+    # unrelated: `SOURCE_DATE_EPOCH= publish_doc.py …` exited 0 on an unchanged page (the
+    # continuity render passes an explicit stamp, so the variable is never parsed) and failed
+    # at stage 1 on a changed one. One environment, two answers. Unified on the renderer's
+    # reading, because it is the stricter and the more useful of the two: a caller who
+    # exported a junk value wanted reproducibility and must hear that they did not get it.
+    if previous is not None and os.environ.get("SOURCE_DATE_EPOCH") is None:
         stamp = _LINT.stamp_of(previous.decode("utf-8"))
         if stamp is not None:
             candidate = _render(stamp)

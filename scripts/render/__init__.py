@@ -837,9 +837,20 @@ def main(argv=None) -> int:
     if args.project:
         pack = _resolve_pack(args.project,
                              Path(args.workspace_file) if args.workspace_file else None)
-    html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
-                               telemetry=tel, generated_at=args.generated_at,
-                               style=args.style, doc_id=args.doc_id, vdl=pack)
+    try:
+        html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
+                                   telemetry=tel, generated_at=args.generated_at,
+                                   style=args.style, doc_id=args.doc_id, vdl=pack)
+    except ValueError as e:
+        # #72, cross-model review finding 4. `_source_date_epoch` refuses a malformed value
+        # rather than falling back to the clock, which is right — but every other refusal in
+        # this function is one legible line and a code, and this one was a raw traceback.
+        # Measured: `SOURCE_DATE_EPOCH=oops render-doc --md a.md --out a.html --title T`
+        # printed a stack and exited 1, on a command that rendered fine before #72.
+        # `publish_doc.py` already converts the same error into a stage-1 refusal; this is
+        # the renderer CLI's equivalent.
+        print(f"render_artifact: {e}", file=sys.stderr)
+        return 2
     open(args.out, "w", encoding="utf-8").write(html_out)
     return 0
 

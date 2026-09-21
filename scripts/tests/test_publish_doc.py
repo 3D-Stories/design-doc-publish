@@ -1731,12 +1731,19 @@ class TestStampContinuityAcrossAClockMinute:
     def test_the_published_page_carries_the_committed_stamp(self, run, clock, doc):
         """Continuity must reuse the OLD stamp, not quietly restamp and republish.
 
-        Asserted on the bytes the fake harness received, because those are the bytes a
-        reader would see. A page that published the 08:52 stamp did not have continuity —
-        it had a race it happened to win.
+        Asserted on the COMMITTED file, which is what the harness fetches from GitHub and
+        therefore what a reader sees. The docstring used to claim these were "the bytes the
+        fake harness received" while the body read the file from disk — corrected by #72's
+        cross-model review, which also caught `h` being bound and never used. `h.published`
+        now carries its weight: without it, a run that skipped publishing entirely would
+        satisfy every other line here.
+
+        A page that published the 08:52 stamp did not have continuity. It had a race it
+        happened to win.
         """
         rc, h = run()
         assert rc == 0
+        assert h.published is not None, "a skipped publish must not pass as continuity"
         page = (doc.parent / "a-doc.html").read_text(encoding="utf-8")
         assert self.T0 in page, "the committed stamp must be the one that survives"
         assert self.T1 not in page, "the publish render must not have restamped the page"
@@ -1780,12 +1787,78 @@ class TestStampContinuityAcrossAClockMinute:
         assert rc == 0
         assert self.T0 in out.read_text(encoding="utf-8")
 
+    # 2026-09-10 00:30 UTC, which is 2026-09-09 18:30 MDT. Verified by computing it rather
+    # than by trusting the comment, because #72's cross-model review caught this exact
+    # constant lying: it was labelled "2026-09-21 14:50 UTC", which is 1790002200, and that
+    # value formats to 2026-09-21 08:50 MDT — the T0 the test asserts is ABSENT. The test
+    # passed only because its assertions were negative and its constant was not what the
+    # comment said. Correcting the digit to match the old comment would have turned it red.
+    EPOCH = 1789000200
+    EPOCH_STAMP = "2026-09-09 18:30 MDT"
+
     def test_source_date_epoch_overrides_continuity(self, run, clock, doc, monkeypatch):
         """Precedence. An operator who asked for a specific epoch means it, and a stale
-        output file must not win over an explicit reproducibility request."""
-        monkeypatch.setenv("SOURCE_DATE_EPOCH", "1789000200")   # 2026-09-21 14:50 UTC
+        output file must not win over an explicit reproducibility request.
+
+        Asserted POSITIVELY on the stamp the epoch produces. Two negative assertions could
+        be satisfied by any third value, including a bug that dropped the stamp entirely,
+        so they cannot establish that the epoch is what landed.
+        """
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", str(self.EPOCH))
         rc, _ = run()
         assert rc == 0
         page = (doc.parent / "a-doc.html").read_text(encoding="utf-8")
+        assert self.EPOCH_STAMP in page, (
+            "the page must carry the stamp SOURCE_DATE_EPOCH names, not merely some other one")
         assert self.T0 not in page and self.T1 not in page, (
             "SOURCE_DATE_EPOCH must beat both the clock and the committed stamp")
+
+    def test_an_empty_source_date_epoch_reaches_the_renderers_refusal(self, run, clock, doc,
+                                                                     monkeypatch):
+        """#72 cross-model review finding 3 — the publisher's half of one contract.
+
+        An empty `SOURCE_DATE_EPOCH` is MALFORMED, not absent. The continuity guard used to
+        read it as unset, so continuity ran, passed an explicit stamp, and the variable was
+        never parsed — an unchanged page exited 0 while a changed one failed at stage 1.
+        One environment, two verdicts, decided by something unrelated.
+
+        The guard now asks `is not None`, so continuity stands aside and the renderer's own
+        refusal is what the caller hears. `test_render_reproducible.py` pins the other half.
+
+        **The first `run()` is load-bearing and this test is worthless without it.** Written
+        without it, the empty epoch refuses in the very first dry-run render — before any
+        output file exists, so `previous is None` and the guard is never consulted. That
+        version passed under BOTH readings of the guard and pinned nothing. Caught by
+        deliberately reverting the guard and finding the test still green.
+
+        So: publish once cleanly, which writes and commits the page. Only then is there a
+        snapshot for continuity to reach for, and only then does the guard decide anything.
+        """
+        rc, _ = run()
+        assert rc == 0, "the setup publish must succeed, or the real assertion is untested"
+
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", "")
+        rc, _ = run()
+        assert rc == code(1), (
+            f"an empty epoch must refuse at stage 1 even when continuity COULD have hidden "
+            f"it by supplying an explicit stamp, got {rc}")
+
+    # WHERE THE BYTE-EQUALITY INVARIANT IS PINNED, and why there is no extra test here.
+    #
+    # Cross-model review finding 2 established that continuity narrows what a publish catches:
+    # a hand-edited STAMP now reproduces and verifies clean, where before #72 the
+    # unconditional restamp made every hand edit fail stage 4. That is bounded and recorded in
+    # `render()`'s docstring, with the review's proposed remedy measured and REJECTED — once
+    # the falsified page is committed, HEAD holds the same bytes, so recovering the stamp from
+    # HEAD returns the same false stamp and changes nothing.
+    #
+    # A test was written for the surviving half and then DELETED, because measuring it showed
+    # it proved nothing. Replacing `candidate == previous` with `if True` left it green: the
+    # renderer always writes from the markdown, so a hand-edited body never survives a render
+    # under either rule, and the assertion could not tell them apart. That is exactly the
+    # defect finding 6 caught elsewhere in this class, and shipping it would have claimed
+    # coverage that did not exist.
+    #
+    # `test_a_changed_title_still_gets_a_fresh_stamp` above IS the gate: the same `if True`
+    # mutation turns it red, because a changed render that kept the old stamp is precisely
+    # what byte equality exists to refuse.

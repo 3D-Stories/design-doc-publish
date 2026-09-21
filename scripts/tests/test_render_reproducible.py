@@ -130,3 +130,56 @@ def test_the_stamp_still_satisfies_the_lint_gate(frozen, monkeypatch):
     """
     monkeypatch.setenv("SOURCE_DATE_EPOCH", str(EPOCH))
     assert render.lint.check_stamp(_render()) == []
+
+
+def test_an_empty_source_date_epoch_is_malformed_not_unset(frozen, monkeypatch):
+    """#72 cross-model review finding 3, pinned as the canonical reading.
+
+    `SOURCE_DATE_EPOCH=` — an empty export, which is what CI templating produces when the
+    variable it interpolates is itself unset — is MALFORMED here, not absent. The publisher's
+    continuity guard was written as a truthiness test and disagreed, so one environment gave
+    two verdicts depending on whether the page had changed. `publish_doc.py` now asks
+    `is not None`, which is this reading. Both sides are pinned so they cannot drift apart:
+    this test owns the renderer's half, `test_publish_doc.py` owns the publisher's.
+    """
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "")
+    with pytest.raises(ValueError) as e:
+        _render()
+    assert "SOURCE_DATE_EPOCH" in str(e.value)
+
+
+def test_the_cli_refuses_a_malformed_epoch_in_one_line_never_a_traceback(tmp_path,
+                                                                        monkeypatch):
+    """#72 cross-model review finding 4.
+
+    Refusing is right. A stack trace is not a refusal: every other failure in `main` is one
+    legible line and exit 2, and a stranger reading a traceback cannot tell a bad export from
+    a broken install. Measured before the fix: `SOURCE_DATE_EPOCH=oops render-doc …` printed
+    a `ValueError` traceback and exited 1, on a command that worked before #72.
+    """
+    md = tmp_path / "a.md"
+    md.write_text("# A page\n\nSome prose.\n", encoding="utf-8")
+    out = tmp_path / "a.html"
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "oops")
+
+    rc = render.main(["--md", str(md), "--out", str(out), "--title", "A page"])
+
+    assert rc == 2, "a malformed epoch is a legible refusal, exit 2, like every other here"
+    assert not out.exists(), "nothing may be written when the stamp could not be resolved"
+
+
+def test_the_cli_still_renders_with_a_good_epoch(tmp_path, monkeypatch):
+    """The positive path for the guard above, because a refusal test proves only half.
+
+    A guard that refused everything would pass the test above and ship a renderer that cannot
+    render. This is the control that catches it.
+    """
+    md = tmp_path / "a.md"
+    md.write_text("# A page\n\nSome prose.\n", encoding="utf-8")
+    out = tmp_path / "a.html"
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", str(EPOCH))
+
+    rc = render.main(["--md", str(md), "--out", str(out), "--title", "A page"])
+
+    assert rc == 0
+    assert "2026-09-21 08:50 MDT" in out.read_text(encoding="utf-8")
