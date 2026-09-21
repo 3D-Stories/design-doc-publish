@@ -1394,7 +1394,19 @@ def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
                             "like 'tsets' for 'tests' does this), or omit the flag.")
     try:
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(page, encoding="utf-8")
+        # `newline=""` disables platform translation, so what lands on disk is exactly the
+        # bytes of `page`. Found in self-review of #72 rather than by a test, because this
+        # host cannot show it: on Linux the default is already a no-op.
+        #
+        # It is load-bearing for stamp continuity above, which compares a render against the
+        # RAW bytes of the previous file. Under the default, a publish on Windows would write
+        # CRLF, the next read would return CRLF bytes, no LF candidate could ever equal them,
+        # and continuity would silently never engage — degrading to the clock with nothing
+        # said. It fails safe and it fails quiet, which is the worst pairing to leave in.
+        #
+        # #56 recorded the CRLF write itself as pre-existing and out of its scope. This makes
+        # the write byte-exact, which that note wanted and which this feature needs.
+        out_path.write_text(page, encoding="utf-8", newline="")
     except OSError as e:
         raise StageError(1, f"could not write {out_path}: {e}") from e
     return page
