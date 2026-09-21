@@ -100,9 +100,10 @@ def test_each_committed_page_is_byte_identical_to_a_fresh_render(key):
     assert page.exists(), f"no committed page for {key}"
     assert page.read_bytes() == render_bytes(key), (
         f"{key}.html is stale against its own markdown — regenerate with "
-        f"scripts/tests/regen_docs_pages.py and commit the result. If the page was just "
-        f"published, bump its `stamp` in regen_docs_pages.py first: publish_doc.py re-renders "
-        f"with the current wall clock and has no --generated-at flag.")
+        f"scripts/tests/regen_docs_pages.py and commit the result. Bump its `stamp` in "
+        f"regen_docs_pages.py first ONLY if the page's content changed: since #72, "
+        f"publish_doc.py reuses the stamp already in the page when the re-render reproduces "
+        f"it, so a publish no longer restamps a page nobody edited.")
 
 
 @pytest.mark.parametrize("key", KEYS)

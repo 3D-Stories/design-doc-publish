@@ -1666,3 +1666,126 @@ class TestTheEnvFileIsActuallyWiredIn:
         `load_env()` bare would re-resolve it and break that promise silently."""
         src = (SCRIPTS / "publish_doc.py").read_text(encoding="utf-8")
         assert "CONFIG.load_env(config_path=config_path)" in src
+
+
+class TestStampContinuityAcrossAClockMinute:
+    """#72 defect 3. Publishing must survive the minute boundary between two renders.
+
+    The documented workflow renders with `--dry-run`, commits the pair, pushes, then
+    publishes (`publish_doc.py` module docstring). Publishing RE-RENDERS at stage 1, and the
+    renderer stamped every page from the wall clock, so the second render differed from the
+    committed bytes by its timestamp alone. Stage 4 compares git blob ids, which cannot be
+    normalized, so it refused:
+
+        <path>.html in the working tree is not what HEAD holds ... Commit the change first.
+
+    Measured 2026-09-21 against 5.2.0: the only difference was `08:50` versus `08:52`. So a
+    publish succeeded only when both renders fell inside one clock minute.
+
+    **The existing suite could not catch this, and that is the point of the fake clock
+    below.** The `run` fixture at line 255 renders, commits and publishes within
+    milliseconds, so every publish test here passes for the same reason the defect hid: the
+    machine is fast. A test that does not deliberately advance the clock is not exercising
+    the boundary, it is getting lucky.
+
+    The fix is STAMP CONTINUITY, and it lives in the publisher rather than the renderer:
+    before overwriting the output file, snapshot its bytes, extract the stamp the renderer
+    itself wrote, and re-render with that stamp. Reuse it only when the result is byte
+    identical to the snapshot. The invariant is deliberately narrow — *reuse a prior stamp
+    only when rendering all current inputs with that stamp reproduces the candidate exactly*
+    — because a differing render does NOT prove the markdown changed. The title, subtitle,
+    template, telemetry, VDL pack and renderer version all change output too.
+    """
+
+    T0 = "2026-09-21 08:50 MDT"
+    T1 = "2026-09-21 08:52 MDT"
+
+    @pytest.fixture
+    def clock(self, monkeypatch):
+        """A clock that reads T0 once, then T1 forever.
+
+        That is exactly the real sequence: the dry-run render stamps T0, the operator
+        commits, and the publish render two minutes later would stamp T1. `_mountain_now`
+        is the single seam every clock-sourced stamp passes through, so patching it pins
+        the boundary without pretending to patch time itself.
+        """
+        import render as _render
+        calls = {"n": 0}
+
+        def fake():
+            calls["n"] += 1
+            return self.T0 if calls["n"] == 1 else self.T1
+
+        monkeypatch.setattr(_render, "_mountain_now", fake)
+        monkeypatch.setattr(publish_doc.RENDER, "_mountain_now", fake, raising=False)
+        return calls
+
+    def test_a_publish_two_minutes_after_the_render_succeeds(self, run, clock, doc):
+        """The acceptance case. Render at 08:50, commit, publish at 08:52, exit 0."""
+        rc, h = run()
+        assert rc == 0, (
+            "a publish must not depend on landing in the same clock minute as the render")
+        assert h.published is not None, (
+            "exit 0 must not be reached by skipping the publish — that would be vacuous")
+
+    def test_the_published_page_carries_the_committed_stamp(self, run, clock, doc):
+        """Continuity must reuse the OLD stamp, not quietly restamp and republish.
+
+        Asserted on the bytes the fake harness received, because those are the bytes a
+        reader would see. A page that published the 08:52 stamp did not have continuity —
+        it had a race it happened to win.
+        """
+        rc, h = run()
+        assert rc == 0
+        page = (doc.parent / "a-doc.html").read_text(encoding="utf-8")
+        assert self.T0 in page, "the committed stamp must be the one that survives"
+        assert self.T1 not in page, "the publish render must not have restamped the page"
+
+    def test_an_unchanged_republish_is_byte_stable(self, run, clock, doc):
+        """Running the same publish twice must not produce a new page each time.
+
+        Before the fix, every re-publish rewrote the tracked `.html` with a fresh timestamp,
+        so a careful operator saw an unexplained diff after a command that changed nothing.
+        """
+        rc, _ = run()
+        assert rc == 0
+        first = (doc.parent / "a-doc.html").read_bytes()
+        rc, _ = run()
+        assert rc == 0
+        assert (doc.parent / "a-doc.html").read_bytes() == first
+
+    def test_a_changed_title_still_gets_a_fresh_stamp(self, run, clock, doc):
+        """The control, and the reason the invariant is about the RENDER and not the source.
+
+        The title comes from `--title`, never from the markdown. Change it and the page
+        genuinely changed, so the old stamp must NOT be reused. A continuity rule keyed on
+        "did the markdown change" would wrongly keep it.
+        """
+        rc, _ = run()
+        assert rc == 0
+        assert self.T0 in (doc.parent / "a-doc.html").read_text(encoding="utf-8")
+
+        rc, _ = run("--title", "A Different Title")
+        page = (doc.parent / "a-doc.html").read_text(encoding="utf-8")
+        assert self.T1 in page, (
+            "a page whose render changed must be restamped, not frozen at the old stamp")
+
+    def test_a_first_publish_with_no_prior_page_uses_the_clock(self, run, clock, doc,
+                                                              tmp_path):
+        """There is nothing to be continuous WITH on a first render, and that is not an
+        error. It must fall through to the clock rather than refuse."""
+        out = tmp_path / "brand-new.html"
+        assert not out.exists()
+        rc, _ = run("--dry-run", "--out", str(out))
+        assert rc == 0
+        assert self.T0 in out.read_text(encoding="utf-8")
+
+    def test_source_date_epoch_overrides_continuity(self, run, clock, doc, monkeypatch):
+        """Precedence. An operator who asked for a specific epoch means it, and a stale
+        output file must not win over an explicit reproducibility request."""
+        monkeypatch.setenv("SOURCE_DATE_EPOCH", "1789000200")   # 2026-09-21 14:50 UTC
+        rc, _ = run()
+        assert rc == 0
+        page = (doc.parent / "a-doc.html").read_text(encoding="utf-8")
+        assert self.T0 not in page and self.T1 not in page, (
+            "SOURCE_DATE_EPOCH must beat both the clock and the committed stamp")

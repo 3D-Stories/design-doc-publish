@@ -12,7 +12,15 @@ the verdict.
     python3 publish_doc.py --md docs/planning/x.md --project herdr-dashboard \\
                            --type design --ref 81 --title "#81 The Design"
 
-**PUBLISH-BEFORE-MERGE is the thing to understand first (#36).** The doc harness never
+**COMMITTING IS PUBLISHING, and that is the thing to understand first (#72).** Owner
+decision 2026-08-24, superseding the 2026-07-24 Vercel decision: the doc harness serves any
+committed ``docs/`` html straight from GitHub, at a conventional hostname, behind Cloudflare
+Access. Merge the pull request and the page is up. **Publishing is OPTIONAL** — this script
+PINS a page to a commit and VERIFIES it live, which is a guarantee on top of that, not the
+thing that makes it public. With no ``DOC_HARNESS_CONTROL_URL`` it renders, lints, says so
+and exits 0. ``--publish`` turns that into a requirement, and then a missing harness fails.
+
+**PUBLISH-BEFORE-MERGE is how the optional half works (#36).** The doc harness never
 receives rendered bytes. It takes a manifest naming a repo, a full 40-hex commit and, per
 asset, a repo path and a blob id — then fetches every blob FROM GITHUB itself. So the page
 must be committed and pushed BEFORE it is published, and the publish pins that commit. The
@@ -23,14 +31,21 @@ One consequence is a gift: because the harness serves the COMMITTED bytes, stage
 equality also proves the render matches the commit. "Rendered but forgot to commit" becomes
 a caught failure rather than a stale page nobody notices.
 
+**That same gift made the render's own clock load-bearing (#72).** Stage 1 re-renders, and
+the renderer stamped every page from the wall clock, so a publish two minutes after the
+committed render produced a different blob and stage 4 refused. Stage 1 now reuses the stamp
+already in the output file when re-rendering with it reproduces those bytes exactly, and
+``SOURCE_DATE_EPOCH`` overrides both. See ``render()``.
+
 Six stages, each able to refuse (exit ``EXIT_BASE + stage``):
 
     1 render   2 name   3 LINT   4 provenance   5 publish   6 verify
 
 Two exits are NOT stage failures, and they sit above the 11-17 block so a caller can tell
-them apart: **25** means ``DOC_HARNESS_CONTROL_URL`` is unset and nothing was published,
-**26** means the page published and origin-verified while the edge half SKIPPED. 26 is not
-a pass.
+them apart: **25** means ``--publish`` was given while ``DOC_HARNESS_CONTROL_URL`` is unset,
+so a REQUESTED publish could not run, **26** means the page published and origin-verified
+while the edge half SKIPPED. 26 is not a pass. Without ``--publish`` that same unset variable
+is exit 0 and a printed explanation, never 25.
 
 **The gate runs BEFORE the publish, and that is a correction to the issue's own order.**
 The issue lists deploy -> lint -> verify, but AC4 requires a lint failure to leave
@@ -1219,6 +1234,32 @@ def _check_paths(md_path: Path, out_path: Path) -> None:
                             f"would overwrite the source with its own rendering")
 
 
+def _previous_page_bytes(out_path: Path) -> bytes | None:
+    """The bytes already at `out_path`, or `None` when there is nothing usable there (#72).
+
+    The snapshot stamp continuity compares against. Read as RAW BYTES, because the whole
+    question is byte identity and a text read normalizes newlines.
+
+    **Every failure here is `None`, never a refusal.** A first render has no previous page,
+    and that is the normal state rather than an error. A file that is unreadable, or is not
+    valid UTF-8, is equally something this cannot speak for. In all of those the caller
+    stamps from the clock, which is always safe and is what happened before #72 existed.
+
+    Call it only AFTER `_check_paths`, which is what establishes that `out_path` is not a
+    symlink. This function deliberately does not re-litigate that: one home for the path
+    rules, and a second copy would be the one that drifts.
+    """
+    try:
+        raw = out_path.read_bytes()
+    except OSError:
+        return None
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return raw
+
+
 def load_telemetry(path: Path | None) -> dict | None:
     """#152. The run-telemetry block, read from a JSON file.
 
@@ -1259,15 +1300,79 @@ def load_telemetry(path: Path | None) -> dict | None:
 def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
            style: str, doc_id: str | None, vdl: dict | None = None,
            telemetry: dict | None = None, section_chips: bool = True) -> str:
-    """Render to the committed `.html` and return the same string the gate will read."""
+    """Render to the committed `.html` and return the same string the gate will read.
+
+    **STAMP CONTINUITY (#72), and why it is here rather than in the renderer.** This function
+    re-renders a page that is usually ALREADY COMMITTED, because the documented workflow is
+    render with ``--dry-run``, commit the pair, push, publish. The renderer stamped every
+    page from the wall clock, so the second render differed from the committed bytes by its
+    timestamp alone — and stage 4 compares git blob ids, which cannot be normalized. Measured
+    2026-09-21 against 5.2.0: `08:50` versus `08:52`, nothing else, and a refused publish.
+    Publishing therefore worked only when both renders fell inside one clock minute.
+
+    So before overwriting anything, snapshot the existing output bytes, recover the stamp the
+    renderer itself wrote into them, and re-render with that stamp. The invariant is
+    deliberately narrow:
+
+        Reuse a prior stamp only when rendering all CURRENT inputs with that stamp
+        reproduces the snapshot exactly.
+
+    **The obvious weaker rule is wrong, and a probe proved it.** "Reuse unless the markdown
+    changed" fails in both directions: the title, subtitle, template, telemetry, VDL pack and
+    renderer version all change output without touching the markdown, and a line-ending
+    change touches the markdown without changing output. Byte equality against the snapshot
+    is the only test that answers the question actually being asked.
+
+    **The candidate is the output FILE, not `HEAD`.** Reading git here would break the dry
+    run's documented promise to perform no git at all, and it would make rendering require a
+    repository. Nothing is trusted because it is on disk: an uncommitted page that reproduces
+    still faces the unchanged stage-4 blob check, which refuses it.
+
+    **The residual, named rather than discovered later.** The stamp now means *this rendered
+    artifact last changed then*, which is very slightly weaker than *this document last
+    changed then*. Change only a referenced image and the HTML is identical, so the page keeps
+    its old stamp while the picture on it is new. Minute precision costs a little the same way:
+    two real changes inside one minute share a stamp. Both are narrower than the defect they
+    replace, which restamped every page on every run whether or not anything had changed. An
+    operator who wants a fresh stamp anyway exports `SOURCE_DATE_EPOCH`.
+
+    `render_artifact` stays independent of the filesystem and of git. Continuity is file
+    orchestration, which is this function's job. `SOURCE_DATE_EPOCH` is the separate,
+    explicit reproducibility mechanism and wins over the snapshot.
+    """
     _check_paths(md_path, out_path)
     try:
         markdown = md_path.read_text(encoding="utf-8")
     except OSError as e:
         raise StageError(1, f"could not read {md_path}: {e}") from e
-    page = RENDER.render_artifact(markdown, title=title, subtitle=subtitle,
-                                  style=style, doc_id=doc_id, vdl=vdl,
-                                  telemetry=telemetry, section_chips=section_chips)
+
+    def _render(stamp: str | None):
+        try:
+            return RENDER.render_artifact(markdown, title=title, subtitle=subtitle,
+                                          style=style, doc_id=doc_id, vdl=vdl,
+                                          telemetry=telemetry, section_chips=section_chips,
+                                          generated_at=stamp)
+        except ValueError as e:
+            # `SOURCE_DATE_EPOCH` was set and unusable. The renderer refuses rather than
+            # falling back to the clock, and a legible stage-1 refusal is what that must
+            # look like from the CLI — never a traceback (#9 AC5).
+            raise StageError(1, str(e)) from e
+
+    page = None
+    previous = _previous_page_bytes(out_path)
+    if previous is not None and not (os.environ.get("SOURCE_DATE_EPOCH") or "").strip():
+        stamp = _LINT.stamp_of(previous.decode("utf-8"))
+        if stamp is not None:
+            candidate = _render(stamp)
+            # RAW BYTES on both sides, and that is not pedantry. `git` runs with `text=True`
+            # elsewhere in this file, and newline normalization is exactly how a comparison
+            # like this reports a false equality — `scripts/tests/regen_docs_pages.py:302`
+            # documents that trap. A page that is only equal after normalization is a
+            # different blob, which is the thing stage 4 will refuse.
+            if candidate.encode("utf-8") == previous:
+                page = candidate
+    if page is None:
+        page = _render(None)
     # Cross-model review, and it caught my own claim being overstated: `load_telemetry` validated
     # only JSON shape, so a typoed record like `{"tsets": {...}}` published happily and rendered
     # "telemetry unavailable" — a successful exit whose figures were discarded, from a function
@@ -1589,8 +1694,14 @@ def _title_of(body: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="publish_doc.py",
-        description="Render, lint, deploy and verify one design doc. The exit code is "
-                    "the verdict; no stage is skippable.")
+        description="Render and lint one design doc, then — when a doc harness is "
+                    "configured — pin it to a commit and verify it live. The exit code is "
+                    "the verdict. COMMITTING the .md and .html is what publishes the page: "
+                    "the harness serves the committed bytes straight from GitHub, so the "
+                    "publish stages are an optional pin-and-verify step. With no "
+                    "DOC_HARNESS_CONTROL_URL this renders, lints and exits 0. Pass "
+                    "--publish to require the publish and fail when it cannot run. No "
+                    "stage inside a run is skippable.")
     ap.add_argument("--md", required=True, help="the committed markdown source")
     ap.add_argument("--project", required=True,
                     help="the rawgentic project this doc belongs to, or the literal "
@@ -1613,6 +1724,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="stable identity for a uat page (its localStorage namespace)")
     ap.add_argument("--dry-run", action="store_true",
                     help="render, name and lint, then stop — no network call at all")
+    ap.add_argument("--publish", action="store_true",
+                    help="REQUIRE the pin-and-verify publish. Without it, an unset "
+                         "DOC_HARNESS_CONTROL_URL means 'not published, and that is fine' "
+                         "— exit 0, because committing the page is what publishes it. With "
+                         "it, an unset control URL is a failure (exit 25) rather than a "
+                         "step that quietly did not happen. A configured harness publishes "
+                         "either way, so this flag adds a guarantee and never removes one.")
     # #151. `--allow-prose` named ONE check honestly until #130 put a second behind it: "this
     # page carries components, but not the ones its style opens with" is not a statement about
     # prose. The old name is kept as a working ALIAS, not deprecated with a warning — it appears
@@ -1741,6 +1859,43 @@ def main(argv=None) -> int:
             # performs no git at all, so there is no fetch to skip.
             print(f"publish_doc: --dry-run, stopping before the first network call "
                   f"({len(staged)} asset(s) would ship)")
+            return 0
+
+        # #72. **COMMITTING IS PUBLISHING.** Owner decision 2026-08-24, superseding the
+        # 2026-07-24 Vercel decision: the doc harness serves any committed `docs/` html
+        # straight from GitHub, at a conventional hostname, behind Cloudflare Access. Merging
+        # the pull request is what puts the page up. Everything below is a pin-and-verify
+        # step on top of that, and it is OPTIONAL.
+        #
+        # `setup.py --check` already said so — "Publishing needs DOC_HARNESS_CONTROL_URL and
+        # DOC_HARNESS_PUBLISH_TOKEN in the environment. Rendering alone needs neither" —
+        # while this file exited 25 on the same state. A session read the two, believed the
+        # harsher one, and reported a page as not properly published when it was already
+        # live by convention.
+        #
+        # **The branch sits HERE, not at stage 5 where the variable is read.** Stage 4 runs
+        # `git fetch` inside `assert_head_reachable`, so deciding later would still demand a
+        # repository, a remote and a pushed HEAD before it could say "there is nothing to
+        # publish". It sits AFTER the lint and asset gates on purpose: those are the checks
+        # worth running on a page whether or not it will be pinned.
+        #
+        # **A configured harness still publishes without the flag**, which is why this reads
+        # the variable rather than requiring `--publish` outright. Making the flag mandatory
+        # would turn every existing caller into a run that renders, exits 0 and publishes
+        # nothing — a silent no-op in place of a loud refusal, which is the same family of
+        # defect as the one this fixes, pointing the other way.
+        if not (os.environ.get("DOC_HARNESS_CONTROL_URL") or "").strip():
+            if args.publish:
+                # The caller REQUIRED a publish, so this is a failure. Raised by
+                # `control_base` rather than restated here: it is the authority on this
+                # variable, and a second copy of its message is the copy that drifts.
+                control_base(os.environ)
+            print(f"publish_doc: rendered and linted {out_path} — NOT published to a doc "
+                  f"harness, and that is fine. DOC_HARNESS_CONTROL_URL is unset, and the "
+                  f"harness serves the bytes you COMMIT. Commit the .md and .html together, "
+                  f"open the PR, and the page goes up when it merges. Pass --publish to "
+                  f"require the pin-and-verify run instead, or run setup.py --check to see "
+                  f"what publishing needs.")
             return 0
 
         stage = 4
