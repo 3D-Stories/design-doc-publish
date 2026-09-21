@@ -232,8 +232,11 @@ python3 "$DDP/scripts/publish_doc.py" --md docs/planning/my-doc.md \
   --title "My design doc" --project my-project --type design --ref 42
 ```
 
-Render, lint, deploy and verify, in one command. `--dry-run` lints without publishing. The exit
-code is the verdict.
+Render and lint, then — only when a doc harness is configured — pin the page to a commit and verify
+it live. The exit code is the verdict. **You do not need that second half**: committing the `.md`
+and the `.html` is what publishes the page, so with no `DOC_HARNESS_*` set this renders, lints, says
+it did not publish, and exits **0**. `--dry-run` stops before any network call. `--publish` demands
+the pin-and-verify run and fails when it cannot happen.
 
 ## Prerequisites
 
