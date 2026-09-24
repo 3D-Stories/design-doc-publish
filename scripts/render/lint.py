@@ -24,6 +24,7 @@ import html as _html          # aliased: `html` is this module's parameter name 
 import re
 from html.parser import HTMLParser as _HTMLParser
 from pathlib import Path
+from urllib.parse import unquote
 
 # --- 1. the Edmonton stamp ----------------------------------------------------------
 
@@ -373,6 +374,36 @@ def internal_references(html: str) -> list[str]:
 
     seen: set[str] = set()
     return [u for u in found if not (u in seen or seen.add(u))]
+
+
+# A reference is only shippable if it names one of these. Step 11 found the real hole: with
+# `is_file()` as the only content gate, `![x](.env)` published the file's bytes to a public URL —
+# measured, `AWS_SECRET=hunter2` and a `credentials.json` both shipped. Containment stops a
+# reference LEAVING the document's directory; it says nothing about what sits inside it, and these
+# docs are routinely generated rather than hand-written.
+#
+# An extension allowlist and not an `assets/` subtree rule, deliberately: the one real page in this
+# repo that carries assets references `./shots/*.png`, so a subtree rule would refuse the very
+# document this issue fixes. `.svg` is included because the engine needs it and an `<img src>` is a
+# script-inert context for SVG — but note it is the one entry here that is not inert if a reader
+# navigates to the file directly.
+#
+# It lives HERE, beside `internal_references`, because two consumers must agree on it: the
+# publisher ships exactly these references, and the harness serves exactly these references from
+# a page nobody published. Two copies would be two answers to "which of this page's files are
+# public", and the one that drifted would be the one nobody reviewed.
+ASSET_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".svg",
+})
+
+
+def asset_target(ref: str) -> str:
+    """The file a reference names: query and fragment dropped, percent-decoding undone.
+
+    `d.png?v=2` and `my%20diagram.png` are references to `d.png` and `my diagram.png`. A cache
+    buster is not part of the filename, and the deploy directory holds real names.
+    """
+    return unquote(ref.split("#", 1)[0].split("?", 1)[0])
 
 
 # --- 4. AA contrast ------------------------------------------------------------------

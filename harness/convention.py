@@ -11,19 +11,24 @@ edited, and a link shared yesterday would stop working today.
 """
 from __future__ import annotations
 
+import collections
 import concurrent.futures
 import dataclasses
 import datetime
 import hashlib
+import importlib.util
 import math
+import posixpath
 import re
 import threading
 import time
+from pathlib import Path
 
 from .github import (BudgetExhausted, DeadlineExceeded, GitHubError, RateLimited,
                      Unavailable)
 from .manifest import Asset, content_type_for
 from .registry import ActiveDeployment
+from .routing import PathError, canonical_request_path
 
 # A date-SHAPED prefix is only treated as a date when it is a real one. `9999-99-99-x` is a
 # document called `9999-99-99-x`, not a document dated in the year 9999.
@@ -98,21 +103,184 @@ class TreeTruncated(Exception):
     """GitHub truncated the tree, so absence cannot be proven."""
 
 
+_LINT = None
+_LINT_LOCK = threading.Lock()
+
+
+def _reference_reader():
+    """`scripts/render/lint.py`, the module that decides which files a page FETCHES.
+
+    The publisher ships exactly what `internal_references` returns and `ASSET_SUFFIXES` admits.
+    A page nobody published has to serve by the same rule, or the two paths would disagree about
+    which of a document's files are public. Loaded by exact path and contained, the way
+    `index/build_index.py` loads its siblings: a symlinked target is EXECUTED before any check
+    can reject it, so the check comes first. The Dockerfile copies this one file, and
+    `test_every_file_loaded_at_runtime_is_copied_into_the_image` derives that requirement from
+    the two lines below.
+    """
+    global _LINT
+    with _LINT_LOCK:
+        if _LINT is None:
+            root = Path(__file__).resolve().parent.parent / "scripts/render"
+            path = root / "lint.py"
+            real = path.resolve()
+            if not real.is_file() or not real.is_relative_to(root):
+                raise RuntimeError(f"refusing to load {path}: resolves to {real}, outside {root}")
+            spec = importlib.util.spec_from_file_location("_harness_reference_reader", real)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            _LINT = module
+    return _LINT
+
+
+def page_images(entries, page_path: str, html: bytes) -> dict:
+    """`{url path: TreeEntry}` for every image this page references. THE ALLOWLIST.
+
+    Found live on 2026-09-24: a convention page's deployment declared `/index.html` alone, so
+    every `<img>` on every unpublished page answered 404. The rule here is the publisher's own
+    (`stage_assets`), applied to the committed tree instead of a working directory:
+
+    * only a reference the page itself makes, as `internal_references` reads it;
+    * only an image suffix from `ASSET_SUFFIXES` — containment alone would have served `.env`;
+    * never root-relative, and never outside the page's own directory, even through `..`;
+    * only a regular file: a symlink's target is chosen by the repository, not by this rule.
+
+    A file that is in the tree but not referenced is not servable, however close it sits.
+    """
+    reader = _reference_reader()
+    base = posixpath.dirname(page_path)
+    files = {e.path: e for e in entries
+             if e.type == "blob" and e.mode in _REGULAR_FILE_MODES}
+    text = html.decode("utf-8", errors="replace")
+    found = {}
+    for ref in reader.internal_references(text):
+        rel = reader.asset_target(ref)
+        if not rel or rel.startswith("/") or "\\" in rel:
+            continue
+        if posixpath.splitext(rel)[1].lower() not in reader.ASSET_SUFFIXES:
+            continue
+        rel = posixpath.normpath(rel)
+        if rel == ".." or rel.startswith("../"):
+            continue
+        entry = files.get(posixpath.join(base, rel) if base else rel)
+        if entry is None:
+            continue
+        try:
+            # The browser resolves the reference against `/`, where the page is served, so the
+            # URL is the reference itself. Keyed on the DECODED path, which is what WSGI hands
+            # `serve` and what `canonical_request_path` returns.
+            url = canonical_request_path("/" + rel)
+        except PathError:
+            continue
+        found[url] = entry
+    return found
+
+
+class _Flights:
+    """At most ONE call per key in flight. Every concurrent caller receives that call's outcome.
+
+    A cold page load sends the page and all of its images at once. Without this, each of those
+    requests resolved the same commit on its own, and each image was fetched once per waiter.
+    An exception reaches every waiter unchanged, so each keeps its own typed failure.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._inflight: dict = {}
+
+    def run(self, key, work, budget):
+        with self._lock:
+            future = self._inflight.get(key)
+            leader = future is None
+            if leader:
+                future = self._inflight[key] = concurrent.futures.Future()
+        if not leader:
+            try:
+                return future.result(timeout=max(0.0, budget.remaining()))
+            except concurrent.futures.TimeoutError:
+                raise DeadlineExceeded(
+                    "this request's deadline passed while another request was resolving the "
+                    "same document") from None
+        try:
+            result = work()
+        except BaseException as exc:
+            future.set_exception(exc)
+            raise
+        else:
+            future.set_result(result)
+            return result
+        finally:
+            # After the outcome is published, never before: a caller arriving between the two
+            # would find no flight and start a second call. `work` stores its result in the
+            # resolver's cache before returning, so a caller arriving after this finds that.
+            with self._lock:
+                self._inflight.pop(key, None)
+
+
+@dataclasses.dataclass(frozen=True)
+class _Page:
+    """One document at one commit. Immutable, because a commit's tree and blobs are."""
+
+    page: Asset
+    images: dict
+
+
+class _Bounded:
+    """A small LRU map. Hostnames are chosen by whoever sends them, so nothing here may grow for
+    ever. Only RESOLVED documents are stored, which already needs a real repository and a real
+    file, but the bound is what makes that argument unnecessary."""
+
+    def __init__(self, size: int):
+        self._size = size
+        self._items: collections.OrderedDict = collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            value = self._items.get(key)
+            if value is not None:
+                self._items.move_to_end(key)
+            return value
+
+    def put(self, key, value) -> None:
+        with self._lock:
+            self._items[key] = value
+            self._items.move_to_end(key)
+            while len(self._items) > self._size:
+                self._items.popitem(last=False)
+
+
 class ConventionResolver:
     """Turns a hostname into a servable deployment, reading GitHub and nothing else.
 
     Three calls on a cold hostname and one cached list: the repository names, the ref pinned to
     a commit, that commit's whole tree, and the blob. The ref is pinned FIRST so the search and
     the fetch see one snapshot even if somebody pushes between them.
+
+    **Only the commit is read on every request.** The tree and the page are cached per
+    `(hostname, commit)`, and each image's digest per blob, because neither can change under a
+    fixed commit. Before 2026-09-24 every request — every image on the page — re-read the tree
+    and the whole HTML blob, about 3.7 seconds each at the origin. The commit stays per request
+    on purpose: it is what makes a push visible on the very next load, with no timer to wait on.
     """
 
-    def __init__(self, owner: str, source, *, repos_ttl: float = 300.0, now=time.time):
+    def __init__(self, owner: str, source, *, repos_ttl: float = 300.0, now=time.time,
+                 cache=None, max_pages: int = 256, max_digests: int = 4096):
         self._owner = owner
         self._source = source
         self._ttl = repos_ttl
         self._now = now
         self._repos: list[str] | None = None
         self._repos_at = 0.0
+        # Where fetched bytes go, so `serve` finds them instead of fetching them a second time.
+        # Optional: without it every lookup still resolves, it just costs one more fetch.
+        self._cache = cache
+        self._pages = _Bounded(max_pages)
+        self._digests = _Bounded(max_digests)
+        self._flights = _Flights()
+        # Loaded at construction, so a missing reference reader fails the BOOT, where a restart
+        # shows it, rather than the first reader's request, where it would be a bare 500.
+        _reference_reader()
 
     def repositories(self, budget) -> list[str]:
         """The owner's repository names, cached for `repos_ttl` seconds.
@@ -127,8 +295,13 @@ class ConventionResolver:
         return self._repos
 
     def resolve(self, label: str, budget, *, http_timeout: float = 20.0,
-                max_blob_bytes: int | None = None):
-        """An `ActiveDeployment` for `label`, or `None` when nothing answers to that name."""
+                max_blob_bytes: int | None = None, path: str | None = None):
+        """An `ActiveDeployment` for `label`, or `None` when nothing answers to that name.
+
+        The asset table holds `/index.html` and, when `path` names one of the page's own
+        images, that image. Only the requested one: its digest costs a fetch the first time, and
+        a page request must not wait for every picture on the page.
+        """
         split = split_label(label, self.repositories(budget))
         if split is None:
             # Checked BEFORE any repository call. A hostname is attacker-chosen, so resolving an
@@ -137,6 +310,39 @@ class ConventionResolver:
         date, repo, document = split
         full_repo = "%s/%s" % (self._owner, repo)
         commit = self._source.commit(full_repo, "HEAD", budget, http_timeout)
+        key = (label, commit)
+        page = self._pages.get(key) or self._flights.run(
+            ("page",) + key,
+            lambda: self._resolve_page(key, full_repo, commit, date, document, budget,
+                                       http_timeout, max_blob_bytes),
+            budget)
+        if page is None:
+            return None
+        assets = {"/index.html": page.page}
+        if path is not None:
+            try:
+                wanted = canonical_request_path(path)
+            except PathError:
+                wanted = None
+            entry = page.images.get(wanted)
+            if entry is not None:
+                assets[wanted] = self._image(full_repo, wanted, entry, budget, http_timeout,
+                                             max_blob_bytes)
+        # A convention-resolved document has NO deployment id, because nothing deployed it. Zero
+        # is the reserved value the serving path compares against for the `__deployment` pin, and
+        # a pinned request for a real id will simply not match it.
+        return ActiveDeployment(
+            deployment_id=0, name=label, repo=full_repo, commit_sha=commit,
+            entry_path="/index.html", title=document, project=repo,
+            purpose=None, published_at="", assets=assets)
+
+    def _resolve_page(self, key, full_repo, commit, date, document, budget, http_timeout,
+                      max_blob_bytes):
+        # Checked again INSIDE the flight: a caller that missed just before the previous flight
+        # finished becomes a leader of its own, and must find that result rather than refetch.
+        cached = self._pages.get(key)
+        if cached is not None:
+            return cached
         entries, truncated = self._source.tree(full_repo, commit, budget, http_timeout,
                                                recursive=True)
         if truncated:
@@ -148,16 +354,40 @@ class ConventionResolver:
         if found is None:
             return None
         data = self._source.blob(full_repo, found.blob_id, budget, http_timeout, max_blob_bytes)
-        asset = Asset(url_path="/index.html", repo_path=found.path, blob_id=found.blob_id,
-                      size=len(data), sha256=hashlib.sha256(data).hexdigest(),
-                      content_type=content_type_for("/index.html"))
-        # A convention-resolved document has NO deployment id, because nothing deployed it. Zero
-        # is the reserved value the serving path compares against for the `__deployment` pin, and
-        # a pinned request for a real id will simply not match it.
-        return ActiveDeployment(
-            deployment_id=0, name=label, repo=full_repo, commit_sha=commit,
-            entry_path="/index.html", title=document, project=repo,
-            purpose=None, published_at="", assets={"/index.html": asset})
+        sha256 = hashlib.sha256(data).hexdigest()
+        self._store(found.blob_id, data, sha256)
+        page = _Page(
+            page=Asset(url_path="/index.html", repo_path=found.path, blob_id=found.blob_id,
+                       size=len(data), sha256=sha256,
+                       content_type=content_type_for("/index.html")),
+            images=page_images(entries, found.path, data))
+        self._pages.put(key, page)
+        return page
+
+    def _image(self, full_repo, url, entry, budget, http_timeout, max_blob_bytes) -> Asset:
+        """The `Asset` for one referenced image. Its bytes are fetched once per blob, ever."""
+        def digest():
+            known = self._digests.get(entry.blob_id)
+            if known is not None:
+                return known
+            data = self._source.blob(full_repo, entry.blob_id, budget, http_timeout,
+                                     max_blob_bytes)
+            known = (len(data), hashlib.sha256(data).hexdigest())
+            self._store(entry.blob_id, data, known[1])
+            self._digests.put(entry.blob_id, known)
+            return known
+
+        size, sha256 = self._digests.get(entry.blob_id) or self._flights.run(
+            ("blob", entry.blob_id), digest, budget)
+        return Asset(url_path=url, repo_path=entry.path, blob_id=entry.blob_id, size=size,
+                     sha256=sha256, content_type=content_type_for(url))
+
+    def _store(self, blob_id: str, data: bytes, sha256: str) -> None:
+        if self._cache is not None:
+            # `put` hashes the bytes again and refuses a mismatch, which cannot happen here
+            # because the hash was just taken from these bytes. Its size bound still applies: a
+            # blob too large to cache is simply fetched again by `serve`, and still verified.
+            self._cache.put(blob_id, data, sha256)
 
 
 _MAX_DNS_LABEL = 63

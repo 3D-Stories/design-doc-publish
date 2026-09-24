@@ -95,7 +95,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from urllib.parse import unquote
 
 HERE = Path(__file__).resolve().parent
 INDEX_SCRIPT = HERE.parent / "index" / "build_index.py"
@@ -1618,29 +1617,11 @@ def gate(page: str, *, skip_component_checks: bool = False) -> None:
                             "nothing was deployed:\n  - " + "\n  - ".join(findings))
 
 
-# A reference is only shippable if it names one of these. Step 11 found the real hole: with
-# `is_file()` as the only content gate, `![x](.env)` published the file's bytes to a public URL —
-# measured, `AWS_SECRET=hunter2` and a `credentials.json` both shipped. Containment stops a
-# reference LEAVING the document's directory; it says nothing about what sits inside it, and these
-# docs are routinely generated rather than hand-written.
-#
-# An extension allowlist and not an `assets/` subtree rule, deliberately: the one real page in this
-# repo that carries assets references `./shots/*.png`, so a subtree rule would refuse the very
-# document this issue fixes. `.svg` is included because the engine needs it and an `<img src>` is a
-# script-inert context for SVG — but note it is the one entry here that is not inert if a reader
-# navigates to the file directly.
-_ASSET_SUFFIXES = frozenset({
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".avif", ".ico", ".svg",
-})
-
-
-def _asset_target(ref: str) -> str:
-    """The file a reference names: query and fragment dropped, percent-decoding undone.
-
-    `d.png?v=2` and `my%20diagram.png` are references to `d.png` and `my diagram.png`. A cache
-    buster is not part of the filename, and the deploy directory holds real names.
-    """
-    return unquote(ref.split("#", 1)[0].split("?", 1)[0])
+# Which references ship, and how a reference names its file. Both live in `render/lint.py` beside
+# `internal_references`, because the doc harness serves an UNPUBLISHED page's images by the same
+# rule and two copies of it would drift. The reasoning for the allowlist is kept there too.
+_ASSET_SUFFIXES = _LINT.ASSET_SUFFIXES
+_asset_target = _LINT.asset_target
 
 
 def stage_assets(page: str, base: Path, workdir: Path) -> list[str]:

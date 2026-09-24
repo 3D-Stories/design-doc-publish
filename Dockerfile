@@ -13,6 +13,9 @@ COPY index/ /app/index/
 # Named individually on purpose: the rest of `scripts/` is the publisher toolchain and its
 # test suite, and neither belongs in a serving container. Both modules are stdlib-only.
 COPY scripts/vdl_packs.py scripts/user_config.py /app/scripts/
+# The reference reader. A page nobody published serves its images by the publisher's own rule
+# for which files a page fetches, and that rule lives in this one file (harness/convention.py).
+COPY scripts/render/lint.py /app/scripts/render/
 
 # The service refuses to start without its two secrets, so there are no defaults here.
 ENV PYTHONUNBUFFERED=1 \
