@@ -146,6 +146,13 @@ def page_images(entries, page_path: str, html: bytes) -> dict:
     * only a regular file: a symlink's target is chosen by the repository, not by this rule.
 
     A file that is in the tree but not referenced is not servable, however close it sits.
+
+    **One deliberate difference from the publisher.** `stage_assets` REFUSES to publish a page
+    with a reference it cannot ship — a stylesheet, a script, a missing file — and here that
+    reference is simply skipped, so it answers 404. Refusing is not available: the file exists,
+    and serving it the moment it does is the point of convention (D38). The renderer inlines
+    every stylesheet and script, so a rendered page carries no such reference; a hand-written
+    page that does will show that hole here, where no gate runs (review finding 7).
     """
     reader = _reference_reader()
     base = posixpath.dirname(page_path)
@@ -384,10 +391,11 @@ class ConventionResolver:
 
     def _store(self, blob_id: str, data: bytes, sha256: str) -> None:
         if self._cache is not None:
-            # `put` hashes the bytes again and refuses a mismatch, which cannot happen here
-            # because the hash was just taken from these bytes. Its size bound still applies: a
-            # blob too large to cache is simply fetched again by `serve`, and still verified.
-            self._cache.put(blob_id, data, sha256)
+            # `admit`, never `put`: a full or read-only volume must not turn bytes already in
+            # hand into a 500, and must not stop the page being remembered either (review
+            # finding 1). Its size bound still applies: a blob too large to cache, or one that
+            # could not be written, is simply fetched again by `serve`, and still verified.
+            self._cache.admit(blob_id, data, sha256)
 
 
 _MAX_DNS_LABEL = 63

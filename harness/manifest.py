@@ -37,6 +37,13 @@ _CONTENT_TYPES = {
     "jpg": "image/jpeg",
     "jpeg": "image/jpeg",
     "webp": "image/webp",
+    # The three image suffixes `ASSET_SUFFIXES` (scripts/render/lint.py) admits that this table
+    # used to lack. Without them each was served as `application/octet-stream` under `nosniff`,
+    # which a browser refuses to render as an image. `test_every_allowed_suffix_is_served_as_an_
+    # image` keeps the two tables agreeing.
+    "gif": "image/gif",
+    "avif": "image/avif",
+    "ico": "image/x-icon",
     "woff2": "font/woff2",
     "json": "application/json",
     "txt": "text/plain; charset=utf-8",

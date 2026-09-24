@@ -63,8 +63,10 @@ FORBIDDEN = {
 def page_html(extra_refs=()) -> bytes:
     tags = [f'<p><img src="{FOLDER}/{n}.png" alt="{n}">' for n in NAMES]
     tags.append('<p><img src="shots/my%20shot.png?v=2" alt="spaced">')
-    # References the allowlist must NOT turn into servable paths.
-    tags += ['<img src="../secret.png">', '<img src="data.json">', '<img src="link.png">',
+    # References the allowlist must NOT turn into servable paths. `%2e%2e` is a dot-dot segment to
+    # a browser too, so it requests `/secret.png` exactly as `../` does.
+    tags += ['<img src="../secret.png">', '<img src="%2e%2e/secret.png">',
+             '<img src="data.json">', '<img src="link.png">',
              '<img src="/root.png">', '<img src="missing.png">']
     tags += list(extra_refs)
     return ("<!doctype html><title>gap</title>\n" + "\n".join(tags)).encode()
@@ -100,22 +102,38 @@ def blobs_for(page: bytes, images: dict) -> dict:
 
 class SlowSource(FakeGitHub):
     """Holds each tree and blob call open long enough for concurrent requests to overlap, and
-    records which blobs were asked for, so a refused path can be shown never to reach GitHub."""
+    records which blobs were asked for, so a refused path can be shown never to reach GitHub.
+
+    It keeps its OWN call counts, under a lock. `FakeGitHub`'s counters are a bare `+= 1`, which
+    is a read-modify-write, and eight threads released by one barrier are exactly the load that
+    could lose an increment and fail a correct build.
+    """
 
     def __init__(self, *a, delay=0.05, **kw):
         super().__init__(*a, **kw)
         self.delay = delay
         self.blob_ids = []
+        self.counts = {"commit": 0, "tree": 0, "blob": 0}
         self._record = threading.Lock()
+
+    def _count(self, kind):
+        with self._record:
+            self.counts[kind] += 1
+
+    def commit(self, *a, **kw):
+        self._count("commit")
+        return super().commit(*a, **kw)
 
     def tree(self, *a, **kw):
         time.sleep(self.delay)
+        self._count("tree")
         return super().tree(*a, **kw)
 
     def blob(self, repo, blob_id, *a, **kw):
         time.sleep(self.delay)
         with self._record:
             self.blob_ids.append(blob_id)
+            self.counts["blob"] += 1
         return super().blob(repo, blob_id, *a, **kw)
 
 
@@ -197,24 +215,24 @@ class TestEveryImageServes:
         # tree and the whole HTML blob, PER IMAGE. A cold load of this page was 24 GitHub calls
         # before one image could even be looked up.
         app, src = stack
-        trees, blobs, commits = src.tree_calls, src.blob_calls, src.commit_calls
+        before = dict(src.counts)
         paths = ["/"] + list(ALL_IMAGES)
         load_concurrently(app, paths)
-        assert src.tree_calls - trees == 1
-        assert src.blob_calls - blobs == 1 + len(ALL_IMAGES)
+        assert src.counts["tree"] - before["tree"] == 1
+        assert src.counts["blob"] - before["blob"] == 1 + len(ALL_IMAGES)
         # The commit is still read on EVERY request. That is what keeps a push visible at once,
         # and it is the one call per request this fix keeps on purpose.
-        assert src.commit_calls - commits == len(paths)
+        assert src.counts["commit"] - before["commit"] == len(paths)
 
     def test_a_second_load_of_the_same_commit_reads_no_tree_and_no_blob(self, stack):
         app, src = stack
         paths = ["/"] + list(ALL_IMAGES)
         load_concurrently(app, paths)
-        trees, blobs = src.tree_calls, src.blob_calls
+        before = dict(src.counts)
         for path in paths:
             cap, _ = call(app, HOST, path)
             assert cap["status"].startswith("200"), (path, cap["status"])
-        assert (src.tree_calls, src.blob_calls) == (trees, blobs)
+        assert (src.counts["tree"], src.counts["blob"]) == (before["tree"], before["blob"])
 
     def test_a_push_is_visible_on_the_next_request(self, stack):
         # The resolution is cached per COMMIT, never per hostname alone, so a new commit is a
@@ -234,6 +252,10 @@ class TestEveryImageServes:
 
 
 class TestTheAllowlistHolds:
+    """These pass WITHOUT the fix too, because before it every path was a 404. That is inherent
+    to a negative test: they pin the security property, and `TestEveryImageServes` is what shows
+    the feature exists. Neither class is redundant, so do not delete either as a duplicate."""
+
     @pytest.mark.parametrize("label", sorted(FORBIDDEN))
     def test_a_path_the_page_does_not_reference_as_an_image_is_404(self, stack, label):
         app, src = stack
@@ -241,6 +263,8 @@ class TestTheAllowlistHolds:
         repo_path, url = FORBIDDEN[label]
         cap, _ = call(app, HOST, url)
         assert cap["status"].startswith("404"), (label, cap["status"])
+        if repo_path == DOC:
+            return                  # the page's own blob IS fetched, legitimately, for `/`
         data = ("forbidden " + label).encode()
         assert git_blob_id(data) not in src.blob_ids, (
             "%s: the refused file's bytes were fetched from GitHub" % label)
@@ -252,6 +276,53 @@ class TestTheAllowlistHolds:
         app, _ = stack
         cap, _ = call(app, HOST, path)
         assert cap["status"].startswith("404"), (path, cap["status"])
+
+
+class TestEveryAllowedImageTypeRenders:
+    def test_every_allowed_suffix_is_served_as_an_image(self):
+        # Review finding 2: the allowlist admitted `.gif`, `.avif` and `.ico`, and the content
+        # type table had none of them, so those images were served as
+        # `application/octet-stream` under `nosniff` — which a browser refuses to render. The
+        # two tables live in different modules, so this test is what keeps them agreeing.
+        from harness.convention import _reference_reader
+        from harness.manifest import content_type_for
+        wrong = {suffix: content_type_for("/x" + suffix)
+                 for suffix in sorted(_reference_reader().ASSET_SUFFIXES)
+                 if not content_type_for("/x" + suffix).startswith("image/")}
+        assert not wrong, wrong
+
+
+class FullVolumeCache(BlobCache):
+    """A cache volume with no space left. `put` fails the way the real disk fails it."""
+
+    def _write_bytes(self, target, data):
+        raise OSError(28, "No space left on device")
+
+
+class TestAFullCacheVolumeStillServes:
+    def test_the_page_and_its_images_serve_when_nothing_can_be_cached(self, tmp_path):
+        # Review finding 1: `BlobCache.get_or_fetch` treats a failed cache write as a warming
+        # problem and serves the bytes in hand (Step 11 finding F2). The resolver's own write did
+        # not, so a full volume turned every convention page into a 500 — and because the write
+        # ran before the page was remembered, every retry re-read the whole tree.
+        reg = Registry(str(tmp_path / "r.db")); reg.initialize()
+        cache = FullVolumeCache(str(tmp_path / "c"), max_bytes=10_000_000); cache.initialize()
+        src = SlowSource(trees={(REPO, COMMIT): tree_for(PAGE, ALL_IMAGES)},
+                         blobs=blobs_for(PAGE, ALL_IMAGES),
+                         commits={(REPO, "HEAD"): COMMIT}, repos=["rawgentic"])
+        app = make_app(cfg=CFG, registry=reg, cache=cache, source=src)
+        _wait_until_index_is_warm(app)
+        try:
+            before = dict(src.counts)
+            results = load_concurrently(app, ["/"] + list(ALL_IMAGES))
+            for path, (cap, body) in results.items():
+                assert cap["status"].startswith("200"), (path, cap["status"])
+                assert body == (PAGE if path == "/" else ALL_IMAGES[path]), path
+            # Still resolved once. Nothing could be cached, so `serve` fetches each blob again,
+            # which is the cost of a full volume and not a defect of this path.
+            assert src.counts["tree"] - before["tree"] == 1
+        finally:
+            reg.close(); cache.close()
 
 
 class TestTransientFailuresAreNever404:
