@@ -20,7 +20,8 @@ from .indexpage import render_index
 from .registry import Registry
 from .routing import CONTROL_LABEL, INDEX_LABEL, RouteError, resolve_host
 from .serving import Response, serve
-from .github import Budget, GitHubError, NotFound, Unauthorized
+from .github import (Budget, BudgetExhausted, DeadlineExceeded, GitHubError, NotFound,
+                     RateLimited, Unauthorized)
 from .convention import (ConventionIndex, ConventionResolver, DocumentAmbiguous,
                          IndexBuilding, IndexCoolingDown, IndexTooStale, TreeTruncated)
 
@@ -44,7 +45,7 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
     # Owner decision D38: a document is reachable the moment its file exists in a repository.
     # The registry is still consulted FIRST, so a published deployment keeps winning and nothing
     # that works today changes.
-    resolver = ConventionResolver(cfg.github_owner, source)
+    resolver = ConventionResolver(cfg.github_owner, source, cache=cache)
 
     def _log(message: str) -> None:
         if log is not None:
@@ -161,7 +162,19 @@ def make_app(*, cfg: HarnessConfig, registry: Registry, cache: BlobCache, source
             try:
                 active = resolver.resolve(
                     label, Budget(cfg.http_timeout * 2, cfg.max_github_calls),
-                    http_timeout=cfg.http_timeout, max_blob_bytes=cfg.max_blob_bytes)
+                    http_timeout=cfg.http_timeout, max_blob_bytes=cfg.max_blob_bytes,
+                    path=path)
+            except RateLimited:
+                # Caught BEFORE `Unauthorized`, which it subclasses. That handler says the
+                # harness may not read the repository and that retrying will not help — both
+                # false for a rate limit, which clears on its own.
+                return _plain(503, "GitHub is rate-limiting this service; retry shortly",
+                              {"Retry-After": "60"})
+            except (DeadlineExceeded, BudgetExhausted):
+                # This request ran out of time or calls. That says nothing about whether the
+                # document exists, so it is a retry, never a 404 and never a 502.
+                return _plain(503, "GitHub did not answer in time to resolve this document; "
+                                   "retry shortly", {"Retry-After": "5"})
             except DocumentAmbiguous as exc:
                 # Two files answer to this hostname. Serving either would be a coin toss the
                 # reader cannot see, and the message names both so a human can fix it.

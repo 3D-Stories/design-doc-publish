@@ -338,6 +338,14 @@ Design and its review history:
 - Maps a `Host` header to a published deployment, then a URL path to a declared asset, then that
   asset's Git blob id to bytes. Every blob is verified against both its declared SHA-256 **and**
   Git's own blob id before it is cached or served.
+- Serves a page resolved by convention together with **the images that page references**, by
+  the publisher's own rule: a relative reference, inside the page's own directory, to a regular
+  file with an image suffix (`ASSET_SUFFIXES` in `scripts/render/lint.py`). Any other file in the
+  repository is a 404 under that hostname, and so is a reference the publisher would have
+  refused to ship, such as a stylesheet: the renderer inlines those, so a rendered page has
+  none. The tree and the page are cached per commit, so a reload costs one GitHub call and a
+  push is still visible on the next request. Until this was fixed, a convention page declared
+  `/index.html` alone and every image on it was a 404.
 - Serves the committed bytes **unmodified**. There is no HTML rewriting of any kind, which is what
   makes byte-equality verification meaningful.
 - Records each publish as an immutable, database-sealed row, with an atomic compare-and-swap on

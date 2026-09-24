@@ -259,6 +259,24 @@ class BlobCache:
                 "INSERT OR REPLACE INTO blob(blob_id,sha256,size,last_access) VALUES(?,?,?,?)",
                 (blob_id, sha256, len(data), self._next_tick()))
 
+    def admit(self, blob_id: str, data: bytes, sha256: str) -> None:
+        """`put`, for bytes the caller is about to SERVE whether or not they can be cached.
+
+        Step 11 finding F2. The bytes are already verified — `put` hashes before it writes
+        anything — so a full or read-only volume is a warming problem, not a serving one.
+        Propagating it turned a recoverable cold cache into a 500 for a page whose content was
+        in hand. A CacheConflict is NOT caught here: that one means the bytes are wrong, and
+        wrong bytes must never be served.
+
+        One home for that rule, because it has two callers: `get_or_fetch`, and the convention
+        resolver, which fetches a page's bytes itself. The resolver's first version called
+        `put` directly and brought the 500 back (review finding 1, 2026-09-24).
+        """
+        try:
+            self.put(blob_id, data, sha256)
+        except OSError as exc:
+            self._admission_failures.append(f"{blob_id}: {exc}")
+
     # ---- read ------------------------------------------------------------------------
 
     def open(self, blob_id: str, sha256: str, size: int):
@@ -344,15 +362,7 @@ class BlobCache:
             return self.get_or_fetch(blob_id, sha256, size, fetch)
         try:
             data, declared_sha = fetch()
-            try:
-                self.put(blob_id, data, declared_sha)
-            except OSError as exc:
-                # Step 11 finding F2. The bytes are already verified — `put` hashes before it
-                # writes anything — so a full or read-only volume is a warming problem, not a
-                # serving one. Propagating it turned a recoverable cold cache into a 500 for a
-                # page whose content was in hand. A CacheConflict is NOT caught here: that one
-                # means the bytes are wrong, and wrong bytes must never be served.
-                self._admission_failures.append(f"{blob_id}: {exc}")
+            self.admit(blob_id, data, declared_sha)
             flight.data = data
         except BaseException as exc:
             flight.error = exc
