@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-A Claude Code plugin that turns a markdown design document into a single self-contained HTML page
+A Claude Code plugin and Codex skill that turn a markdown design document into a single self-contained HTML page
 that looks like it was <em>designed</em>, not dumped. One file out. No build step, no CSS framework,
 no JavaScript bundle, and nothing fetched at runtime.
 </p>
@@ -86,6 +86,44 @@ template's full vocabulary.
   exit code as the verdict. The harness serves the committed bytes, fetched from GitHub.
 
 ## Quick start
+
+### Codex
+
+The repository root contains the [Codex skill](SKILL.md). Its installer bundles the renderer,
+index, harness verification code, and references together, while excluding the nested Claude
+entrypoints. In Codex, ask:
+
+> Install design-doc-publish from https://github.com/3D-Stories/design-doc-publish using its
+> scripts/install_codex_skill.py package installer.
+
+Or install from a checkout yourself:
+
+```bash
+git clone https://github.com/3D-Stories/design-doc-publish.git
+python3 design-doc-publish/scripts/install_codex_skill.py
+```
+
+On the next turn, use `$design-doc-publish`, for example:
+
+> Use $design-doc-publish to render docs/planning/my-plan.md locally. Do not commit or publish.
+
+The skill also covers publishing setup and the commit/push/publish/verify flow. It reuses the
+same Python engine and user configuration as Claude; it needs no Claude CLI or plugin variables.
+For publishing, provide the existing harness environment described below. An optional trusted
+`${XDG_CONFIG_HOME:-$HOME/.config}/design-doc-publish/publish-env.sh` can export endpoints and
+read credentials from your secret store; Codex sources it in the command that needs it. Keep
+credential values out of the repository and skill, and preserve explicitly supplied environment
+settings. Rendering requires none of that setup.
+
+The destination defaults to `${CODEX_HOME:-$HOME/.codex}/skills/design-doc-publish`; `--dest`
+sets a different **skill directory**. Existing files, directories, and symlinks are refused.
+To update, update the source checkout, move the previous installed directory to a backup
+outside Codex's `skills/` tree, and rerun the installer. Restore that backup to undo an update.
+No background updater is installed. Do not clone or symlink the entire repository directly
+into Codex's skills tree: Codex would also discover the Claude entrypoints nested inside it.
+Do not install either nested Claude folder alone; it omits the shared runtime and references.
+
+### Claude Code
 
 ### 1. Add the marketplace
 
