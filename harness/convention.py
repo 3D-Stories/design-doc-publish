@@ -86,7 +86,9 @@ def find_document(entries, date: str | None, document: str, *, repo: str | None 
     The third tier, tried only when both miss and `repo` is given, undoes `label_for`'s cut to
     63 characters (#67). A cut label names no file, so the question is turned round: which file's
     OWN label is this one? Asking that, rather than matching a prefix, is what keeps `x` from
-    ever reaching `xyz`, and it needs no length rule of its own.
+    ever reaching `xyz`, and it needs no length rule of its own. The same question finds a file
+    with capitals or an `.htm` suffix, which `label_for` lowercases and strips, and which the
+    two exact tiers (a lower-case `.html` name) cannot.
     """
     files = [e for e in entries if e.type == "blob" and e.mode in _REGULAR_FILE_MODES]
     wanted = ([] if date is None else ["%s-%s.html" % (date, document)]) + ["%s.html" % document]
@@ -103,12 +105,14 @@ def find_document(entries, date: str | None, document: str, *, repo: str | None 
     if repo is None:
         return None
     # `split_label` read the label as exactly `[date-]repo-document`, so this rebuilds it. The
-    # prefix test only narrows the search; the label comparison is what decides.
+    # prefix test only narrows the search; the label comparison is what decides. Both ignore
+    # case and accept `.htm`, because `label_for` lowercases and strips either suffix.
     label = "-".join(p for p in (date, repo, document) if p)
-    prefixes = ([] if date is None else ["%s-%s" % (date, document)]) + [document]
+    prefixes = tuple(p.lower() for p in
+                     ([] if date is None else ["%s-%s" % (date, document)]) + [document])
     matches = [e for e in files
-               if e.path.endswith(".html")
-               and e.path.rsplit("/", 1)[-1].startswith(tuple(prefixes))
+               if e.path.lower().endswith((".html", ".htm"))
+               and e.path.rsplit("/", 1)[-1].lower().startswith(prefixes)
                and label_for(repo, e.path, fallback_date=date) == label]
     if len(matches) > 1:
         # Two names that only differ after the cut. Not "named": the reader sees this word for
@@ -456,9 +460,12 @@ def label_for(repo: str, repo_path: str, *, fallback_date: str | None = None) ->
                 day = ""
         parts = ([day] if day else []) + [repo, stem]
     label = "-".join(p for p in parts if p).lower()
-    # One DNS label is 63 characters. The TAIL is cut, never the date and never the repository,
-    # and the cut must not leave a trailing hyphen, which is not a legal label. A cut label
-    # names no file; `find_document`'s last tier undoes the cut by calling this function.
+    # One DNS label is 63 characters. The TAIL is cut, so the date and the repository come
+    # through whole unless the repository's own name leaves no room for the document (about 50
+    # characters or more, once a date is in front): the hostname then cannot name its repository,
+    # and no cut can fix that. The cut must not leave a trailing hyphen, which is not a legal
+    # label. A cut label names no file; `find_document`'s last tier undoes the cut by calling
+    # this function.
     if len(label) > _MAX_DNS_LABEL:
         label = label[:_MAX_DNS_LABEL].rstrip("-")
     return label
@@ -693,6 +700,33 @@ class ConventionIndex:
         docs = tuple(group[0] for _, group in sorted(seen.items()) if len(group) == 1)
         return _RepoWalk(repo, commit, docs, False)
 
+    @staticmethod
+    def _rows_that_open_their_own_file(repo: str, listed) -> list:
+        """One repository's `(entry, row)` pairs, as the rows whose link opens THAT file.
+
+        Two documents can answer to one hostname without sharing a basename: names that only
+        differ after the 63-character cut, or by capitals or `.htm`, or an undated file that
+        answers under any date. `find_document` is what answers the link, so it is asked, for
+        each row, over the files the walk kept. A link that it refuses (HTTP 409) is not listed,
+        because it prints a dead page, and neither is one that opens a different file, because
+        that prints the wrong page. When it cannot say, the row stays: that is how the listing
+        behaved before (#67 follow-up).
+        """
+        files = [entry for entry, _ in listed]
+        kept = []
+        for entry, row in listed:
+            split = split_label(row["name"], [repo])
+            if split is not None:
+                date, _, document = split
+                try:
+                    served = find_document(files, date, document, repo=repo)
+                except DocumentAmbiguous:
+                    continue
+                if served is not None and served is not entry:
+                    continue
+            kept.append(row)
+        return kept
+
     def _date_job(self, job, budget, http_timeout: float, stop):
         """Phase 2: one document's dates. Flattened across repositories on purpose.
 
@@ -761,7 +795,7 @@ class ConventionIndex:
                 elif kept:
                     dropped.append(walk.repo)
                 continue
-            listed = False
+            repo_rows = []
             for entry in walk.docs:
                 basename = entry.path.rsplit("/", 1)[-1]
                 title = re.sub(r"\.html?$", "", basename, flags=re.IGNORECASE)
@@ -777,7 +811,7 @@ class ConventionIndex:
                 else:
                     name = label_for(walk.repo, entry.path, fallback_date=added)
                     published = updated
-                rows.append({
+                repo_rows.append((entry, {
                     "name": name,
                     "title": title,
                     "project": walk.repo,
@@ -787,10 +821,11 @@ class ConventionIndex:
                     "purpose": None,
                     "commit_sha": walk.commit,
                     "published_at": published,
-                })
-                listed = True
+                }))
                 fresh_rows += 1
-            if listed:
+            listable = self._rows_that_open_their_own_file(walk.repo, repo_rows)
+            rows.extend(listable)
+            if listable:
                 projects.append(walk.repo)
             self._repo_verified[walk.repo] = now
 

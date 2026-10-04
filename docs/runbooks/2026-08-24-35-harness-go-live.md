@@ -325,6 +325,18 @@ record beats a wildcard.
     **If origin observation cannot be established, report AC 1 UNPROVED.** A bare 404 is not
     evidence.
 
+    > **Updated 2026-10-04 (#67): this check no longer works as written.** The service token
+    > was accepted by Access on the control host and on none of the three other hosts measured.
+    > Sent to `unconfigured-probe.3dstories.ca` it gets a `302` to the Access login, so Access
+    > answers it and the catch-all's `404` is not seen. The zone's Access consult of 2026-08-25
+    > (`docs/planning/2026-08-25-access-architecture-consult.md`) had flagged the token on the
+    > wildcard application as a skeleton key for the whole zone. Seeing the catch-all's `404`
+    > now needs a caller that Access lets through to an unconfigured host. This token is not
+    > one; a browser signed in through Access may be, and that was not measured. The other two
+    > clauses stand exactly as written above: no `X-Doc-Deployment`, and **no matching request
+    > at the harness** in the step 8 observation. If any clause cannot be shown, report AC 1
+    > UNPROVED.
+
 24. **The negative-identity check.** Using an authenticated identity that is outside every
     include rule recorded in step 3 item 11, request a harness host. Require an Access **denial**
     and no request reaching the harness. This is the only check that detects an over-broad allow
@@ -337,6 +349,22 @@ record beats a wildcard.
       -H "CF-Access-Client-Id: $(cat ~/.secrets/doc-harness-access-client-id)" \
       -H "CF-Access-Client-Secret: $(cat ~/.secrets/doc-harness-access-client-secret)"
     ```
+
+    > **Updated 2026-10-04 (#67): this check no longer works as written.** Measured that day, the
+    > same request to `index.3dstories.ca` and to a real document host answers `302` to the
+    > Access login, not `200`; of the four hosts measured, only `docs-control.3dstories.ca`
+    > accepted the token (it answers `401` without the bearer, so the request does reach the
+    > harness). To check a document host now, ask the harness itself, on the loopback port that
+    > `compose.local-port.yaml` publishes, with the real Host header:
+    >
+    > ```bash
+    > curl -s -D- -o /dev/null -H "Host: <name>.3dstories.ca" http://127.0.0.1:18081/
+    > ```
+    >
+    > Expect `200`. `X-Doc-Deployment` is `0` for a document the harness found by convention, and
+    > the deployment id for a published one. That proves the harness and nothing else. The link
+    > through Access is a separate leg: it needs a caller that Access authorizes, such as a
+    > browser signed in through Access, which this service token is not.
 
 **A 404 through the tunnel means step 1's published route was never saved.** That is the expected
 symptom, and it is the one thing in this runbook the available credential cannot check in advance:
