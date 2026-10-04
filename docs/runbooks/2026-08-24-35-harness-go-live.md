@@ -361,7 +361,8 @@ record beats a wildcard.
     >
     > Expect `200`. `X-Doc-Deployment` is `0` for a document the harness found by convention, and
     > the deployment id for a published one. That proves the harness and nothing else. The link
-    > through Access is a separate leg that only a browser signed in through Access can open.
+    > through Access is a separate leg: it needs a caller that Access authorizes, such as a
+    > browser signed in through Access, which this service token is not.
 
 **A 404 through the tunnel means step 1's published route was never saved.** That is the expected
 symptom, and it is the one thing in this runbook the available credential cannot check in advance:
