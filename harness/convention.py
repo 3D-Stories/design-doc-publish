@@ -76,18 +76,22 @@ class DocumentAmbiguous(Exception):
 _REGULAR_FILE_MODES = ("100644", "100755")
 
 
-def find_document(entries, date: str | None, document: str):
+def find_document(entries, date: str | None, document: str, *, repo: str | None = None):
     """The `TreeEntry` for `document`, or `None`. Raises `DocumentAmbiguous` on a tie.
 
     The DATED filename is tried first, because most documents carry their date in the name. The
     undated one is the fallback, for a file whose hostname date came from its last-modified time
     rather than from the filename.
+
+    The third tier, tried only when both miss and `repo` is given, undoes `label_for`'s cut to
+    63 characters (#67). A cut label names no file, so the question is turned round: which file's
+    OWN label is this one? Asking that, rather than matching a prefix, is what keeps `x` from
+    ever reaching `xyz`, and it needs no length rule of its own.
     """
+    files = [e for e in entries if e.type == "blob" and e.mode in _REGULAR_FILE_MODES]
     wanted = ([] if date is None else ["%s-%s.html" % (date, document)]) + ["%s.html" % document]
     for basename in wanted:
-        matches = [e for e in entries
-                   if e.type == "blob" and e.mode in _REGULAR_FILE_MODES
-                   and e.path.rsplit("/", 1)[-1] == basename]
+        matches = [e for e in files if e.path.rsplit("/", 1)[-1] == basename]
         if len(matches) > 1:
             # Serving either one would be a coin toss the reader cannot see. Same rule the
             # backfill uses for an ambiguous mapping: refuse, and make a human choose.
@@ -96,7 +100,23 @@ def find_document(entries, date: str | None, document: str):
                 % (len(matches), basename, ", ".join(sorted(m.path for m in matches))))
         if matches:
             return matches[0]
-    return None
+    if repo is None:
+        return None
+    # `split_label` read the label as exactly `[date-]repo-document`, so this rebuilds it. The
+    # prefix test only narrows the search; the label comparison is what decides.
+    label = "-".join(p for p in (date, repo, document) if p)
+    prefixes = ([] if date is None else ["%s-%s" % (date, document)]) + [document]
+    matches = [e for e in files
+               if e.path.endswith(".html")
+               and e.path.rsplit("/", 1)[-1].startswith(tuple(prefixes))
+               and label_for(repo, e.path, fallback_date=date) == label]
+    if len(matches) > 1:
+        # Two names that only differ after the cut. Not "named": the reader sees this word for
+        # word, and neither file carries the name they asked for.
+        raise DocumentAmbiguous(
+            "%d files in this repository answer to %s: %s"
+            % (len(matches), label, ", ".join(sorted(m.path for m in matches))))
+    return matches[0] if matches else None
 
 
 class TreeTruncated(Exception):
@@ -320,7 +340,7 @@ class ConventionResolver:
         key = (label, commit)
         page = self._pages.get(key) or self._flights.run(
             ("page",) + key,
-            lambda: self._resolve_page(key, full_repo, commit, date, document, budget,
+            lambda: self._resolve_page(key, full_repo, repo, commit, date, document, budget,
                                        http_timeout, max_blob_bytes),
             budget)
         if page is None:
@@ -343,7 +363,7 @@ class ConventionResolver:
             entry_path="/index.html", title=document, project=repo,
             purpose=None, published_at="", assets=assets)
 
-    def _resolve_page(self, key, full_repo, commit, date, document, budget, http_timeout,
+    def _resolve_page(self, key, full_repo, repo, commit, date, document, budget, http_timeout,
                       max_blob_bytes):
         # Checked again INSIDE the flight: a caller that missed just before the previous flight
         # finished becomes a leader of its own, and must find that result rather than refetch.
@@ -357,7 +377,9 @@ class ConventionResolver:
             # tell a reader their document does not exist when it does.
             raise TreeTruncated(
                 "GitHub truncated the tree for %s, so this document cannot be located" % full_repo)
-        found = find_document(entries, date, document)
+        # The SHORT name: it is the one `label_for` puts in a hostname, so a cut label is only
+        # recognised with it. The owner-qualified one would never match.
+        found = find_document(entries, date, document, repo=repo)
         if found is None:
             return None
         data = self._source.blob(full_repo, found.blob_id, budget, http_timeout, max_blob_bytes)
@@ -409,7 +431,8 @@ def label_for(repo: str, repo_path: str, *, fallback_date: str | None = None) ->
 
     Owner rule: `{date}-{repo}-{html name}`, the date taken from the FILENAME when it carries
     one and omitted when it does not. An omitted date still resolves, because `find_document`
-    tries the undated filename as its fallback.
+    tries the undated filename as its fallback. A label cut to 63 characters still resolves,
+    because `find_document`'s last tier asks each file for its label and compares.
     """
     stem = re.sub(r"\.html?$", "", str(repo_path).rsplit("/", 1)[-1], flags=re.IGNORECASE)
     match = _DATE_PREFIX.match(stem)
@@ -434,7 +457,8 @@ def label_for(repo: str, repo_path: str, *, fallback_date: str | None = None) ->
         parts = ([day] if day else []) + [repo, stem]
     label = "-".join(p for p in parts if p).lower()
     # One DNS label is 63 characters. The TAIL is cut, never the date and never the repository,
-    # and the cut must not leave a trailing hyphen, which is not a legal label.
+    # and the cut must not leave a trailing hyphen, which is not a legal label. A cut label
+    # names no file; `find_document`'s last tier undoes the cut by calling this function.
     if len(label) > _MAX_DNS_LABEL:
         label = label[:_MAX_DNS_LABEL].rstrip("-")
     return label
