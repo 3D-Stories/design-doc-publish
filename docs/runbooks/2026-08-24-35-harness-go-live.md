@@ -326,14 +326,14 @@ record beats a wildcard.
     evidence.
 
     > **Updated 2026-10-04 (#67): this check no longer works as written.** The service token
-    > passes Access on the control host only. Sent to `unconfigured-probe.3dstories.ca` it gets a
-    > `302` to the Access login, exactly like an anonymous request, so a `404` can no longer be
-    > told from an Access redirect this way. The zone's Access consult of 2026-08-25 had flagged
-    > the token on the wildcard application as a skeleton key for the whole zone. A `404` from
-    > the catch-all can now only be seen by a caller that Access lets through, such as a browser
-    > signed in through Access. The other two clauses stand exactly as written above: no
-    > `X-Doc-Deployment`, and **no matching request at the harness** in the step 8 observation.
-    > If any clause cannot be shown, report AC 1 UNPROVED.
+    > was accepted by Access on the control host and on none of the three other hosts measured.
+    > Sent to `unconfigured-probe.3dstories.ca` it gets a `302` to the Access login, so a `404`
+    > can no longer be told from an Access redirect this way. The zone's Access consult of
+    > 2026-08-25 had flagged the token on the wildcard application as a skeleton key for the
+    > whole zone. A `404` from the catch-all can now only be seen by a caller that Access lets
+    > through, such as a browser signed in through Access. The other two clauses stand exactly as
+    > written above: no `X-Doc-Deployment`, and **no matching request at the harness** in the
+    > step 8 observation. If any clause cannot be shown, report AC 1 UNPROVED.
 
 24. **The negative-identity check.** Using an authenticated identity that is outside every
     include rule recorded in step 3 item 11, request a harness host. Require an Access **denial**
@@ -350,10 +350,10 @@ record beats a wildcard.
 
     > **Updated 2026-10-04 (#67): this check no longer works as written.** Measured that day, the
     > same request to `index.3dstories.ca` and to a real document host answers `302` to the
-    > Access login, not `200`; only `docs-control.3dstories.ca` accepts the token (it answers
-    > `401` without the bearer, so the request does reach the harness). To check a document host
-    > now, ask the harness itself, on the loopback port that `compose.local-port.yaml` publishes,
-    > with the real Host header:
+    > Access login, not `200`; of the four hosts measured, only `docs-control.3dstories.ca`
+    > accepted the token (it answers `401` without the bearer, so the request does reach the
+    > harness). To check a document host now, ask the harness itself, on the loopback port that
+    > `compose.local-port.yaml` publishes, with the real Host header:
     >
     > ```bash
     > curl -s -D- -o /dev/null -H "Host: <name>.3dstories.ca" http://127.0.0.1:18081/
