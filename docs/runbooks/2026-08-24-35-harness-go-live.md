@@ -329,9 +329,11 @@ record beats a wildcard.
     > passes Access on the control host only. Sent to `unconfigured-probe.3dstories.ca` it gets a
     > `302` to the Access login, exactly like an anonymous request, so a `404` can no longer be
     > told from an Access redirect this way. The zone's Access consult of 2026-08-25 had flagged
-    > the token on the wildcard application as a skeleton key for the whole zone. To prove the
-    > catch-all now, use the origin observation from step 8: the request must show up there as an
-    > unknown host and answer `404`.
+    > the token on the wildcard application as a skeleton key for the whole zone. A `404` from
+    > the catch-all can now only be seen by a caller that Access lets through, such as a browser
+    > signed in through Access. The other two clauses stand exactly as written above: no
+    > `X-Doc-Deployment`, and **no matching request at the harness** in the step 8 observation.
+    > If any clause cannot be shown, report AC 1 UNPROVED.
 
 24. **The negative-identity check.** Using an authenticated identity that is outside every
     include rule recorded in step 3 item 11, request a harness host. Require an Access **denial**
@@ -357,7 +359,8 @@ record beats a wildcard.
     > curl -s -D- -o /dev/null -H "Host: <name>.3dstories.ca" http://127.0.0.1:18081/
     > ```
     >
-    > Expect `200` and `X-Doc-Deployment: 0`. That proves the harness and nothing else. The link
+    > Expect `200`. `X-Doc-Deployment` is `0` for a document the harness found by convention, and
+    > the deployment id for a published one. That proves the harness and nothing else. The link
     > through Access is a separate leg that only a browser signed in through Access can open.
 
 **A 404 through the tunnel means step 1's published route was never saved.** That is the expected

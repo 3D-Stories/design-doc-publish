@@ -313,6 +313,19 @@ class TestCapitalsAndHtm:
         tree = [entry("docs/my-doc.html.bak"), entry("docs/my-doc.htmx"), entry("docs/my-doc.txt")]
         assert find_document(tree, None, "my-doc", repo="rawgentic") is None
 
+    @pytest.mark.parametrize("sibling", [
+        LONG_PATH + ".bak",
+        "docs/planning/2026-08-31-claude-builtins-vs-rawgentic-features-review-history.md",
+    ])
+    def test_a_long_sibling_that_is_not_html_neither_answers_nor_blocks_a_cut_label(self, sibling):
+        # The 63-character cut HIDES the suffix, so the label test alone would count this file
+        # as an owner of the label. Only the suffix test keeps it out, and nothing else pins it.
+        date, repo, doc = split_label(CUT_LABEL, REPOS)
+        assert label_for(repo, sibling, fallback_date=date) == CUT_LABEL, sibling
+        assert find_document([entry(sibling)], date, doc, repo=repo) is None
+        assert find_document([entry(sibling), entry(LONG_PATH)], date, doc,
+                             repo=repo).path == LONG_PATH
+
     def test_two_files_that_agree_on_the_label_are_REFUSED(self):
         # `My-Doc.html` and `my-doc.htm` are two files for one hostname: a coin toss.
         with pytest.raises(DocumentAmbiguous):
