@@ -56,6 +56,12 @@ def entry(path, mode="100644"):
     return TreeEntry(path=path, type="blob", mode=mode, blob_id="b" * 40, size=10)
 
 
+# #67, found live: the index printed this file's link with its 73-character label cut to the
+# 63 a DNS label allows, and that hostname answered 404, because no file is named by the cut.
+LONG_PATH = "docs/planning/2026-08-31-claude-builtins-vs-rawgentic-features-review-history.html"
+CUT_LABEL = "2026-08-31-rawgentic-claude-builtins-vs-rawgentic-features-revi"
+
+
 class TestFindDocument:
     """The tree is searched for the document's FILE. The dated filename is tried first, because
     most documents carry their date in the name; the undated one is the fallback for a file
@@ -146,6 +152,13 @@ class TestConventionResolver:
         assert got is not None
         assert got.assets["/index.html"].repo_path == "docs/blarg.html"
 
+    def test_a_cut_hostname_serves_the_full_filename(self):
+        # #67 by the reader's own path: the hostname the index printed, through `resolve`.
+        got = ConventionResolver("3D-Stories", source((LONG_PATH,))).resolve(
+            CUT_LABEL, budget())
+        assert got is not None
+        assert got.assets["/index.html"].repo_path == LONG_PATH
+
     def test_an_unknown_repository_never_reaches_github(self):
         # The repository list is checked FIRST, so a hostname an outsider picked cannot make
         # this service fetch a repository name of their choosing.
@@ -200,17 +213,82 @@ class TestLabelFor:
         assert len(got) == 63
         assert not got.endswith("-")
 
-    @pytest.mark.parametrize("repo,path", [
-        ("rawgentic", "docs/planning/2026-08-19-unified-roadmap.html"),
-        ("rawgentic", "docs/campaign-log.html"),
-        ("herdr-dashboard", "docs/2026-08-04-107-usage-strip-redesign.html"),
+    @pytest.mark.parametrize("repo,path,length", [
+        ("rawgentic", "docs/planning/2026-08-19-unified-roadmap.html", 36),
+        ("rawgentic", "docs/campaign-log.html", 22),
+        ("herdr-dashboard", "docs/2026-08-04-107-usage-strip-redesign.html", 51),
+        # Cut to the DNS limit, from 73 characters and from 64 (#67).
+        ("rawgentic", LONG_PATH, 63),
+        ("thewanderinginn", "docs/2026-08-17-166-manifest-overwrite-discards-spans.html", 63),
     ])
-    def test_every_generated_label_splits_back_to_its_repository(self, repo, path):
-        # The round trip is the whole point: a link the index prints must resolve.
+    def test_every_generated_label_splits_back_to_its_repository(self, repo, path, length):
+        # The round trip is the whole point: a link the index prints must resolve, and that
+        # means reaching the FILE, not only the repository. #67 stopped at the repository.
         label = label_for(repo, path)
+        assert len(label) == length, label
         split = split_label(label, ["rawgentic", "herdr-dashboard", "herdr", "thewanderinginn"])
         assert split is not None, label
         assert split[1] == repo
+        date, _, document = split
+        assert find_document([entry(path)], date, document, repo=repo).path == path
+
+
+class TestCutLabel:
+    """#67. `label_for` cuts a label to 63 characters, so the cut hostname names no file, and
+    `find_document` used to answer 404 for a document the index itself had listed. The cut is
+    undone by asking each file for its OWN label, never by matching a prefix."""
+
+    @pytest.mark.parametrize("path,fallback_date,length", [
+        # The cut lands on a hyphen, which `label_for` strips, so this label is one shorter.
+        ("docs/2026-08-31-claude-builtins-vs-rawgentic-features-map-of-history.html", None, 62),
+        # An undated file under the dated hostname the index gives it.
+        ("docs/claude-builtins-vs-rawgentic-features-review-history.html",
+         "2026-08-31T09:10:11Z", 63),
+        # An undated file whose last-change date was not available, so its hostname has none.
+        ("docs/claude-builtins-vs-rawgentic-features-review-historical-notes.html", None, 63),
+    ])
+    def test_a_cut_label_resolves_to_the_full_filename(self, path, fallback_date, length):
+        label = label_for("rawgentic", path, fallback_date=fallback_date)
+        assert len(label) == length, label
+        date, repo, doc = split_label(label, REPOS)
+        assert find_document([entry(path)], date, doc, repo=repo).path == path
+
+    @pytest.mark.parametrize("date", [None, "2026-08-31"])
+    def test_a_short_label_never_resolves_a_longer_name(self, date):
+        # `x` prefixes `xyz`, and `xyz`'s label is not cut. Matching a prefix would serve it.
+        assert find_document([entry("docs/xyz.html")], date, "x", repo="rawgentic") is None
+
+    @pytest.mark.parametrize("other", [
+        "docs/2026-08-31-claude-builtins-vs-rawgentic-features-review-summary.html",
+        "docs/claude-builtins-vs-rawgentic-features-review-notes.html",
+    ])
+    def test_two_files_that_cut_to_one_label_are_REFUSED(self, other):
+        # The same rule as two files of one name: serving either would be a coin toss.
+        date, repo, doc = split_label(CUT_LABEL, REPOS)
+        for path in (LONG_PATH, other):
+            assert label_for(repo, path, fallback_date=date) == CUT_LABEL, path
+        with pytest.raises(DocumentAmbiguous) as refused:
+            find_document([entry(LONG_PATH), entry(other)], date, doc, repo=repo)
+        assert LONG_PATH in str(refused.value) and other in str(refused.value)
+
+    @pytest.mark.parametrize("exact", [
+        "docs/2026-08-31-claude-builtins-vs-rawgentic-features-revi.html",
+        "docs/claude-builtins-vs-rawgentic-features-revi.html",
+    ])
+    def test_an_exact_filename_wins_over_a_cut_one(self, exact):
+        # Every link that worked before #67 must keep answering with the same file.
+        date, repo, doc = split_label(CUT_LABEL, REPOS)
+        got = find_document([entry(LONG_PATH), entry(exact)], date, doc, repo=repo)
+        assert got.path == exact
+
+    def test_a_symlink_never_answers_or_blocks_a_cut_label(self):
+        # A symlink is never served, so it must not count towards a tie either.
+        sibling = "docs/2026-08-31-claude-builtins-vs-rawgentic-features-review-summary.html"
+        date, repo, doc = split_label(CUT_LABEL, REPOS)
+        assert label_for(repo, sibling, fallback_date=date) == CUT_LABEL
+        got = find_document([entry(LONG_PATH, mode="120000"), entry(sibling, mode="100755")],
+                            date, doc, repo=repo)
+        assert got.path == sibling
 
 
 from harness.convention import ConventionIndex
