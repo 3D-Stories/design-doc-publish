@@ -327,13 +327,15 @@ record beats a wildcard.
 
     > **Updated 2026-10-04 (#67): this check no longer works as written.** The service token
     > was accepted by Access on the control host and on none of the three other hosts measured.
-    > Sent to `unconfigured-probe.3dstories.ca` it gets a `302` to the Access login, so a `404`
-    > can no longer be told from an Access redirect this way. The zone's Access consult of
-    > 2026-08-25 had flagged the token on the wildcard application as a skeleton key for the
-    > whole zone. A `404` from the catch-all can now only be seen by a caller that Access lets
-    > through, such as a browser signed in through Access. The other two clauses stand exactly as
-    > written above: no `X-Doc-Deployment`, and **no matching request at the harness** in the
-    > step 8 observation. If any clause cannot be shown, report AC 1 UNPROVED.
+    > Sent to `unconfigured-probe.3dstories.ca` it gets a `302` to the Access login, so Access
+    > answers it and the catch-all's `404` is not seen. The zone's Access consult of 2026-08-25
+    > (`docs/planning/2026-08-25-access-architecture-consult.md`) had flagged the token on the
+    > wildcard application as a skeleton key for the whole zone. Seeing the catch-all's `404`
+    > now needs a caller that Access lets through to an unconfigured host. This token is not
+    > one; a browser signed in through Access may be, and that was not measured. The other two
+    > clauses stand exactly as written above: no `X-Doc-Deployment`, and **no matching request
+    > at the harness** in the step 8 observation. If any clause cannot be shown, report AC 1
+    > UNPROVED.
 
 24. **The negative-identity check.** Using an authenticated identity that is outside every
     include rule recorded in step 3 item 11, request a harness host. Require an Access **denial**
