@@ -1516,6 +1516,38 @@ padding:3px 10px;cursor:pointer}
 /* Paper cannot take a copy. Printing the control would print a button that does nothing. */
 @media print{.doc-code-copy{display:none}}
 """,
+    "imgzoom": """
+/* An image is a thumbnail inside a link to the full image (#78). RICH ONLY: `plain` renders no
+   image. The box is capped at 300 px and at its own column, so a wide diagram can no longer run
+   past the edge of a phone-width page, and the image scales inside it. */
+.doc-img{display:inline-block;max-width:min(300px,100%);vertical-align:top;
+border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.doc-img img{display:block;max-width:100%;height:auto}
+/* Only a thumbnail that opens the modal says "zoom". A linked image is a link, and keeps the
+   browser's own link cursor. */
+a.doc-img:not(.doc-img-link){cursor:zoom-in}
+.doc-img:hover{border-color:var(--accent)}
+.doc-img:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* The modal the script builds. Closed, the browser's own rule hides a dialog, so nothing here
+   sets `display`. The image shows at its own size and the box scrolls, which is what a phone
+   needs to read a wide diagram. A wide screen fits it to the viewport instead. */
+.doc-zoom{padding:0;border:1px solid var(--line);border-radius:10px;background:var(--surface);
+color:var(--ink);max-width:96vw;max-height:94vh;overflow:auto;cursor:zoom-out}
+.doc-zoom::backdrop{background:rgba(0,0,0,.72)}
+.doc-zoom-bar{position:sticky;top:0;left:0;display:flex;align-items:center;
+justify-content:space-between;gap:12px;padding:6px 8px 6px 14px;background:var(--surface);
+border-bottom:1px solid var(--line)}
+.doc-zoom-cap{margin:0;font-size:13px;line-height:1.4;color:var(--ink-2)}
+.doc-zoom-close{flex:none;font:600 15px/1 system-ui,sans-serif;color:var(--ink-2);
+background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:4px 10px;
+cursor:pointer}
+.doc-zoom-close:hover{color:var(--accent);border-color:var(--accent)}
+.doc-zoom-close:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.doc-zoom img{display:block;max-width:none;height:auto}
+@media (min-width:700px){.doc-zoom img{max-width:calc(96vw - 2px)}}
+/* Paper cannot open a modal, so a printed page shows the full image at its column's width. */
+@media print{.doc-img{max-width:100%;border:0}}
+""",
     "steprail": """
 .blk-steprail .blk-rail{list-style:none;margin:0;padding:0;border-left:2px solid var(--line)}
 .blk-steprail .blk-rail-step{position:relative;padding:8px 0 8px 16px}
@@ -1531,11 +1563,12 @@ margin-left:-2px;padding-left:18px}
 """,
 }
 
-# Only `codecopy` needs a script, and it needs one irreducibly: writing to the clipboard has
-# no HTML or CSS expression. Everything else here stays declarative — the rail's exclusivity
-# is native `<details name>`, not JavaScript.
+# Two components need a script. `codecopy` needs one irreducibly: writing to the clipboard has
+# no HTML or CSS expression. `imgzoom` (#78) needs one for its modal only, and degrades to the
+# plain link it wraps without it. Everything else here stays declarative — the rail's
+# exclusivity is native `<details name>`, not JavaScript.
 #
-# The contract this script keeps, and the tests that pin each clause:
+# The contract the `codecopy` script keeps, and the tests that pin each clause:
 #   * It reveals the button it depends on. The button ships `hidden`, so a reader with
 #     JavaScript disabled never sees a control that cannot work.
 #   * It reads `textContent` and writes `textContent`. No `innerHTML`, no `document.write`,
@@ -1577,6 +1610,55 @@ if(navigator.clipboard&&window.isSecureContext){
 navigator.clipboard.writeText(text).then(function(){done(true);},
 function(){done(fallback(text));});
 }else{done(fallback(text));}
+});
+});
+})();
+</script>""",
+    # The contract the `imgzoom` script keeps (#78), pinned by `test_image_zoom.py`:
+    #   * It stands down where `<dialog>` has no `showModal`, so the link keeps its plain
+    #     behaviour there: it opens the full image.
+    #   * It leaves a modified or non-primary click alone. Ctrl-, Cmd-, Shift-, Alt- and
+    #     middle-click are a reader's own way of opening the image elsewhere.
+    #   * It builds its dialog from elements and writes the caption with `textContent`. It
+    #     uses none of the DOM calls `codecopy` is barred from.
+    #   * It adds one dialog to the body and otherwise touches nothing outside `a.doc-img`.
+    #     It skips a linked image (`.doc-img-link`), whose click already says where it goes.
+    #   * Escape, any click in the dialog, or its close button closes it, and focus goes back
+    #     to the thumbnail that opened it.
+    "imgzoom": """<script>
+(function(){
+var links=document.querySelectorAll('a.doc-img:not(.doc-img-link)');
+if(!links.length)return;
+var dlg=document.createElement('dialog');
+if(typeof dlg.showModal!=='function')return;
+dlg.className='doc-zoom';
+dlg.setAttribute('aria-label','Full-size image');
+var bar=document.createElement('div');bar.className='doc-zoom-bar';
+var cap=document.createElement('p');cap.className='doc-zoom-cap';
+var btn=document.createElement('button');
+btn.type='button';btn.className='doc-zoom-close';
+btn.setAttribute('aria-label','Close');btn.textContent='\\u00d7';
+var big=document.createElement('img');big.alt='';
+bar.appendChild(cap);bar.appendChild(btn);dlg.appendChild(bar);dlg.appendChild(big);
+document.body.appendChild(dlg);
+var opener=null;
+dlg.addEventListener('click',function(){if(dlg.open)dlg.close();});
+dlg.addEventListener('close',function(){
+big.removeAttribute('src');
+if(opener){opener.focus();opener=null;}
+});
+Array.prototype.forEach.call(links,function(a){
+a.addEventListener('click',function(e){
+if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
+e.preventDefault();
+var thumb=a.querySelector('img');
+var alt=thumb?(thumb.getAttribute('alt')||''):'';
+cap.textContent=alt;
+big.alt=alt;
+big.src=a.getAttribute('href');
+opener=a;
+dlg.showModal();
+btn.focus();
 });
 });
 })();

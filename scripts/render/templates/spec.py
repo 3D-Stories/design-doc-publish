@@ -129,10 +129,10 @@ border-bottom:1px solid var(--line)}
 .tpl-spec .sp-req{margin:18px 0}
 /* The grid goes on the `<ol>`, not on `.sp-req`. `.sp-req` has exactly ONE child — the list — so
    gridding it spaced nothing; the cards are the `<li>`s inside. Review caught the no-op. */
-.tpl-spec .sp-req ol{display:grid;gap:10px;margin:0;padding:0}
+.tpl-spec .sp-req ol{display:grid;gap:10px;margin:0;padding:0;grid-template-columns:minmax(0,1fr)}
 .tpl-spec .sp-req .blk-step{background:var(--surface);border:1px solid var(--line);
 border-left:3px solid var(--accent);border-radius:10px;padding:12px 16px;margin:0;
-grid-template-columns:92px 1fr}
+grid-template-columns:92px minmax(0,1fr)}
 /* The gutter is a FIXED width, not `auto`. The ID and the RFC-2119 level pill share column one,
    and the pill's width follows its word — so on `auto` the column measured 44px for MUST, 60px
    for SHOULD and 36px for MAY, and every card's title started at a different x. Browser-measured
@@ -147,7 +147,20 @@ grid-template-columns:92px 1fr}
 .tpl-spec .sp-req .blk-n{color:var(--accent);font-weight:700;
 font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;letter-spacing:.04em}
 .tpl-spec .sp-req .blk-title{font-size:15px}
-.tpl-spec .sp-ac .blk-step{border-bottom-style:dashed}
+.tpl-spec .sp-ac .blk-step{border-bottom-style:dashed;
+grid-template-columns:fit-content(50%) minmax(0,1fr)}
+/* Phone width, fixed alongside #78. The card list's one column and each card's text track may
+   shrink below their content, and the fixed 92px gutter above is kept. The list's column was as
+   wide as its widest card, and a card's `1fr` text track was never narrower than its longest
+   unbreakable word, so one long word stretched every card in the list: measured, a 360px page
+   was 369px wide. A long word in a title or text cell, inside code or not, now wraps.
+   Acceptance rows had the same `auto 1fr` shape. Their ID column is capped at half the row, and
+   a long ID or level word wraps inside it, so neither can squeeze the title to nothing. A long
+   requirement ID wraps inside the fixed gutter too. */
+.tpl-spec .sp-req .blk-title,.tpl-spec .sp-req .blk-text,
+.tpl-spec .sp-ac .blk-title,.tpl-spec .sp-ac .blk-text{overflow-wrap:anywhere}
+.tpl-spec .sp-req .blk-n,.tpl-spec .sp-ac .blk-n,
+.tpl-spec .sp-ac .blk-level{max-width:100%;overflow-wrap:anywhere}
 .tpl-spec .sp-ac .blk-n{color:var(--ink-3)}
 .tpl-spec .sp-gate .blk-chip{border-radius:5px;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
 .tpl-spec table th{color:var(--accent)}

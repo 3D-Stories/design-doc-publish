@@ -213,7 +213,13 @@ PRE_74 = {
     # That sharing is why this could not be folded into #68 — see the issue's own note.
     "dashboard": "d0b93af85fedc623a4c832b5c64516a70389905bef2795ff1a38200d58408bca",
     "review": "4bc27e104489523eb871b7303b75728898ade824648782ae68e8bd9983def1b5",
-    "spec": "f5ada1fef5067255e1febfe835a8dac6ceaab28d4dfa69da3327f9d6930cf606",
+    # #78 RE-PINNED `spec` ALONE, and the other thirteen did not move, which is the containment this
+    # oracle proves. Requirement cards sit in a grid list whose one column was as wide as its widest
+    # card, and each card's `1fr` text track was never narrower than its longest unbreakable word.
+    # MEASURED on the DayStory app spec at a 360px viewport: one code span of 203px stretched 21
+    # cards, document scrollWidth 369 against clientWidth 360. Both tracks now shrink, the 92px
+    # gutter is kept, and a code span in a card may wrap. After: 360 against 360, titles unmoved.
+    "spec": "333ebd2dadd298c31eb12dcee33bed0f9cdfd22a1cf9a3b060dfebbb3f5dd2a8",
     # #75 moved `uat` on purpose — the frozen-target rebuild. Re-pinned with the reason
     # beside it, the same treatment #68 gave `roadmap` (D57/D61). `plain` has not moved and
     # its own pin is untouched; the per-PR "only my style moved" guard is `crossstyle.sh`.

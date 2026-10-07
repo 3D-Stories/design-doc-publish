@@ -135,6 +135,15 @@ def _safe_url(escaped_url: str) -> str | None:
     return u
 
 
+# #78: the opening of the thumbnail link `_img` emits.
+IMG_ZOOM_OPEN = '<a class="doc-img" href="'
+# Every thumbnail form carries this: the zooming link, a linked image's own link, and the span
+# box an image gets inside link text. `render._render_body` looks for it to record `imgzoom`.
+# Author text is escaped before any construct runs, so only the renderer can produce it.
+IMG_THUMB_MARK = 'class="doc-img'
+_ZOOM_WRAPPED = re.compile(r'<a class="doc-img" href="[^"]*">(<img\b[^>]*>)</a>')
+
+
 def _inline_rich(escaped: str) -> str:
     """`_inline` plus links, images, and italics — #16's inline constructs.
 
@@ -161,12 +170,24 @@ def _inline_rich(escaped: str) -> str:
         # may still apply inside it (`![*x*](https://h/i.png)` keeps its `<em>`) (#23).
         if url is None or _is_external(url):
             return m.group(0)
-        return f'<img src="{url}" alt="{alt}">'
+        # #78: an accepted image is a thumbnail inside a link to the full image. The `<img>`
+        # is the exact tag this always emitted; only the anchor is new. The link alone is the
+        # no-script fallback, and the optional `imgzoom` layer turns it into a modal.
+        return f'{IMG_ZOOM_OPEN}{url}"><img src="{url}" alt="{alt}"></a>'
 
     def _link(m):
         text, url = m.group(1), _safe_url(m.group(2))
         if url is None:
             return m.group(0)
+        # #78: a linked image keeps its OWN target. `_img` already wrapped it in a zoom link,
+        # and leaving that in place would nest an `<a>` inside this one, which HTML forbids. It
+        # must still be capped, because a bare `<img>` is the overflow #78 fixes (measured: a
+        # 996 px linked diagram made a 360 px page 1036 px wide). So when the image IS the link
+        # text, this link becomes the thumbnail box. When it sits mid-text, a span is the box.
+        whole = _ZOOM_WRAPPED.fullmatch(text)
+        if whole:
+            return f'<a class="doc-img doc-img-link" href="{url}">{whole.group(1)}</a>'
+        text = _ZOOM_WRAPPED.sub(r'<span class="doc-img">\1</span>', text)
         return f'<a href="{url}">{text}</a>'
 
     # Emphasis may only touch TEXT, never generated markup. Skipping just <code>
