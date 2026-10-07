@@ -135,6 +135,7 @@ the zebra and evidence accents are plain CSS carried by a template's accent bloc
 | `table` / `thead` zebra (`tbody tr:nth-child(even)` on `--code`)   | striped rows for scan-ability                  | report, review, dashboard (accent block), design (#40: also an accent `thead`, for the trade-off table) |
 | `blockquote` evidence accent (left rule / fill in `--accent`/`--code`) | quoted evidence stands out from prose      | report, review (accent block)            |
 | `.doc-code` + `.doc-code-bar`/`.doc-code-lang`/`.doc-code-copy`    | an ordinary code fence, boxed with its language and a copy button | every RICH style — this one is markdown, not a typed block |
+| `.doc-img` (+ `.doc-img-link` on a linked image) + `.doc-zoom`/`.doc-zoom-bar`/`.doc-zoom-cap`/`.doc-zoom-close` | a markdown image as a 300 px thumbnail linking to the full image, which the script opens in a modal (#78) | every RICH style — markdown, not a typed block |
 
 ### State tokens — what a chip ACCEPTS, not just which block emits it (#166)
 

@@ -3,18 +3,21 @@
 
 Turns a design/spec markdown doc into a self-contained, CSP-safe HTML artifact:
 inline CSS only, no external hosts (no CDN link/script/font/img), so it renders
-anywhere and survives a strict Content-Security-Policy — with TWO stated exceptions,
-both inline <script> and neither ever fetched:
+anywhere and survives a strict Content-Security-Policy — with THREE stated exceptions,
+all inline <script> and none ever fetched:
 
   1. The interactive `uat` template (#18), for the style as a whole.
   2. The `codecopy` component, on any RICH style, and only on a page that actually
      contains an ordinary code fence. Writing to the clipboard has no declarative
      expression, so the button cannot exist without it.
+  3. The `imgzoom` component (#78), on any RICH style, and only on a page that actually
+     renders an image. Without the script the thumbnail is still a plain link to the full
+     image, so a page that refuses the script loses the modal and nothing else.
 
 A strict `script-src 'self'` must therefore permit an inline script (or its hash) for
-those pages. `plain` emits no script under any input, and a rich page with no fence and
-no uat template still emits none — `test_uat_template.py` and `test_code_copy.py` pin
-both halves.
+those pages. `plain` emits no script under any input, and a rich page with no fence, no
+image and no uat template still emits none — `test_uat_template.py`, `test_code_copy.py`
+and `test_image_zoom.py` pin both halves.
 Optionally embeds a run's
 telemetry (read from the run-record structure — never hand-retyped) and always
 stamps a visible "Last updated" datetime.
@@ -123,6 +126,7 @@ from .markdown import (  # noqa: E402,F401
     _split_table_row, status_chip, _STATUS_VOCAB, render_sections,
     roadmap_status_chip, confidence_chip, CTX_SECTION_CHIPS_OFF,
 )
+from .markdown import IMG_THUMB_MARK as _IMG_THUMB_MARK  # noqa: E402
 from . import blocks as _blocks  # noqa: E402
 from . import frame as _frame  # noqa: E402
 from . import templates as _templates  # noqa: E402
@@ -237,8 +241,24 @@ def _render_body(markdown: str, style: str = "plain", ctx: dict | None = None) -
     # whose signature is fixed and whose bytes are pinned — it gets no ctx and can record
     # no feature, which is correct: plain renders every typed block as a code listing.
     if rich:
+        inline_fn = _noting_thumbnails(inline_fn, ctx)
         return renderer(markdown, inline_fn=inline_fn, rich=rich, doc_type=style, ctx=ctx)
     return renderer(markdown, inline_fn=inline_fn, rich=rich, doc_type=style)
+
+
+def _noting_thumbnails(inline_fn, ctx):
+    """#78: record `imgzoom` where a thumbnail is actually made, in the rich inline pass.
+
+    `_inline_rich` is a pure text function with no ctx, and every caller would have to change
+    to give it one. Wrapping the pass here records the feature at the one place all rich inline
+    text runs through. The test is exact, not a guess: author text is escaped before any
+    construct runs, so `IMG_THUMB_MARK` can only come from `_img` or `_link`."""
+    def run(escaped):
+        out = inline_fn(escaped)
+        if _IMG_THUMB_MARK in out:
+            _blocks.note_feature(ctx, "imgzoom")
+        return out
+    return run
 
 
 # --- telemetry (read-only consumer of the run-record shape) ---
