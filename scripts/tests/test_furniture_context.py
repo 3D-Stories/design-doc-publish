@@ -219,7 +219,7 @@ PRE_74 = {
     # MEASURED on the DayStory app spec at a 360px viewport: one code span of 203px stretched 21
     # cards, document scrollWidth 369 against clientWidth 360. Both tracks now shrink, the 92px
     # gutter is kept, and a code span in a card may wrap. After: 360 against 360, titles unmoved.
-    "spec": "625991a3b1f0dc575bb724159e5b912acffaa7cdecec5fe13464bd96a7ece0ef",
+    "spec": "333ebd2dadd298c31eb12dcee33bed0f9cdfd22a1cf9a3b060dfebbb3f5dd2a8",
     # #75 moved `uat` on purpose — the frozen-target rebuild. Re-pinned with the reason
     # beside it, the same treatment #68 gave `roadmap` (D57/D61). `plain` has not moved and
     # its own pin is untouched; the per-PR "only my style moved" guard is `crossstyle.sh`.

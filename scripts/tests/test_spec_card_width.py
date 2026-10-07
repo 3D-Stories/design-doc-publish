@@ -62,7 +62,9 @@ def test_acceptance_rows_get_a_shrinkable_text_track_and_a_capped_id_column():
         assert _decl(cell, "overflow-wrap") == "anywhere", cell
 
 
-def test_a_long_acceptance_id_or_level_wraps_inside_its_column():
-    for cell in (".tpl-spec .sp-ac .blk-n", ".tpl-spec .sp-ac .blk-level"):
+def test_a_long_id_or_level_wraps_inside_its_column():
+    """Astra, verifying the fix: an unbroken requirement ID over about 80 characters still widened
+    a 360px page, identically before and after. The requirement ID pill now wraps in its gutter."""
+    for cell in (".tpl-spec .sp-req .blk-n", ".tpl-spec .sp-ac .blk-n", ".tpl-spec .sp-ac .blk-level"):
         assert _decl(cell, "max-width") == "100%", cell
         assert _decl(cell, "overflow-wrap") == "anywhere", cell

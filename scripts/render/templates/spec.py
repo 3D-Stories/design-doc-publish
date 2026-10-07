@@ -155,10 +155,12 @@ grid-template-columns:fit-content(50%) minmax(0,1fr)}
    unbreakable word, so one long word stretched every card in the list: measured, a 360px page
    was 369px wide. A long word in a title or text cell, inside code or not, now wraps.
    Acceptance rows had the same `auto 1fr` shape. Their ID column is capped at half the row, and
-   a long ID or level word wraps inside it, so neither can squeeze the title to nothing. */
+   a long ID or level word wraps inside it, so neither can squeeze the title to nothing. A long
+   requirement ID wraps inside the fixed gutter too. */
 .tpl-spec .sp-req .blk-title,.tpl-spec .sp-req .blk-text,
 .tpl-spec .sp-ac .blk-title,.tpl-spec .sp-ac .blk-text{overflow-wrap:anywhere}
-.tpl-spec .sp-ac .blk-n,.tpl-spec .sp-ac .blk-level{max-width:100%;overflow-wrap:anywhere}
+.tpl-spec .sp-req .blk-n,.tpl-spec .sp-ac .blk-n,
+.tpl-spec .sp-ac .blk-level{max-width:100%;overflow-wrap:anywhere}
 .tpl-spec .sp-ac .blk-n{color:var(--ink-3)}
 .tpl-spec .sp-gate .blk-chip{border-radius:5px;font:10.5px/1.4 ui-monospace,Menlo,Consolas,monospace}
 .tpl-spec table th{color:var(--accent)}
