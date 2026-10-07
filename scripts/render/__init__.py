@@ -241,24 +241,16 @@ def _render_body(markdown: str, style: str = "plain", ctx: dict | None = None) -
     # whose signature is fixed and whose bytes are pinned — it gets no ctx and can record
     # no feature, which is correct: plain renders every typed block as a code listing.
     if rich:
-        inline_fn = _noting_thumbnails(inline_fn, ctx)
-        return renderer(markdown, inline_fn=inline_fn, rich=rich, doc_type=style, ctx=ctx)
-    return renderer(markdown, inline_fn=inline_fn, rich=rich, doc_type=style)
-
-
-def _noting_thumbnails(inline_fn, ctx):
-    """#78: record `imgzoom` where a thumbnail is actually made, in the rich inline pass.
-
-    `_inline_rich` is a pure text function with no ctx, and every caller would have to change
-    to give it one. Wrapping the pass here records the feature at the one place all rich inline
-    text runs through. The test is exact, not a guess: author text is escaped before any
-    construct runs, so `IMG_THUMB_MARK` can only come from `_img` or `_link`."""
-    def run(escaped):
-        out = inline_fn(escaped)
-        if _IMG_THUMB_MARK in out:
+        body = renderer(markdown, inline_fn=inline_fn, rich=rich, doc_type=style, ctx=ctx)
+        # #78: `imgzoom` is recorded from the FINISHED body, never during the inline pass. A
+        # typed block can render its rows and then be thrown away whole (a duplicate step id
+        # falls back to a code listing), so a thumbnail made mid-render may never reach the
+        # page. The test is exact: author text is escaped before any construct runs, so
+        # `IMG_THUMB_MARK` can only come from `_img` or `_link`.
+        if _IMG_THUMB_MARK in body:
             _blocks.note_feature(ctx, "imgzoom")
-        return out
-    return run
+        return body
+    return renderer(markdown, inline_fn=inline_fn, rich=rich, doc_type=style)
 
 
 # --- telemetry (read-only consumer of the run-record shape) ---

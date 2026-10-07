@@ -42,11 +42,13 @@ IMG = "# T\n\nThe flow:\n\n![Connect a calendar](flows/connect.png)\n"
 NO_IMG = "# T\n\nJust prose, and a [link](other.html) which is not an image.\n"
 TAG = '<img src="flows/connect.png" alt="Connect a calendar">'
 THUMB = f'<a class="doc-img" href="flows/connect.png">{TAG}</a>'
-RICH = ("design", "report", "roadmap", "analysis", "dashboard", "review", "spec", "workflow")
+# Every rich style, taken from the registry itself, so a new template is covered the day it lands.
+RICH = tuple(sorted(k for k in render._TEMPLATES if k != "plain"))
 
 
 def _page(md=IMG, style="design"):
-    return render.render_artifact(md, title="T", style=style, generated_at="2026-01-01 00:00 MST")
+    return render.render_artifact(md, title="T", style=style, generated_at="2026-01-01 00:00 MST",
+                                  doc_id="t")
 
 
 def _scripts(html):
@@ -93,6 +95,26 @@ def test_an_image_in_a_table_cell_is_wrapped_too():
 def test_the_feature_is_recorded_only_when_an_image_rendered():
     assert "imgzoom" in _features(IMG)
     assert "imgzoom" not in _features(NO_IMG)
+
+
+def test_the_feature_count_holds_rich_styles_to_the_registry():
+    """Thirteen when this was written. A shrinking registry is a change worth noticing."""
+    assert len(RICH) >= 13 and "plain" not in RICH
+
+
+DISCARDED = "# T\n\n```steps\na | ![a](a.png) | x | MUST\na | duplicate | x | MUST\n```\n"
+
+
+def test_an_image_in_a_discarded_typed_block_records_no_feature():
+    """Astra F1 (#78 review): the duplicate step id makes the whole fence fall back to a listing,
+    so no thumbnail survives. Recording the feature while the doomed block was still being
+    rendered left a zoom script and CSS on a page with no image."""
+    page = render.render_artifact(DISCARDED, title="T", style="uat",
+                                  generated_at="2026-01-01 00:00 MST", doc_id="t")
+    assert "<img" not in page
+    assert "doc-zoom" not in page and ".doc-img{" not in page
+    assert not any("showModal" in sc for sc in _scripts(page))
+    assert "imgzoom" not in _features(DISCARDED, style="uat")
 
 
 # --- refusals and links behave exactly as before -------------------------------------
@@ -264,5 +286,5 @@ def test_the_css_reaches_no_external_host():
 def test_a_page_with_a_thumbnail_passes_the_lint_gate(style):
     """A real title, because the gate rightly refuses the placeholder `T` the other tests use."""
     page = render.render_artifact(IMG, title="Connect a calendar", style=style,
-                                  generated_at="2026-01-01 00:00 MST")
+                                  generated_at="2026-01-01 00:00 MST", doc_id="t")
     assert lint.lint(page) == []
