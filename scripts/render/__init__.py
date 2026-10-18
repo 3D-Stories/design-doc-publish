@@ -434,6 +434,12 @@ _COMPONENT_STYLE = """
    stylesheet AC5 freezes and `plain` carries it with no layer on top, so a rule added
    there would re-baseline a frozen promise to fix a report-style page. */
 @media (max-width:560px){table{display:block;width:auto;max-width:100%;overflow-x:auto}}
+/* A long inline code span (a file path, a command) wraps instead of widening the page.
+   MEASURED on a design page at a 390px viewport: two paths in list items made it 447px wide.
+   `break-word`, not `anywhere`: both fixed the page, but `anywhere` changes min-content, so at
+   1440px it broke 18 code spans in table cells that fit before, and `break-word` changed none.
+   `pre` keeps white-space:pre and its own scroll. Same layer as the table rule, same reason. */
+code{overflow-wrap:break-word}
 
 :root{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}
 :root[data-theme=dark]{--sev-crit:#f87171;--sev-crit-bg:#3b1717;--sev-high:#fb923c;--sev-high-bg:#3a2410;--sev-med:#fbbf24;--sev-med-bg:#302a14;--sev-low:#a8b6bd;--sev-low-bg:#232d34;--req-c:#2dd4bf;--req-c-bg:#123531}

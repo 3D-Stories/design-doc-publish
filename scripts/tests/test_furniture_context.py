@@ -84,6 +84,14 @@ FIXTURE = (SCRIPTS / "tests" / "fixtures" / "crossstyle.md").read_text(encoding=
 # `plain` renders a typed fence as a code listing and never invokes the block engine, so its pin
 # came back EQUAL — the same containment signal #133, #134 and #171 each relied on.
 PRE_74 = {
+    # INLINE-CODE-WRAP RE-PINNED THE THIRTEEN NON-PLAIN STYLES, `plain` untouched. A long inline
+    # code span could not wrap, so a path in a list item pushed a design page to 447px on a 390px
+    # screen. `code{overflow-wrap:break-word}` went into `_COMPONENT_STYLE` beside the WIDE-TABLE
+    # rule, and NOT into `_STYLE`, for the same AC5 reason.
+    #
+    # CONTAINMENT, MEASURED: for each style, the new render with the added block (its comment and
+    # the one rule) removed exactly once hashes to the pin it replaced, 13 of 13, and `plain`'s
+    # recomputed sha came back EQUAL. Nothing but that block moved.
     # WIDE-TABLE RE-PINNED THE THIRTEEN NON-PLAIN STYLES, and `plain` is untouched — which is the
     # containment this oracle exists to prove, in the same shape #171 had. A table is the one block
     # that cannot be made narrower by wrapping: its columns have a minimum width, and `width:100%`
@@ -172,7 +180,7 @@ PRE_74 = {
     # doc type whose purpose is separating confirmed from inferred. The fix lands at the
     # shared `render_sections` call site, so it reaches this resolver by the same line;
     # `templates/analysis.py` has documented this defect and asked for exactly that since #76.
-    "analysis": "0bb2a4ce67b4e6e76da84a5cd661c13cf1a6ac055554b39772b80e4a0eadef07",
+    "analysis": "0121d2eda8be618c6bf1f19fe6a8fe395499e579122f3fe52e6f549542ae38ed",
     # #68 moved roadmap on purpose — TWICE, once per PR of the child, and each move is the
     # deliberate rebuild the issue asks for. PR 1 added the `composition` block and its CSS;
     # PR 2 added the `phases` band that contains it. Re-pinned rather than re-derived: this
@@ -205,32 +213,32 @@ PRE_74 = {
     # (a 64-char hash, a slash-joined issue run) breaks rather than pushing the badge wide
     # (a full-page 2381px scroll on a 780px viewport, owner-reported). Only the roadmap template
     # carries `blk-ph-badge`, so no other style moves; `crossstyle.sh` is the "only mine moved" guard.
-    "roadmap": "e196ecc4d825e2fd342d2e5ad24f2eb2605fe7317fa3b3e10b9fe2797b74c9fa",
+    "roadmap": "5c204bf9c7de63550a8e539ea5d0959b260949e2cdc574cd1bc385b25ae423f3",
     # #76 rebuild — re-pinned; see the header note above.
-    "report": "37e6dda06a2ac85d4b790fa13896a7509a6abe7059ae161c60a59589946dffce",
-    "design": "a45b732510c1b4fbef72d10e58a2917cc8d499f0cd75184a67da584958f52caa",
+    "report": "0dfa2aeaa65467cdc71631bccb756a8ff7ffc14b0d881da8cb273018822ba61b",
+    "design": "6411c999a1391a037eab6a963d0081ef3032cdcd222261744d9c3920d1f3ecf3",
     # #90 moved it: `dashboard` shares `roadmap_status_chip`, so the same fix reaches it.
     # That sharing is why this could not be folded into #68 — see the issue's own note.
-    "dashboard": "d0b93af85fedc623a4c832b5c64516a70389905bef2795ff1a38200d58408bca",
-    "review": "4bc27e104489523eb871b7303b75728898ade824648782ae68e8bd9983def1b5",
+    "dashboard": "0b3d1a2a2a6b9a2db95e90ad5bbb5511fb65594c2d1b005cde9dd5b14558fae0",
+    "review": "18a250fafb52c08b5eeac65520b735d8c52b69dddc02ead28989997947ce7076",
     # #78 RE-PINNED `spec` ALONE, and the other thirteen did not move, which is the containment this
     # oracle proves. Requirement cards sit in a grid list whose one column was as wide as its widest
     # card, and each card's `1fr` text track was never narrower than its longest unbreakable word.
     # MEASURED on the DayStory app spec at a 360px viewport: one code span of 203px stretched 21
     # cards, document scrollWidth 369 against clientWidth 360. Both tracks now shrink, the 92px
     # gutter is kept, and a code span in a card may wrap. After: 360 against 360, titles unmoved.
-    "spec": "333ebd2dadd298c31eb12dcee33bed0f9cdfd22a1cf9a3b060dfebbb3f5dd2a8",
+    "spec": "945ff8ef1063a8f66efcda3552ab074e926ebb1b29df2a7f8e4f95cf6426f2c7",
     # #75 moved `uat` on purpose — the frozen-target rebuild. Re-pinned with the reason
     # beside it, the same treatment #68 gave `roadmap` (D57/D61). `plain` has not moved and
     # its own pin is untouched; the per-PR "only my style moved" guard is `crossstyle.sh`.
-    "uat": "9e78223598838afe5ebef39fe21aea41682eaf405e1f1f0af22c1078f998ad67",
-    "workflow": "0ead75507a8cd2c31e43884018e10134b8cc3dd36af74967294a37ac63c0fba3",
+    "uat": "4d4849929746f1af89352edea0a225e16245ce0781b06eae7f62fa27abfc106c",
+    "workflow": "a34c2f6bd162e2dd576ca1f029b3236dc9853d4d34fe19773f4125fdaeb0a682",
     # #42 adds this style, so its pin is CAPTURED here rather than inherited — there is no
     # "before" for a style that did not exist. What the oracle guards from now on is that
     # nothing else moves it.
-    "design-system": "d17f10887006d31f352ead015bf7dc01cf8c2339dac8305f751f3241a6d5abaf",
-    "module-map": "956910d672354e2f16b8be034a0f9970c210b9873e2f929b2b244b7cb7295603",
-    "slide-deck": "1ae233f3c1366a8a606411442cfa893318b40edb5c7463c1b281750c7b732aff",
+    "design-system": "0156345604ae9584c211b325d827b13e25873c92c5bc33aaeecf7b98b87f4c87",
+    "module-map": "8fc21aa207d4b50229fcf19a9178efb93df13cc1a78f9952ae9d4f2140ac29e7",
+    "slide-deck": "2d670295729be8e74f5f9447182d26766fbfab3ff1df34bbbb209ea2f1d7875c",
     # #59 adds this style, so its pin is CAPTURED here rather than inherited — there is no
     # "before" for a style that did not exist, the same treatment #42 gave `design-system`.
     # What the oracle guards from now on is that nothing else moves it.
@@ -243,7 +251,7 @@ PRE_74 = {
     # Captured with THIS file's own `_sha` recipe (title="T", generated_at="x", no doc id),
     # not with `regen_rendered_styles.py`'s. Two recipes live in this tree for different jobs
     # and the header above records what happens when the wrong one is used.
-    "minutes": "1d4c1ceff91c4856ff23d96dee8bb30606319439387728e370c3a50330015243",
+    "minutes": "bbfa3afcd65f504ceff81666151f6e3b098700f16e3344884639cc8a326e0ce7",
 }
 
 PACK = {"accent": {"light": "#1e5f7a", "dark": "#7fd4f0"}}
