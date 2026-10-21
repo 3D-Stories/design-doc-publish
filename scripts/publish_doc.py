@@ -1298,7 +1298,8 @@ def load_telemetry(path: Path | None) -> dict | None:
 
 def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
            style: str, doc_id: str | None, vdl: dict | None = None,
-           telemetry: dict | None = None, section_chips: bool = True) -> str:
+           telemetry: dict | None = None, section_chips: bool = True,
+           issue_repo: str | None = None) -> str:
     """Render to the committed `.html` and return the same string the gate will read.
 
     **STAMP CONTINUITY (#72), and why it is here rather than in the renderer.** This function
@@ -1372,7 +1373,7 @@ def render(md_path: Path, out_path: Path, *, title: str, subtitle: str,
             return RENDER.render_artifact(markdown, title=title, subtitle=subtitle,
                                           style=style, doc_id=doc_id, vdl=vdl,
                                           telemetry=telemetry, section_chips=section_chips,
-                                          generated_at=stamp)
+                                          issue_repo=issue_repo, generated_at=stamp)
         except ValueError as e:
             # `SOURCE_DATE_EPOCH` was set and unusable. The renderer refuses rather than
             # falling back to the clock, and a legible stage-1 refusal is what that must
@@ -1557,7 +1558,8 @@ def assert_manifest_covers(staged: list[str], url_paths: list[str]) -> None:
 # --- stage 3: the lint gate ----------------------------------------------------------
 
 def source_gate(md_path: Path, *, allow_unsupported: bool = False,
-                ack_stale: bool = False) -> list[str]:
+                ack_stale: bool = False, issue_repo: str | None = None,
+                ack_severity: bool = False, ack_unlinked: bool = False) -> list[str]:
     """Check the SOURCE, before anything deploys. Returns the notes worth printing.
 
     Everything else in this pipeline answers "did the bytes I linted reach the page?" —
@@ -1595,6 +1597,39 @@ def source_gate(md_path: Path, *, allow_unsupported: bool = False,
                            "deliberately historical records of what was true then.")
     if drift:
         notes.append(f"--ack-stale: {len(drift)} line(s) still read as open and were "
+                     f"published anyway")
+
+    # Owner decision 2026-10-20: an id with another word right before its `#N`
+    # (`herdr-utils #67`) may name another repository, so it is not linked, and it refuses here
+    # with both fixes. Offline, and it runs before the severity check so a row it fixes gets its
+    # severity checked on the next run.
+    unlinked, unlinked_notes = SOURCE_LINT.check_issue_links(md, issue_repo)
+    notes.extend(unlinked_notes)
+    if unlinked and not ack_unlinked:
+        raise StageError(3, "a roadmap item id holds an issue number that will not link, "
+                            "because the word before it may name another repository. "
+                            "Nothing was deployed:\n  - " + "\n  - ".join(unlinked)
+                         + "\n\n  Write one of the rows shown, or pass --ack-unlinked to "
+                           "publish them unlinked.")
+    if unlinked:
+        notes.append(f"--ack-unlinked: {len(unlinked)} item id(s) hold an issue number and "
+                     f"were published unlinked")
+
+    # Owner decision 2026-10-20: the render is offline, so a roadmap item's severity pill is
+    # only as current as the author's copy of the label. This reads the live labels through
+    # `gh` — read only, and only for a document with `#N` item ids — and refuses a row that
+    # disagrees. It runs on `--dry-run` too, because that is the everyday path.
+    sev, sev_notes = SOURCE_LINT.check_severity(md, issue_repo)
+    notes.extend(sev_notes)
+    if sev and not ack_severity:
+        raise StageError(3, "a roadmap item's severity does not match its GitHub issue. The "
+                            "pill is drawn only for an issue with a severity:<level> label, "
+                            "and must show that level. Nothing was deployed:\n  - "
+                         + "\n  - ".join(sev)
+                         + "\n\n  Write the rows shown, or pass --ack-severity to publish "
+                           "them as they are.")
+    if sev:
+        notes.append(f"--ack-severity: {len(sev)} item(s) disagree with GitHub and were "
                      f"published anyway")
     return notes
 
@@ -1769,6 +1804,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="publish even though this revision marks something done while "
                          "other lines still read as open. Use when those lines are "
                          "deliberately historical records of what was true then.")
+    ap.add_argument("--ack-severity", action="store_true",
+                    help="publish even though a roadmap item's severity cell disagrees with "
+                         "its GitHub issue's severity:<level> label.")
+    ap.add_argument("--ack-unlinked", action="store_true",
+                    help="publish even though a roadmap item id holds an issue number after "
+                         "another word (herdr-utils #67), so it is published unlinked.")
     ap.add_argument("--no-section-chips", action="store_true",
                     help="suppress the per-section status chip on sectioned styles "
                          "(roadmap/dashboard/analysis). For NARRATIVE pages whose prose "
@@ -1834,10 +1875,13 @@ def main(argv=None) -> int:
         # a real state here and degrades to the seed-or-hash colour rather than refusing:
         # rendering must keep working before anything is set up.
         pack = VDL.pack_for(args.project, workspace)
+        # The same project config names the GitHub repository, so a roadmap item id like
+        # `#256` links to its issue without the author typing the link.
+        issue_repo = VDL.repo_for(args.project, workspace)
         page = render(Path(args.md), out_path, title=args.title, subtitle=args.subtitle,
                       style=style, doc_id=args.doc_id, vdl=pack,
                       telemetry=load_telemetry(Path(args.telemetry) if args.telemetry else None),
-                      section_chips=not args.no_section_chips)
+                      section_chips=not args.no_section_chips, issue_repo=issue_repo)
         print(f"publish_doc: 1/6 rendered {out_path} ({style} template, "
               f"{pack['origin']} palette {pack['accent']['light']})")
 
@@ -1855,7 +1899,9 @@ def main(argv=None) -> int:
         stage = 3
         for note in source_gate(Path(args.md),
                                 allow_unsupported=args.allow_unsupported_markdown,
-                                ack_stale=args.ack_stale):
+                                ack_stale=args.ack_stale, issue_repo=issue_repo,
+                                ack_severity=args.ack_severity,
+                                ack_unlinked=args.ack_unlinked):
             print(f"publish_doc: {note}")
         gate(page, skip_component_checks=args.skip_component_checks)
         # Said out loud, every run. A skipped check that reports nothing is how a page with
@@ -1880,7 +1926,9 @@ def main(argv=None) -> int:
             # Provenance is about PUBLISHING. A dry run stops before publishing, so it has
             # nothing to establish. This also settles finding N10 outright: a dry run
             # performs no git at all, so there is no fetch to skip.
-            print(f"publish_doc: --dry-run, stopping before the first network call "
+            # The one read a dry run does make is stage 3's GitHub label check, and only for
+            # a roadmap with `#N` items (owner decision 2026-10-20). Nothing is published.
+            print(f"publish_doc: --dry-run, stopping before the first publish network call "
                   f"({len(staged)} asset(s) would ship)")
             return 0
 

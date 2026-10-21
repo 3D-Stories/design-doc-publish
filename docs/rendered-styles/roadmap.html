@@ -352,6 +352,24 @@ color:var(--ink-3);background:var(--code)}
 .tpl-roadmap .blk-ph-chip.is-blocked,
 .tpl-roadmap .blk-ph-chip.is-failed{color:var(--sev-crit);background:var(--sev-crit-bg)}
 .tpl-roadmap .blk-ph-text{flex:1 1 240px;color:var(--ink-2);font-size:14px}
+/* An item id that names a GitHub issue is a link to it. It keeps the id's own look, so a
+   linked id and a plain one read as the same column; the hover says it can be followed. */
+.tpl-roadmap a.blk-ph-id{text-decoration:none}
+.tpl-roadmap a.blk-ph-id:hover{color:var(--accent);border-bottom-color:var(--accent)}
+/* The issue's severity, from its `severity:<level>` label: a round pill beside the square type
+   chip, so the two facts read apart. The colours are the risk table's `--sev-*` pairs. An
+   unknown word gets no level class and stays the uncoloured base pill. */
+.tpl-roadmap .blk-ph-sev{font:700 9.5px/1.7 ui-monospace,Menlo,Consolas,monospace;
+letter-spacing:.11em;text-transform:uppercase;padding:0 7px;border-radius:999px;
+color:var(--ink-3);border:1px solid var(--line)}
+.tpl-roadmap .blk-ph-sev.is-critical{color:var(--sev-crit);background:var(--sev-crit-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-sev.is-high{color:var(--sev-high);background:var(--sev-high-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-sev.is-medium{color:var(--sev-med);background:var(--sev-med-bg);
+border-color:transparent}
+.tpl-roadmap .blk-ph-sev.is-low{color:var(--sev-low);background:var(--sev-low-bg);
+border-color:transparent}
 
 /* #57 — independent, closed-by-default disclosures. Deliberately does NOT suppress the browser's
    own disclosure marker: `steprail` hides it because it supplies a rail indicator, a FAQ has none,

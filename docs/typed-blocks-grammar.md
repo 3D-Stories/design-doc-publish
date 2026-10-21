@@ -301,6 +301,48 @@ Bare tokens keep working unchanged — the colon is the only switch. An unknown 
 warns and falls back to `note`, and shows your whole original text rather than the half that
 parsed. Full rules: `design-language.md`.
 
+**An item that names a GitHub issue links to it, and can show its severity.** Write the issue
+as the item's id and, optionally, its severity label as a fourth cell:
+
+```phases
+Backlog | 3 open | active
+  #256 | The handoff is built at session start | bug:must | severity:high
+  #431 | A PR body's path lists are capped | bug:must | medium
+  3D-Stories/benchstory#289 | Commit the design inputs | planned
+```
+
+* **The link is automatic.** An id of `#N` becomes a link to issue N whenever the render knows
+  the repository. `publish_doc.py` knows it from `--project`: the project's `.rawgentic.json`
+  declares `repo.fullName`, the same file its colour comes from. `render-doc` does the same
+  when given `--project`. Do not type the link into the text cell; the id already is one.
+* **Another repository:** write `owner/name#N` in the id cell. It links without `--project`.
+* **A richer id links too,** when it holds ONE issue number and nothing, punctuation, or the
+  word `epic`, `issue`, `PR` or `pull` sits right before it: `FF01 / #10`, `0.1 · #65 — …`,
+  `epic #350` and `PR #1` all link. GitHub sends `/issues/N` to the pull request when N is one.
+* **Another word right before the number does not link** (`herdr-utils #67`): the word may be a
+  repository, and a guessed link would open the wrong issue. The render warns, and the
+  publisher refuses at stage 3, printing both fixes: `3D-Stories/herdr-utils#67` for another
+  repository, `herdr-utils · #67` for this one. `--ack-unlinked` publishes it unlinked.
+* **Two numbers or a suffix** (`#229 #231`, `#147a`) link nothing and warn.
+* **No repository known:** the id renders as plain text and the render prints ONE warning per
+  block naming the fix. An id that is not an issue (`FA-1`, `D1`, `0a`) is never touched.
+* **Severity** is the fourth cell, drawn as a round pill beside the type chip. Copy it from the
+  issue's `severity:<level>` label, verbatim or as the bare level: `critical` red, `high`
+  orange, `medium` amber, `low` green. Leave it blank when the issue has no such label, and no
+  pill is drawn. Any other word warns and renders as an uncoloured pill with your text.
+* **The publisher checks every severity cell against GitHub.** The render never asks GitHub,
+  so two renders of one source match byte for byte. `publish_doc.py` does ask: at stage 3, on
+  every run including `--dry-run`, it reads each linked issue's labels through `gh` (read
+  only), and refuses a row whose cell is missing, wrong, or set on an issue with no severity
+  label. The refusal prints the corrected row to paste. `--ack-severity` publishes as written.
+  With `gh` missing or not logged in, it prints `severity NOT checked` and goes on.
+* To read every severity label at once: `gh issue list --state all --limit 500 --json
+  number,labels --jq '.[] | "\(.number) \([.labels[].name | select(startswith("severity:"))] |
+  join(","))"'`.
+
+A phase row still takes three cells. A fourth on a phase row, or a fifth on an item, warns and
+is ignored.
+
 **Order is the grammar.** Phases render in the order they are written and the renderer numbers
 them `01`, `02`, … — that number is the only reason a reader can see sequence rather than infer
 it, and it is the gap #68's title names.

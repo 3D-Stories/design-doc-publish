@@ -41,7 +41,7 @@ python3 "$DDP_ROOT/scripts/publish_doc.py" \
   --project <project-name> --type design --ref <issue-or-slug> --dry-run
 ```
 
-`--dry-run` renders, names, lints, and validates local assets, then stops before Git or network operations. It writes HTML; it is not a read-only check. If setup is missing, use the renderer for a local-only deliverable and report that publication validation remains untested.
+`--dry-run` renders, names, lints, and validates local assets, then stops before Git or publish network operations. Its one read is the roadmap severity check, through `gh`. It writes HTML; it is not a read-only check. If setup is missing, use the renderer for a local-only deliverable and report that publication validation remains untested.
 
 | `--type` | Default `--style` | Use |
 | --- | --- | --- |
@@ -63,6 +63,8 @@ python3 "$DDP_ROOT/scripts/publish_doc.py" \
 Write the components the selected style requires. `--skip-component-checks` (alias `--allow-prose`) skips both component checks, but not template classification. Use overrides only when the intended document justifies them and disclose the skipped checks. Likewise, do not use `--ack-stale` or `--allow-unsupported-markdown` merely to make a refusal disappear. Narrative sectioned pages may need `--no-section-chips` to prevent status words in prose from creating unintended chips.
 
 Chip states are a closed vocabulary: `done/shipped/merged/ok` (green), `active/wip/pending/warn` (amber), `blocked/failed/crit` (red), and `planned/note` (grey). Compound chips use `<label>:<level>`: labels `bug`, `feature`, `chore`, `hardening`, `epic`, `action`, `note`, `task`; levels `must`, `should`, `could`, `done`. Unknown states warn and render grey.
+
+For a roadmap item that is a GitHub issue, write `#N` as the item id and do not type the link: the publisher links it from the project's `repo.fullName` (write `owner/name#N` for another repository; `epic #N`, `PR #N` and `FF01 / #N` link too, but `other-word #N` refuses, since the word may be a repository). Copy the issue's `severity:<level>` label into an optional fourth cell, `critical`, `high`, `medium` or `low`, and it draws a pill beside the type chip. Leave it blank when there is no label. The publisher checks each cell against GitHub through `gh`, `--dry-run` included, and refuses a wrong one with the fixed row; `--ack-severity` and `--ack-unlinked` override. Details and a one-line `gh` command for every label: [docs/typed-blocks-grammar.md](docs/typed-blocks-grammar.md), section `phases`.
 
 Images must exist beside or below the Markdown and use relative paths. Missing files, parent traversal, escaping symlinks, rooted paths, external images, and data URLs are refused. Relative assets are copied into the deployment; the document fetches nothing from another host. External citation links are allowed.
 

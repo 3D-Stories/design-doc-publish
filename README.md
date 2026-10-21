@@ -273,7 +273,7 @@ python3 "$DDP/scripts/publish_doc.py" --md docs/planning/my-doc.md \
 Render and lint, then — only when a doc harness is configured — pin the page to a commit and verify
 it live. The exit code is the verdict. **You do not need that second half**: committing the `.md`
 and the `.html` is what publishes the page, so with no `DOC_HARNESS_*` set this renders, lints, says
-it did not publish, and exits **0**. `--dry-run` stops before any network call. `--publish` demands
+it did not publish, and exits **0**. `--dry-run` stops before any publish network call; its only read is the roadmap severity check, through `gh`. `--publish` demands
 the pin-and-verify run and fails when it cannot happen.
 
 ## Prerequisites

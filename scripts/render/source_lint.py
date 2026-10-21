@@ -285,3 +285,216 @@ def previous_committed(md_path) -> str:
         # no previous version to compare against, which is the first-publication case —
         # never a reason to block a deploy.
         return ""
+
+
+# --- check 3: a roadmap item's severity agrees with its GitHub issue ---------------------
+#
+# Owner decision, 2026-10-20. The render is offline on purpose, so the severity pill on a
+# `phases` item exists only where an author copied the issue's `severity:<level>` label into
+# the row's fourth cell — and a step that depends on memory is hit and miss. The publisher CAN
+# read GitHub, so it compares every issue row with the live labels and refuses a disagreement:
+#
+#   * the issue has a severity label, and the cell is blank or names another level;
+#   * the issue has NO severity label, and the cell names one. Many issues carry no label, and
+#     that is fine — the pill is drawn only for an issue that has one.
+#
+# A `gh` that cannot answer is a loud note, never a silent pass and never a refusal: a machine
+# with no GitHub login must still be able to publish, and must be told what went unchecked.
+#
+# Kept in sync with `blocks._ISSUE_ID` / `blocks._PHASE_SEVERITIES` by a test. Copied, not
+# imported, because `publish_doc` loads this file on its own, outside the package.
+
+_GH_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}")
+_ISSUE_ID = re.compile(r"(" + _GH_REPO.pattern + r")?#([0-9]{1,9})")
+_SEVERITIES = ("critical", "high", "medium", "low")          # most severe first
+_ESCAPED_PIPE = "\x01"
+
+# An id that holds ONE issue number inside richer text (`FF01 / #10`, `epic #350`) links too.
+# Owner decision 2026-10-20, after 139 issue-looking ids measured unlinked across the workspace.
+# The number links only when nothing, punctuation, or a kind word sits right before it. Any
+# other word may be a repository (`herdr-utils #67`), and a guessed link would open the wrong
+# issue, so that is "foreign" and the publisher refuses it. Two numbers or a suffix (`#147a`)
+# are "unclear": no link. Kept equal to `blocks.resolve_issue_id` by a test.
+_ID_NUMBER = re.compile(r"#([0-9]{1,9})(?![\w-])")
+_ID_ANY_NUMBER = re.compile(r"#[0-9]")
+_ID_TRAIL_REPO = re.compile(r"(?:^|\s)(" + _GH_REPO.pattern + r")$")
+_ID_TRAIL_WORD = re.compile(r"([\w.-]+)\s*$")
+_ID_KIND_WORDS = frozenset({"epic", "issue", "pr", "pull"})
+
+
+def resolve_issue_id(item_id: str, repo: str | None):
+    """What a phase item id names: ("link", repo, n), ("norepo", None, n), ("foreign", word,
+    n), ("unclear", None, None), or None for an id that names no issue."""
+    m = _ISSUE_ID.fullmatch(item_id)
+    if m:
+        target = m.group(1) or repo
+        return ("link", target, int(m.group(2))) if target else ("norepo", None, int(m.group(2)))
+    numbers = list(_ID_NUMBER.finditer(item_id))
+    if len(numbers) != 1:
+        return ("unclear", None, None) if _ID_ANY_NUMBER.search(item_id) else None
+    n, before = int(numbers[0].group(1)), item_id[: numbers[0].start()]
+    explicit = _ID_TRAIL_REPO.search(before)
+    if explicit:
+        return ("link", explicit.group(1), n)
+    word = _ID_TRAIL_WORD.search(before)
+    if word is None or word.group(1).lower() in _ID_KIND_WORDS:
+        return ("link", repo, n) if repo else ("norepo", None, n)
+    return ("foreign", word.group(1), n)
+
+
+class SeverityUnavailable(Exception):
+    """GitHub could not be asked, so no severity was checked."""
+
+
+def _cells(line: str) -> list[str]:
+    return [c.replace(_ESCAPED_PIPE, r"\|").strip()
+            for c in line.strip().replace(r"\|", _ESCAPED_PIPE).split("|")]
+
+
+def _level(cell: str) -> str | None:
+    word = cell.strip().lower()
+    if word.startswith("severity:"):
+        word = word[len("severity:"):].strip()
+    return word or None
+
+
+def _expected(labels: list[str]) -> str | None:
+    found = {_level(n) for n in labels if n.lower().startswith("severity:")}
+    return next((s for s in _SEVERITIES if s in found), None)
+
+
+def _issue_rows(md: str, repo: str | None):
+    """Every `phases` item whose id is an issue: (line number, line, repo, number, cell)."""
+    for blk in _PHASES.finditer(md):
+        base = md[: blk.start()].count("\n") + 1
+        for off, raw in enumerate(blk.group(1).splitlines(), 1):
+            if raw[:1] not in (" ", "\t") or not raw.strip():
+                continue                 # a phase row, not an item
+            cells = _cells(raw)
+            found = resolve_issue_id(cells[0], repo)
+            if found and found[0] == "link":
+                yield base + off, raw, found[1], found[2], (cells + ["", "", ""])[3]
+
+
+def _fixed_row(raw: str, want: str | None) -> str:
+    indent = raw[: len(raw) - len(raw.lstrip())]
+    cells = (_cells(raw) + ["", ""])[:3]
+    while len(cells) > 1 and not cells[-1]:
+        cells.pop()
+    if want:
+        cells = (cells + ["", ""])[:3] + [f"severity:{want}"]
+    return indent + " | ".join(cells)
+
+
+def check_severity(md: str, repo: str | None, fetch=None) -> tuple[list[str], list[str]]:
+    """(findings that refuse the publish, notes to print). No issue rows, no GitHub call."""
+    rows = list(_issue_rows(md, repo))
+    if not rows:
+        return [], []
+    fetch = fetch or gh_labels
+    wanted: dict[str, set[int]] = {}
+    for _n, _raw, target, number, _cell in rows:
+        wanted.setdefault(target, set()).add(number)
+    labels: dict[tuple[str, int], list[str]] = {}
+    try:
+        for target, numbers in sorted(wanted.items()):
+            for number, names in fetch(target, numbers).items():
+                labels[(target, number)] = names
+    except SeverityUnavailable as e:
+        return [], [f"severity NOT checked for {len(rows)} issue row(s): {e}"]
+
+    findings, notes = [], []
+    for n, raw, target, number, cell in rows:
+        ident = _cells(raw)[0]
+        if (target, number) not in labels:
+            notes.append(f"line {n}: {ident} not found in {target}; its severity was not "
+                         f"checked")
+            continue
+        want, have = _expected(labels[(target, number)]), _level(cell)
+        if want == have:
+            continue
+        if want is None:
+            why = f"{ident} has no severity label on GitHub, but the row shows {cell!r}"
+        elif have is None:
+            why = f"{ident} is labelled severity:{want} on GitHub, but the row shows none"
+        else:
+            why = f"{ident} is labelled severity:{want} on GitHub, but the row shows {cell!r}"
+        findings.append(f"line {n}: {why}\n      write: {_fixed_row(raw, want)}")
+    return findings, notes
+
+
+def check_issue_links(md: str, repo: str | None) -> tuple[list[str], list[str]]:
+    """(findings that refuse the publish, notes). Offline: no GitHub call.
+
+    A finding is an id whose `#N` follows another word, which may be a repository. It prints
+    both fixes, because only the author knows which one is true.
+    """
+    findings, notes = [], []
+    for blk in _PHASES.finditer(md):
+        base = md[: blk.start()].count("\n") + 1
+        for off, raw in enumerate(blk.group(1).splitlines(), 1):
+            if raw[:1] not in (" ", "\t") or not raw.strip():
+                continue
+            cells = _cells(raw)
+            found = resolve_issue_id(cells[0], repo)
+            if not found or found[0] in ("link", "norepo"):
+                continue
+            ident, n = cells[0], base + off
+            if found[0] == "unclear":
+                notes.append(f"line {n}: {ident} holds no single issue number, so it is not "
+                             f"linked")
+                continue
+            word, number = found[1], found[2]
+            num = re.search(r"#" + str(number) + r"(?![0-9])", ident)
+            owner = repo.split("/")[0] if repo else "<owner>"
+            rest = raw[raw.index(ident) + len(ident):]
+            indent = raw[: len(raw) - len(raw.lstrip())]
+            other = f"{owner}/{word}#{number}"
+            local = ident[: num.start()].rstrip() + " · " + ident[num.start():]
+            findings.append(
+                f"line {n}: {ident} is not linked: {word!r} before #{number} may name another "
+                f"repository, and a guessed link could open the wrong issue\n"
+                f"      another repository, write: {indent}{other}{rest}\n"
+                f"      this repository, write:    {indent}{local}{rest}")
+    return findings, notes
+
+
+def gh_labels(repo: str, numbers, run=None) -> dict[int, list[str]]:
+    """Label names per issue number, read through `gh`. Read only.
+
+    One `gh issue list` for the repository, then one `gh api` lookup for each number the list
+    did not hold — a pull request, which `issue list` leaves out. A number GitHub does not know
+    is simply absent from the result.
+    """
+    import json
+    run = run or subprocess.run
+
+    def call(argv):
+        try:
+            proc = run(argv, capture_output=True, text=True, check=False, timeout=120)
+        except FileNotFoundError as e:
+            raise SeverityUnavailable(f"`gh` is not installed ({e})") from e
+        except (OSError, subprocess.TimeoutExpired) as e:
+            raise SeverityUnavailable(f"`gh` did not answer ({e.__class__.__name__})") from e
+        return proc
+
+    proc = call(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "5000",
+                 "--json", "number,labels"])
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        raise SeverityUnavailable(f"`gh issue list --repo {repo}` exited {proc.returncode}: "
+                                  f"{detail[-1] if detail else 'no output'}")
+    try:
+        found = {int(i["number"]): [str(lb["name"]) for lb in i.get("labels") or []]
+                 for i in json.loads(proc.stdout or "[]")}
+    except (ValueError, KeyError, TypeError) as e:
+        raise SeverityUnavailable(f"`gh issue list` returned unreadable JSON ({e})") from e
+    out = {n: found[n] for n in numbers if n in found}
+    for n in sorted(set(numbers) - set(found)):
+        proc = call(["gh", "api", f"repos/{repo}/issues/{n}", "--jq", "[.labels[].name]"])
+        if proc.returncode == 0:
+            try:
+                out[n] = [str(x) for x in json.loads(proc.stdout or "[]")]
+            except ValueError:
+                pass
+    return out

@@ -813,19 +813,21 @@ def _phases(body, markers=None, decorate=None, ctx=None):
         expanded = raw.expandtabs(4)
         indent = len(expanded) - len(expanded.lstrip())
         parts = [html.escape(c.strip()) for c in split_cells(raw.strip())]
-        if len(parts) > 3:
-            _warn(f"phases row {raw.strip()!r} has {len(parts)} fields; only 3 are used "
-                  f"(title | badge | state for a phase, id | text | state for an item) — "
-                  f"the extra ones are ignored")
-        first, second, third = (parts + ["", ""])[:3]
         if indent and not phases:
             # Author error, but their content still renders: an item with nothing to sit
             # inside becomes a phase rather than disappearing.
             _warn(f"phases row {raw.strip()!r} is indented but no phase is open — "
                   f"rendering it as a phase of its own")
             indent = 0
+        # An item has a fourth, optional cell: its severity. A phase still has three.
+        used = 4 if indent else 3
+        if len(parts) > used:
+            _warn(f"phases row {raw.strip()!r} has {len(parts)} fields; only {used} are used "
+                  f"(title | badge | state for a phase, id | text | state | severity for an "
+                  f"item) — the extra ones are ignored")
+        first, second, third, fourth = (parts + ["", "", ""])[:4]
         if indent:
-            phases[-1][3].append((first, second, third))
+            phases[-1][3].append((first, second, third, fourth))
         else:
             phases.append((first, second, third, []))
 
@@ -833,20 +835,37 @@ def _phases(body, markers=None, decorate=None, ctx=None):
     # #172: one advisory for the WHOLE block, gathered before rendering. Per-row would print the
     # same suggestion twenty times, which is how an advisory becomes noise people filter out.
     _typed_chip_nudge([state for _t, _b, state, _i in phases]
-                      + [s for _t, _b, _st, items in phases for _id, _tx, s in items])
+                      + [s for _t, _b, _st, items in phases for _id, _tx, s, _sv in items])
+
+    repo = _issue_repo(ctx)
+    kinds = [(item[0], (resolve_issue_id(item[0], repo) or ("",))[0])
+             for _t, _b, _s, items in phases for item in items]
+    unlinked = [ident for ident, kind in kinds if kind == "norepo"]
+    unsure = [ident for ident, kind in kinds if kind in ("foreign", "unclear")]
+    if unsure:
+        _warn(f"phases item id(s) {', '.join(unsure[:3])}{' …' if len(unsure) > 3 else ''} "
+              f"hold an issue number but are not linked — write #N, owner/repo#N, or put "
+              f"punctuation before the number (FF01 · #10)")
+    if unlinked:
+        # ONE line per block, for the reason `_typed_chip_nudge` gives: per-row is noise.
+        _warn(f"phases item id(s) {', '.join(unlinked[:3])}"
+              f"{' …' if len(unlinked) > 3 else ''} name an issue, but this render has no "
+              f"GitHub repository to link them to — pass --project for a project whose "
+              f".rawgentic.json declares repo.fullName, or write owner/repo#N")
 
     for n, (title, badge, state, items) in enumerate(phases, 1):
         st_word, st = _phase_chip(state, "phase state")
         # Resolved ONCE per item, then handed to both consumers. The bar segment and the row
         # are two renderings of one state, so resolving in each place would warn twice for a
         # single author mistake — and a doubled warning reads as two mistakes.
-        chips = [_phase_chip(s, "phase item state") for _id, _text, s in items]
+        chips = [_phase_chip(s, "phase item state") for _id, _text, s, _sv in items]
         segs = "".join(f'<span class="blk-comp-seg is-{cls}"></span>' for _w, cls in chips)
         bar = f'<span class="blk-comp-bar">{segs}</span>' if segs else ""
         rows = "".join(
             _phase_item(item_id, text, word, cls, decorate,
-                        _chip_title(raw_state, cls, ctx))
-            for (item_id, text, raw_state), (word, cls) in zip(items, chips))
+                        _chip_title(raw_state, cls, ctx),
+                        href=_issue_href(item_id, repo), sev=sev)
+            for (item_id, text, raw_state, sev), (word, cls) in zip(items, chips))
         # A phase names its chip word in the BADGE cell, so an authored badge always wins — that
         # is the grammar, and #167 does not change it. When the author left the badge empty AND
         # wrote a compound state, the label becomes the badge: otherwise `Phase | | bug:must`
@@ -1031,7 +1050,99 @@ def _typed_chip_nudge(states) -> None:
           "Bare tokens keep working, so this is a suggestion, not a defect.", file=sys.stderr)
 
 
-def _phase_item(item_id: str, text: str, word: str, cls: str, decorate=None, title="") -> str:
+# --- an item that names a GitHub issue links to it, and shows its severity ------------
+#
+# Links used to exist only where an author remembered to type one into the TEXT cell, and the
+# id cell printed `#256` as inert text. Measured on 2026-10-20: one live roadmap linked every
+# item by hand, two linked none. So the id cell itself becomes the link whenever the render
+# knows the repository, and the publisher knows it from `--project` (`vdl_packs.repo_for`).
+#
+# The href is built ONLY from two validated pieces: a repository name that fullmatches
+# `_GH_REPO` and a run of digits. No other author text reaches the attribute.
+CTX_ISSUE_REPO = "_issue_repo"
+_GH_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}")
+_ISSUE_ID = re.compile(r"(" + _GH_REPO.pattern + r")?#([0-9]{1,9})")
+
+# GitHub's label is `severity:<level>`; these are the four levels it uses. The colour is the
+# `--sev-*` token the risk table already draws, so no new colour enters the palette.
+_PHASE_SEVERITIES = ("critical", "high", "medium", "low")
+
+
+def _issue_repo(ctx) -> str | None:
+    """The render's declared repository, or None. A malformed one warns and links nothing."""
+    repo = (ctx or {}).get(CTX_ISSUE_REPO)
+    if repo is None:
+        return None
+    if not isinstance(repo, str) or not _GH_REPO.fullmatch(repo):
+        if not (ctx or {}).get("_issue_repo_warned"):
+            ctx["_issue_repo_warned"] = True
+            _warn(f"issue repository {repo!r} is not owner/name — phase item ids are not linked")
+        return None
+    return repo
+
+
+# An id that holds ONE issue number inside richer text (`FF01 / #10`, `epic #350`) links too.
+# Owner decision 2026-10-20, after 139 issue-looking ids measured unlinked across the workspace.
+# The number links only when nothing, punctuation, or a kind word sits right before it. Any
+# other word may be a repository (`herdr-utils #67`), and a guessed link would open the wrong
+# issue, so that is "foreign": no link here, and the publisher's stage 3 refuses it. Two numbers
+# or a suffix (`#147a`) are "unclear": no link. Kept equal to `source_lint.resolve_issue_id` by
+# a test; copied, because the publisher loads that file on its own.
+_ID_NUMBER = re.compile(r"#([0-9]{1,9})(?![\w-])")
+_ID_ANY_NUMBER = re.compile(r"#[0-9]")
+_ID_TRAIL_REPO = re.compile(r"(?:^|\s)(" + _GH_REPO.pattern + r")$")
+_ID_TRAIL_WORD = re.compile(r"([\w.-]+)\s*$")
+_ID_KIND_WORDS = frozenset({"epic", "issue", "pr", "pull"})
+
+
+def resolve_issue_id(item_id: str, repo: str | None):
+    """What a phase item id names: ("link", repo, n), ("norepo", None, n), ("foreign", word,
+    n), ("unclear", None, None), or None for an id that names no issue."""
+    m = _ISSUE_ID.fullmatch(item_id)
+    if m:
+        target = m.group(1) or repo
+        return ("link", target, int(m.group(2))) if target else ("norepo", None, int(m.group(2)))
+    numbers = list(_ID_NUMBER.finditer(item_id))
+    if len(numbers) != 1:
+        return ("unclear", None, None) if _ID_ANY_NUMBER.search(item_id) else None
+    n, before = int(numbers[0].group(1)), item_id[: numbers[0].start()]
+    explicit = _ID_TRAIL_REPO.search(before)
+    if explicit:
+        return ("link", explicit.group(1), n)
+    word = _ID_TRAIL_WORD.search(before)
+    if word is None or word.group(1).lower() in _ID_KIND_WORDS:
+        return ("link", repo, n) if repo else ("norepo", None, n)
+    return ("foreign", word.group(1), n)
+
+
+def _issue_href(item_id: str, repo: str | None) -> str | None:
+    found = resolve_issue_id(item_id, repo)
+    if not found or found[0] != "link":
+        return None
+    return f"https://github.com/{found[1]}/issues/{found[2]}"
+
+
+def _phase_severity(raw: str) -> str:
+    """The severity pill, or "" for a blank cell. `raw` arrives already escaped.
+
+    An unknown word keeps the author's own text and gets NO level class, so it renders as the
+    uncoloured base pill: an unrecognised severity should look unrecognised.
+    """
+    value = raw.strip()
+    if not value:
+        return ""
+    level = value.lower()
+    if level.startswith("severity:"):
+        level = level[len("severity:"):].strip()
+    if level in _PHASE_SEVERITIES:
+        return f'<span class="blk-ph-sev is-{level}">{level}</span>'
+    _warn(f"phase item severity {raw!r} is not one of {list(_PHASE_SEVERITIES)} "
+          f"(or severity:<level>) — shown uncoloured; the text still renders")
+    return f'<span class="blk-ph-sev">{value}</span>'
+
+
+def _phase_item(item_id: str, text: str, word: str, cls: str, decorate=None, title="",
+                href: str | None = None, sev: str = "") -> str:
     """One work item inside a phase. The chip is omitted when the author named no state —
     an empty pill reads as a state rather than as the absence of one.
 
@@ -1044,8 +1155,10 @@ def _phase_item(item_id: str, text: str, word: str, cls: str, decorate=None, tit
     """
     chip = (f'<span class="blk-ph-chip is-{cls}"{title}>{word}</span>'
             if word.strip() else "")
+    ident = (f'<a class="blk-ph-id" href="{href}">{item_id}</a>' if href
+             else f'<span class="blk-ph-id">{item_id}</span>')
     return (f'<div class="blk-ph-item is-{cls}">'
-            f'<span class="blk-ph-id">{item_id}</span>{chip}'
+            f'{ident}{chip}{_phase_severity(sev)}'
             f'<span class="blk-ph-text">{_prose(text, decorate)}</span></div>')
 
 

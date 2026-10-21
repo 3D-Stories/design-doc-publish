@@ -52,6 +52,7 @@ style SCANS heading prose for its chip — narrative pages get statuses nobody w
 An unknown word warns and renders grey. Labels: `bug` `feature` `chore` `hardening` `epic`
 `action` `note` `task`. Levels: `must` `should` `could` `done`. Prefer the status word to the
 severity word in a new document. Full rules: the design-language.md named above.
+Roadmap issue items: id `#N`, never a typed link; copy its `severity:<level>` label into a 4th cell (`#256 | text | bug:must | high`); the publisher checks both against GitHub and prints the row to paste — `${CLAUDE_PLUGIN_ROOT}/docs/typed-blocks-grammar.md`, `phases`.
 
 ## Images: write them relative to the markdown, and they must exist
 

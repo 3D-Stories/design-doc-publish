@@ -326,6 +326,42 @@ def _own_repository_config(project: str):
     return config                                     # OURS, and the config is readable
 
 
+_REPO_FULL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}")
+
+
+def repo_for(project: str, workspace_file: Path | None) -> str | None:
+    """The GitHub `owner/name` that `project` declares as `repo.fullName`, or None.
+
+    Found the way `pack_for` finds the colour — this tree's own config first, then the
+    workspace pointer — so a page's issue links and its branding come from the same file.
+    It is what lets a roadmap item id like `#256` link to its issue without the author
+    typing the link. None is silent when nothing is declared; a declared value that is not
+    `owner/name` warns, because a silent None there would drop every link on the page.
+    """
+    project = (project or "").strip().lower()
+    own = _own_repository_config(project)
+    if own is _OURS_UNUSABLE:
+        return None
+    config = own if own is not _NOT_OURS else _project_config(project, workspace_file)
+    if config is None or not config.exists():
+        return None
+    try:
+        data = json.loads(config.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None                                   # `pack_for` already warned about it
+    repo = data.get("repo") if isinstance(data, dict) else None
+    if not isinstance(repo, dict) or "fullName" not in repo:
+        return None                                   # silent: nothing declared
+    if repo.get("provider", "github") != "github":
+        return None                                   # silent: not a GitHub repository
+    name = repo.get("fullName")
+    if not isinstance(name, str) or not _REPO_FULL_NAME.fullmatch(name.strip()):
+        print(f"vdl_packs: ignoring repo.fullName {name!r} for {project!r} ({config}): "
+              f"not owner/name, so issue ids will not link", file=sys.stderr)
+        return None
+    return name.strip()
+
+
 def _seed_or_fallback(project: str) -> dict:
     """The committed tail of the chain: this project's seed, else the name hash.
 
