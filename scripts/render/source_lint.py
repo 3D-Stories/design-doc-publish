@@ -395,7 +395,7 @@ def _issue_rows(md: str, repo: str | None):
     """Every `phases` item whose id is an issue: (line number, line, repo, number, cell)."""
     for base, body in _phase_bodies(md):
         for off, raw in enumerate(body.splitlines(), 1):
-            if raw[:1] not in (" ", "\t") or not raw.strip():
+            if not raw[:1].isspace() or not raw.strip():  # the renderer indents by lstrip()
                 continue                 # a phase row, not an item
             cells = _cells(raw)
             found = resolve_issue_id(cells[0], repo)
@@ -459,7 +459,7 @@ def check_issue_links(md: str, repo: str | None) -> tuple[list[str], list[str]]:
     findings, notes = [], []
     for base, body in _phase_bodies(md):
         for off, raw in enumerate(body.splitlines(), 1):
-            if raw[:1] not in (" ", "\t") or not raw.strip():
+            if not raw[:1].isspace() or not raw.strip():  # the renderer indents by lstrip()
                 continue
             cells = _cells(raw)
             found = resolve_issue_id(cells[0], repo)

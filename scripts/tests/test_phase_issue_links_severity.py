@@ -544,3 +544,34 @@ class TestTheResolverTokenisesTheIdOnce:
             for repo in (REPO, None):
                 assert (source_lint.resolve_issue_id(ident, repo)
                         == render.blocks.resolve_issue_id(ident, repo)), (ident, repo)
+
+
+# --- acceptance review (codex gpt-6.1-sol, 2026-10-20): findings 1 and 2 ---------------------
+
+class TestTheChecksSeeOnlyTheRowsTheRendererDraws:
+    """Finding 1: any whitespace the renderer reads as an indent makes an item row."""
+
+    @pytest.mark.parametrize("lead", ["  ", " ", " "])
+    def test_unicode_indent_is_an_item_row(self, lead):
+        md = f"```phases\nB | 1 | active\n{lead}#1 | A | planned | low\n```\n"
+        assert 'issues/1"' in _page(md)                 # the renderer draws it as an item
+        findings, _ = source_lint.check_severity(md, REPO, fetch=_high)
+        assert len(findings) == 1 and findings[0].startswith("line 3:"), findings
+        md = f"```phases\nB | 1 | active\n{lead}herdr-utils #67 | A | planned\n```\n"
+        assert len(source_lint.check_issue_links(md, REPO)[0]) == 1
+
+
+class TestAPlainPageIsNotChecked:
+    """Finding 2: `plain` draws a phases fence as a code listing, so stage 3 leaves it alone."""
+
+    def test_plain_style_publishes_a_literal_example(self, tmp_path):
+        proc = TestThePublisherDryRunRefusesAStaleSeverity()._run(
+            tmp_path, "  #256 | a | bug:must | low\n  herdr-utils #67 | b | planned\n",
+            "--style", "plain")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+    def test_a_rich_style_still_refuses_the_same_rows(self, tmp_path):
+        proc = TestThePublisherDryRunRefusesAStaleSeverity()._run(
+            tmp_path, "  #256 | a | bug:must | low\n  herdr-utils #67 | b | planned\n",
+            "--style", "roadmap")
+        assert proc.returncode == 13, proc.stdout + proc.stderr

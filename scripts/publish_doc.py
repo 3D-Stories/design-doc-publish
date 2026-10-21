@@ -1559,7 +1559,8 @@ def assert_manifest_covers(staged: list[str], url_paths: list[str]) -> None:
 
 def source_gate(md_path: Path, *, allow_unsupported: bool = False,
                 ack_stale: bool = False, issue_repo: str | None = None,
-                ack_severity: bool = False, ack_unlinked: bool = False) -> list[str]:
+                ack_severity: bool = False, ack_unlinked: bool = False,
+                style: str | None = None) -> list[str]:
     """Check the SOURCE, before anything deploys. Returns the notes worth printing.
 
     Everything else in this pipeline answers "did the bytes I linted reach the page?" —
@@ -1603,6 +1604,10 @@ def source_gate(md_path: Path, *, allow_unsupported: bool = False,
     # (`herdr-utils #67`) may name another repository, so it is not linked, and it refuses here
     # with both fixes. Offline, and it runs before the severity check so a row it fixes gets its
     # severity checked on the next run.
+    # `plain` draws a phases fence as a code listing, so its rows are text, not items, and
+    # neither check below applies (acceptance review, finding 2). `None` is a rich page.
+    if style == "plain":
+        return notes
     unlinked, unlinked_notes = SOURCE_LINT.check_issue_links(md, issue_repo)
     notes.extend(unlinked_notes)
     if unlinked and not ack_unlinked:
@@ -1901,7 +1906,7 @@ def main(argv=None) -> int:
                                 allow_unsupported=args.allow_unsupported_markdown,
                                 ack_stale=args.ack_stale, issue_repo=issue_repo,
                                 ack_severity=args.ack_severity,
-                                ack_unlinked=args.ack_unlinked):
+                                ack_unlinked=args.ack_unlinked, style=style):
             print(f"publish_doc: {note}")
         gate(page, skip_component_checks=args.skip_component_checks)
         # Said out loud, every run. A skipped check that reports nothing is how a page with
