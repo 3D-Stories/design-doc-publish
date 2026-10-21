@@ -329,15 +329,22 @@ def resolve_issue_id(item_id: str, repo: str | None):
     if m:
         target = m.group(1) or repo
         return ("link", target, int(m.group(2))) if target else ("norepo", None, int(m.group(2)))
+    # Every `#<digit>` counts, a suffixed one too, so `#147a / #231` is unclear rather than a
+    # link to 231 (review r1, finding 4).
+    count = len(_ID_ANY_NUMBER.findall(item_id))
+    if count == 0:
+        return None
     numbers = list(_ID_NUMBER.finditer(item_id))
-    if len(numbers) != 1:
-        return ("unclear", None, None) if _ID_ANY_NUMBER.search(item_id) else None
+    if count != 1 or len(numbers) != 1:
+        return ("unclear", None, None)
     n, before = int(numbers[0].group(1)), item_id[: numbers[0].start()]
     explicit = _ID_TRAIL_REPO.search(before)
     if explicit:
         return ("link", explicit.group(1), n)
     word = _ID_TRAIL_WORD.search(before)
-    if word is None or word.group(1).lower() in _ID_KIND_WORDS:
+    # A run of `-` or `.` alone is a separator, not a word (`FF01 - #67`; finding 3).
+    if (word is None or not re.search(r"\w", word.group(1))
+            or word.group(1).lower() in _ID_KIND_WORDS):
         return ("link", repo, n) if repo else ("norepo", None, n)
     return ("foreign", word.group(1), n)
 
@@ -363,11 +370,31 @@ def _expected(labels: list[str]) -> str | None:
     return next((s for s in _SEVERITIES if s in found), None)
 
 
+def _phase_bodies(md: str):
+    """(fence line number, body) for each `phases` block, found by the renderer's own rule
+    (`markdown.py`): a fence is any line whose stripped text starts with three backticks, its
+    type is the first word after them in any case, the next such line closes it, and an
+    unclosed fence is never a component. `_PHASES` is a literal-prefix regex, so it missed
+    ` ```phases` and matched ```` ```phasesXYZ ```` (review r1, finding 1)."""
+    lines = md.split("\n")
+    i = 0
+    while i < len(lines):
+        if not lines[i].strip().startswith("```"):
+            i += 1
+            continue
+        words = lines[i].strip()[3:].split()
+        start, i = i, i + 1
+        while i < len(lines) and not lines[i].strip().startswith("```"):
+            i += 1
+        if i < len(lines) and words and words[0].lower() == "phases":
+            yield start + 1, "\n".join(lines[start + 1: i])
+        i += 1
+
+
 def _issue_rows(md: str, repo: str | None):
     """Every `phases` item whose id is an issue: (line number, line, repo, number, cell)."""
-    for blk in _PHASES.finditer(md):
-        base = md[: blk.start()].count("\n") + 1
-        for off, raw in enumerate(blk.group(1).splitlines(), 1):
+    for base, body in _phase_bodies(md):
+        for off, raw in enumerate(body.splitlines(), 1):
             if raw[:1] not in (" ", "\t") or not raw.strip():
                 continue                 # a phase row, not an item
             cells = _cells(raw)
@@ -430,9 +457,8 @@ def check_issue_links(md: str, repo: str | None) -> tuple[list[str], list[str]]:
     both fixes, because only the author knows which one is true.
     """
     findings, notes = [], []
-    for blk in _PHASES.finditer(md):
-        base = md[: blk.start()].count("\n") + 1
-        for off, raw in enumerate(blk.group(1).splitlines(), 1):
+    for base, body in _phase_bodies(md):
+        for off, raw in enumerate(body.splitlines(), 1):
             if raw[:1] not in (" ", "\t") or not raw.strip():
                 continue
             cells = _cells(raw)
@@ -444,15 +470,17 @@ def check_issue_links(md: str, repo: str | None) -> tuple[list[str], list[str]]:
                 notes.append(f"line {n}: {ident} holds no single issue number, so it is not "
                              f"linked")
                 continue
-            word, number = found[1], found[2]
-            num = re.search(r"#" + str(number) + r"(?![0-9])", ident)
+            word = found[1]
+            # The resolver's own token, so `#007` keeps its digits and cannot go unfound
+            # (review r1, finding 2). A "foreign" id holds exactly one.
+            num = next(_ID_NUMBER.finditer(ident))
             owner = repo.split("/")[0] if repo else "<owner>"
             rest = raw[raw.index(ident) + len(ident):]
             indent = raw[: len(raw) - len(raw.lstrip())]
-            other = f"{owner}/{word}#{number}"
+            other = f"{owner}/{word}{num.group(0)}"
             local = ident[: num.start()].rstrip() + " · " + ident[num.start():]
             findings.append(
-                f"line {n}: {ident} is not linked: {word!r} before #{number} may name another "
+                f"line {n}: {ident} is not linked: {word!r} before {num.group(0)} may name another "
                 f"repository, and a guessed link could open the wrong issue\n"
                 f"      another repository, write: {indent}{other}{rest}\n"
                 f"      this repository, write:    {indent}{local}{rest}")

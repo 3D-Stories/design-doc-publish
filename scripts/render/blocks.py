@@ -1102,15 +1102,22 @@ def resolve_issue_id(item_id: str, repo: str | None):
     if m:
         target = m.group(1) or repo
         return ("link", target, int(m.group(2))) if target else ("norepo", None, int(m.group(2)))
+    # Every `#<digit>` counts, a suffixed one too, so `#147a / #231` is unclear rather than a
+    # link to 231 (review r1, finding 4).
+    count = len(_ID_ANY_NUMBER.findall(item_id))
+    if count == 0:
+        return None
     numbers = list(_ID_NUMBER.finditer(item_id))
-    if len(numbers) != 1:
-        return ("unclear", None, None) if _ID_ANY_NUMBER.search(item_id) else None
+    if count != 1 or len(numbers) != 1:
+        return ("unclear", None, None)
     n, before = int(numbers[0].group(1)), item_id[: numbers[0].start()]
     explicit = _ID_TRAIL_REPO.search(before)
     if explicit:
         return ("link", explicit.group(1), n)
     word = _ID_TRAIL_WORD.search(before)
-    if word is None or word.group(1).lower() in _ID_KIND_WORDS:
+    # A run of `-` or `.` alone is a separator, not a word (`FF01 - #67`; finding 3).
+    if (word is None or not re.search(r"\w", word.group(1))
+            or word.group(1).lower() in _ID_KIND_WORDS):
         return ("link", repo, n) if repo else ("norepo", None, n)
     return ("foreign", word.group(1), n)
 

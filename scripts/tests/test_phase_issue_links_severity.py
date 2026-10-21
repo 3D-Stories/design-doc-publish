@@ -482,3 +482,65 @@ class TestThePublisherRefusesAnUnlinkedId:
             tmp_path, "  herdr-utils #67 | a | bug:done\n", "--ack-unlinked")
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "--ack-unlinked" in proc.stdout
+
+
+# --- review r1 (codex gpt-6.1-sol, 2026-10-20): findings 1 to 4 -----------------------------
+
+def _high(repo, numbers):
+    return {n: ["severity:high"] for n in numbers}
+
+
+class TestTheChecksFindTheFencesTheRendererDraws:
+    """Finding 1: the checks found fences by a regex the renderer does not use."""
+
+    @pytest.mark.parametrize("fence", [" ```phases", "``` phases", "```Phases", "  ```phases x"])
+    def test_a_fence_the_renderer_draws_is_checked(self, fence):
+        md = f"{fence}\nBacklog | 1 | active\n  #1 | text | planned | low\n```\n"
+        assert 'issues/1"' in _page(md)                 # the renderer does draw it
+        findings, _ = source_lint.check_severity(md, REPO, fetch=_high)
+        assert len(findings) == 1 and findings[0].startswith("line 3:"), findings
+        md = f"{fence}\nBacklog | 1 | active\n  herdr-utils #67 | text | planned\n```\n"
+        assert len(source_lint.check_issue_links(md, REPO)[0]) == 1
+
+    @pytest.mark.parametrize("fence", ["```phasesXYZ", "```text"])
+    def test_a_fence_the_renderer_does_not_draw_is_not_checked(self, fence):
+        md = f"{fence}\nBacklog | 1 | active\n  #1 | text | planned | low\n```\n"
+        assert source_lint.check_severity(md, REPO, fetch=_high) == ([], [])
+
+    def test_an_unclosed_fence_is_not_checked(self):
+        md = "```phases\nBacklog | 1 | active\n  #1 | text | planned | low\n"
+        assert source_lint.check_severity(md, REPO, fetch=_high) == ([], [])
+
+    def test_a_second_block_reports_its_own_line_numbers(self):
+        md = ("```phases\nA | 1 | active\n  #2 | a | planned\n```\n\ntext\n\n"
+              "```phases\nB | 1 | active\n  #1 | b | planned | low\n```\n")
+        findings, _ = source_lint.check_severity(
+            md, REPO, fetch=lambda r, ns: {n: ([] if n == 2 else ["severity:high"]) for n in ns})
+        assert len(findings) == 1 and findings[0].startswith("line 10:"), findings
+
+
+class TestTheResolverTokenisesTheIdOnce:
+    """Findings 2 to 4: the resolver and the fix printer disagreed about the number token."""
+
+    def test_a_leading_zero_number_does_not_crash_and_keeps_its_digits(self):
+        md = "```phases\nB | 1 | active\n  herdr-utils #007 | t | planned\n```\n"
+        findings, _ = source_lint.check_issue_links(md, REPO)
+        assert len(findings) == 1, findings
+        assert "3D-Stories/herdr-utils#007 | t | planned" in findings[0]
+        assert "herdr-utils · #007 | t | planned" in findings[0]
+
+    @pytest.mark.parametrize("ident", ["FF01 - #67", "FF01 . #67", "FF01 -- #67", "x: #67"])
+    def test_a_punctuation_run_before_the_number_is_a_separator(self, ident):
+        assert source_lint.resolve_issue_id(ident, REPO) == ("link", REPO, 67)
+        assert f'href="{URL}67"' in _page(_md(f"  {ident} | a | planned\n"))
+
+    @pytest.mark.parametrize("ident", ["#147a / #231", "#1-foo / #2", "#12a / herdr-utils #12"])
+    def test_a_suffixed_number_beside_a_valid_one_is_unclear(self, ident):
+        assert source_lint.resolve_issue_id(ident, REPO) == ("unclear", None, None)
+        assert f'<span class="blk-ph-id">{ident}</span>' in _page(_md(f"  {ident} | a | planned\n"))
+
+    def test_both_copies_still_agree_on_the_new_cases(self):
+        for ident in ("herdr-utils #007", "FF01 - #67", "#147a / #231", "x: #67", "FF01 -- #67"):
+            for repo in (REPO, None):
+                assert (source_lint.resolve_issue_id(ident, repo)
+                        == render.blocks.resolve_issue_id(ident, repo)), (ident, repo)
