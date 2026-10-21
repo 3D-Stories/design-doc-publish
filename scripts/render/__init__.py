@@ -669,7 +669,8 @@ def _slug(text: str) -> str:
 def render_artifact(markdown: str, *, title: str, subtitle: str = "",
                     telemetry: dict | None = None, generated_at: str | None = None,
                     style: str = "plain", doc_id: str | None = None,
-                    vdl: dict | None = None, section_chips: bool = True) -> str:
+                    vdl: dict | None = None, section_chips: bool = True,
+                    issue_repo: str | None = None) -> str:
     """Render `markdown` to a self-contained CSP-safe HTML string. All text is
     HTML-escaped before rendering (see module docstring). `generated_at` defaults
     to the current mountain-time stamp. `style` selects a template from ``_TEMPLATES``
@@ -713,6 +714,11 @@ def render_artifact(markdown: str, *, title: str, subtitle: str = "",
     # see `_frame`/`templates` docs and `furniture_pack()` below.
     if vdl is not None:
         ctx[_CTX_VDL] = vdl
+    # The GitHub repository a `phases` item id like `#256` links into. Trusted config, from the
+    # project's `.rawgentic.json` through `vdl_packs.repo_for`; `blocks` validates it again
+    # before it reaches an href, so a caller passing junk links nothing rather than anything.
+    if issue_repo is not None:
+        ctx[_blocks.CTX_ISSUE_REPO] = issue_repo
     # Page-level section-chip opt-out for narrative documents whose prose discusses
     # completion vocabulary as subject matter — the scanner's one unfixable-from-the-
     # document shape (see the note at the emission site in `markdown.render_sections`).
@@ -798,6 +804,11 @@ def render_artifact(markdown: str, *, title: str, subtitle: str = "",
 def _resolve_pack(project, workspace_file):
     """Resolve through the shared module, never a local table — that shared answer
     is the only reason the index and the pages agree (#14 §5)."""
+    return _vdl_packs().pack_for(project, workspace_file)
+
+
+def _vdl_packs():
+    """`vdl_packs.py`, loaded from this tree only."""
     import importlib.util
     root = Path(__file__).resolve().parent.parent
     path = root / "vdl_packs.py"
@@ -811,7 +822,7 @@ def _resolve_pack(project, workspace_file):
     spec = importlib.util.spec_from_file_location("_render_vdl_packs", real)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.pack_for(project, workspace_file)
+    return mod
 
 
 def main(argv=None) -> int:
@@ -851,14 +862,16 @@ def main(argv=None) -> int:
         except (OSError, json.JSONDecodeError) as e:
             print(f"render_artifact: could not read telemetry {args.telemetry}: {e}", file=sys.stderr)
             return 2
-    pack = None
+    pack = repo = None
     if args.project:
-        pack = _resolve_pack(args.project,
-                             Path(args.workspace_file) if args.workspace_file else None)
+        workspace = Path(args.workspace_file) if args.workspace_file else None
+        pack = _resolve_pack(args.project, workspace)
+        repo = _vdl_packs().repo_for(args.project, workspace)
     try:
         html_out = render_artifact(md, title=args.title, subtitle=args.subtitle,
                                    telemetry=tel, generated_at=args.generated_at,
-                                   style=args.style, doc_id=args.doc_id, vdl=pack)
+                                   style=args.style, doc_id=args.doc_id, vdl=pack,
+                                   issue_repo=repo)
     except ValueError as e:
         # #72, cross-model review finding 4. `_source_date_epoch` refuses a malformed value
         # rather than falling back to the clock, which is right — but every other refusal in

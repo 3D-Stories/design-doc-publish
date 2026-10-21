@@ -42,7 +42,7 @@ def test_installed_publisher_runs_full_local_gate(installed, tmp_path, style):
         cwd=tmp_path, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "lint gate passed" in proc.stdout
-    assert "stopping before the first network call" in proc.stdout
+    assert "stopping before the first publish network call" in proc.stdout
     assert md.with_suffix(".html").stat().st_size > 1000
     assert md.read_bytes() == (ROOT / "docs/examples/gallery" / f"{style}.md").read_bytes()
 

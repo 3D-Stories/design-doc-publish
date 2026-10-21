@@ -213,7 +213,11 @@ PRE_74 = {
     # (a 64-char hash, a slash-joined issue run) breaks rather than pushing the badge wide
     # (a full-page 2381px scroll on a 780px viewport, owner-reported). Only the roadmap template
     # carries `blk-ph-badge`, so no other style moves; `crossstyle.sh` is the "only mine moved" guard.
-    "roadmap": "5c204bf9c7de63550a8e539ea5d0959b260949e2cdc574cd1bc385b25ae423f3",
+    # ROADMAP ISSUE LINKS AND SEVERITY RE-PINNED `roadmap` ALONE; the other thirteen came back
+    # EQUAL. CONTAINMENT, MEASURED: the new render with the added CSS block (the linked-id and
+    # severity-pill rules) removed exactly once hashes to the pin it replaced. The fixture has no
+    # `#N` item ids, so no body byte moved.
+    "roadmap": "f6e57732fb712bf7338eae0d93718f12207c45b2e5ff9b8d6c242b4abe827d4f",
     # #76 rebuild — re-pinned; see the header note above.
     "report": "0dfa2aeaa65467cdc71631bccb756a8ff7ffc14b0d881da8cb273018822ba61b",
     "design": "6411c999a1391a037eab6a963d0081ef3032cdcd222261744d9c3920d1f3ecf3",
