@@ -291,6 +291,54 @@ class TestCutLabel:
         assert got.path == sibling
 
 
+class TestCapitalsAndHtm:
+    """A #67 follow-up. `label_for` lowercases and strips `.htm` as well as `.html`, and the index
+    lists those files, so the link it prints for one has to resolve. It answered 404 before:
+    `find_document` matched the exact, lower-case `.html` name only."""
+
+    @pytest.mark.parametrize("path", [
+        "docs/My-Doc.HTML",
+        "docs/My-Doc.html",
+        "docs/my-doc.htm",
+        "docs/MY-DOC.Htm",
+        "docs/planning/2026-08-31-My-Doc.HTML",
+    ])
+    def test_a_file_with_capitals_or_an_htm_suffix_is_found_by_its_own_label(self, path):
+        label = label_for("rawgentic", path)
+        date, repo, doc = split_label(label, REPOS)
+        assert find_document([entry(path)], date, doc, repo=repo).path == path
+
+    def test_a_name_that_only_looks_like_html_is_never_served(self):
+        # The label test decides, but a file must still BE an html file to be considered.
+        tree = [entry("docs/my-doc.html.bak"), entry("docs/my-doc.htmx"), entry("docs/my-doc.txt")]
+        assert find_document(tree, None, "my-doc", repo="rawgentic") is None
+
+    @pytest.mark.parametrize("sibling", [
+        LONG_PATH + ".bak",
+        "docs/planning/2026-08-31-claude-builtins-vs-rawgentic-features-review-history.md",
+    ])
+    def test_a_long_sibling_that_is_not_html_neither_answers_nor_blocks_a_cut_label(self, sibling):
+        # The 63-character cut HIDES the suffix, so the label test alone would count this file
+        # as an owner of the label. Only the suffix test keeps it out, and nothing else pins it.
+        date, repo, doc = split_label(CUT_LABEL, REPOS)
+        assert label_for(repo, sibling, fallback_date=date) == CUT_LABEL, sibling
+        assert find_document([entry(sibling)], date, doc, repo=repo) is None
+        assert find_document([entry(sibling), entry(LONG_PATH)], date, doc,
+                             repo=repo).path == LONG_PATH
+
+    def test_two_files_that_agree_on_the_label_are_REFUSED(self):
+        # `My-Doc.html` and `my-doc.htm` are two files for one hostname: a coin toss.
+        with pytest.raises(DocumentAmbiguous):
+            find_document([entry("docs/a/My-Doc.html"), entry("docs/b/my-doc.htm")],
+                          None, "my-doc", repo="rawgentic")
+
+    def test_a_capitalised_file_is_served_through_the_hostname(self):
+        got = ConventionResolver("3D-Stories", source(("docs/My-Doc.HTML",))).resolve(
+            "rawgentic-my-doc", budget())
+        assert got is not None
+        assert got.assets["/index.html"].repo_path == "docs/My-Doc.HTML"
+
+
 from harness.convention import ConventionIndex
 
 
@@ -333,6 +381,28 @@ class TestConventionIndex:
         # It cannot be served — `find_document` refuses it — so advertising it would print a
         # link that answers 409.
         src = index_source(rawgentic=["docs/a/x.html", "docs/b/x.html", "docs/ok.html"])
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["rawgentic-ok"]
+
+    def test_two_names_that_cut_to_one_label_are_not_listed(self):
+        # A #67 follow-up. The basenames differ, so the walk kept both, but their labels are the
+        # same 63 characters and `find_document` refuses that label: it would answer 409.
+        other = "docs/2026-08-31-claude-builtins-vs-rawgentic-features-review-summary.html"
+        src = index_source(rawgentic=[LONG_PATH, other, "docs/ok.html"])
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [r["name"] for r in snap["rows"]] == ["rawgentic-ok"]
+
+    def test_an_exact_name_and_a_cut_sibling_list_the_file_the_link_serves(self):
+        # The exact file wins in `find_document`, so that is the one document the link opens.
+        exact = "docs/2026-08-31-claude-builtins-vs-rawgentic-features-revi.html"
+        src = index_source(rawgentic=[LONG_PATH, exact])
+        snap = ConventionIndex("3D-Stories", src).snapshot(budget())
+        assert [(r["name"], r["title"]) for r in snap["rows"]] == [
+            (CUT_LABEL, "2026-08-31-claude-builtins-vs-rawgentic-features-revi")]
+
+    def test_a_capitalised_name_and_its_lower_case_twin_are_one_link_not_two(self):
+        # `docs/a/My-Doc.html` and `docs/b/my-doc.htm` share a label, so the link is a 409.
+        src = index_source(rawgentic=["docs/a/My-Doc.html", "docs/b/my-doc.htm", "docs/ok.html"])
         snap = ConventionIndex("3D-Stories", src).snapshot(budget())
         assert [r["name"] for r in snap["rows"]] == ["rawgentic-ok"]
 
