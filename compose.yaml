@@ -32,9 +32,9 @@ services:
   cloudflared:
     # Pinned by DIGEST, never a tag. --no-autoupdate does not stop a later pull resolving a
     # different image, so a moving tag would let this stack's behavior change with no commit
-    # to review. This digest is cloudflared version 2026.8.2, and it is the exact binary whose
-    # --token-file support was probed.
-    image: cloudflare/cloudflared@sha256:0aa26e284f05e6c77ae375b8c9c11d9eb6a448fb7bcd8d40f31cb6176189eb38
+    # to review. This digest is cloudflared version 2026.10.5, built with Go 1.27.3, which refuses
+    # the compromised eMudhra intermediates (CVE-2026-111943). --token-file support was probed on 2026.8.2.
+    image: cloudflare/cloudflared@sha256:1b1d34d0a9c0bfca9de72db8460d328db3f19edd2b96169114e3e893a97bbe53
     restart: unless-stopped
     # OPT-IN. #34 documented running the harness locally with no Cloudflare at all, and an
     # always-on tunnel service broke exactly that path. `docker compose up` still brings up
