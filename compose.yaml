@@ -40,6 +40,11 @@ services:
     # always-on tunnel service broke exactly that path. `docker compose up` still brings up
     # only the harness; `docker compose --profile tunnel up -d` is what goes live.
     profiles: ["tunnel"]
+    # The image runs as uid 65532, but the token file is mode 600 and owned by the operator, so
+    # without this the container cannot open it and restarts forever ("permission denied"). That
+    # took the tunnel down for ~50 s on 2026-10-27: the user had lived only in a /tmp override.
+    # Set DOC_HARNESS_TUNNEL_RUN_AS to the token file's owner, e.g. "$(stat -c %u:%g "$file")".
+    user: "${DOC_HARNESS_TUNNEL_RUN_AS:-1000:1000}"
     command: ["tunnel", "--no-autoupdate", "run"]
     environment:
       # The token arrives as a FILE. docker inspect prints a container's environment, so a
