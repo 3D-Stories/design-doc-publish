@@ -68,7 +68,7 @@ class TestStamp:
         assert findings and "not in the footer" in findings[0]
         assert lint.stamp_of(stripped) is None
 
-    @pytest.mark.parametrize("label", ["EST", "CDT", "PST"])
+    @pytest.mark.parametrize("label", ["EST", "CDT", "PST", "CSTX", "MSTX"])
     def test_another_label_is_still_refused(self, label):
         page = _page(stamp=f"2026-11-02 00:25 {label}")
         findings = lint.check_stamp(page)

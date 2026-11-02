@@ -30,7 +30,7 @@ from urllib.parse import unquote
 
 # MDT and MST are the labels tzdata gave Alberta before 2026e, still on committed pages,
 # which `stamp_of` must read back; CST is Alberta's year-round UTC-6 from tzdata 2026e on.
-STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:MDT|MST|CST)")
+STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:MDT|MST|CST)\b")
 
 # The page furniture the renderer emits. A stamp anywhere else is prose, not a stamp.
 _FURNITURE = (
