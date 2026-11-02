@@ -28,7 +28,9 @@ from urllib.parse import unquote
 
 # --- 1. the Edmonton stamp ----------------------------------------------------------
 
-STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:MDT|MST)")
+# MDT and MST are the labels tzdata gave Alberta before 2026e, still on committed pages,
+# which `stamp_of` must read back; CST is Alberta's year-round UTC-6 from tzdata 2026e on.
+STAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:MDT|MST|CST)")
 
 # The page furniture the renderer emits. A stamp anywhere else is prose, not a stamp.
 _FURNITURE = (
@@ -45,7 +47,8 @@ def check_stamp(html: str) -> list[str]:
     if STAMP.search(html):
         return ["an America/Edmonton stamp appears in the body but not in the footer or "
                 "eyebrow — a date quoted in prose is not a page stamp"]
-    return ["no America/Edmonton timestamp (YYYY-MM-DD HH:MM MDT/MST) in the footer or eyebrow"]
+    return ["no America/Edmonton timestamp (YYYY-MM-DD HH:MM MDT/MST/CST) in the footer or "
+            "eyebrow"]
 
 
 def stamp_of(html: str) -> str | None:
@@ -67,7 +70,7 @@ def stamp_of(html: str) -> str | None:
     which is always safe.
 
     **No entity decoding is needed, and that is structural rather than lucky.** `STAMP`
-    matches only digits, hyphens, a colon, spaces and `MDT`/`MST`. `html.escape` rewrites
+    matches only digits, hyphens, a colon, spaces and `MDT`/`MST`/`CST`. `html.escape` rewrites
     none of those, so the escaped and unescaped forms of any stamp it can match are the same
     string.
     """
