@@ -1500,7 +1500,7 @@ class TestTelemetryCanReachThePublishPath:
             full_doc, tmp_path / "c.html", title="T", subtitle="", style="roadmap",
             doc_id="d", telemetry=publish_doc.load_telemetry(
                 self._tel(tmp_path, self.TELEMETRY)))
-        keep = lambda s: re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} M[DS]T", "STAMP", s)
+        keep = lambda s: re.sub(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (?:MDT|MST|CST)", "STAMP", s)
         assert keep(direct) == keep(viaflag)
 
     @pytest.mark.parametrize("payload,fragment", [

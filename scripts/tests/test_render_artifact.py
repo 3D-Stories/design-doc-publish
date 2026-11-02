@@ -153,7 +153,7 @@ def test_generated_at_defaults_to_real_mountain_timestamp():
     """Without an explicit stamp the helper uses a real mountain-time datetime
     (owner preference, #174) with a timezone label — not a placeholder."""
     html = render_artifact.render_artifact("# Doc", title="T")
-    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (MST|MDT|UTC)", html), "a real datetime must be stamped (mountain, or honest UTC fallback if tzdata absent)"
+    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2} (MST|MDT|CST|UTC)", html), "a real datetime must be stamped (mountain, or honest UTC fallback if tzdata absent)"
 
 
 # --- minimal markdown rendering (escape-first, whitelist transforms) ---

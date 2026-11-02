@@ -19,9 +19,9 @@ from render import lint  # noqa: E402
 STYLES = tuple(n for n in render_artifact._TEMPLATES if n != "plain")
 
 
-def _page(style="design", body="body text", title="Real Title"):
+def _page(style="design", body="body text", title="Real Title", stamp="2026-08-01 12:00 MDT"):
     return render_artifact.render_artifact(body, title=title, style=style, doc_id="d",
-                                           generated_at="2026-08-01 12:00 MDT")
+                                           generated_at=stamp)
 
 
 class TestTheEnginePassesItsOwnGate:
@@ -47,6 +47,33 @@ class TestStamp:
 
     def test_no_stamp_at_all_is_reported_differently(self):
         assert "no America/Edmonton timestamp" in lint.check_stamp("<html></html>")[0]
+
+    CST = "2026-11-02 00:25 CST"
+
+    def test_a_CST_stamp_in_the_furniture_passes(self):
+        page = _page(stamp=self.CST)
+        assert self.CST in page
+        assert lint.check_stamp(page) == []
+
+    def test_stamp_of_reads_a_CST_stamp_back(self):
+        page = _page(stamp=self.CST)
+        assert lint.stamp_of(page) == self.CST
+        assert _page(stamp=lint.stamp_of(page)) == page
+
+    def test_a_CST_date_only_in_PROSE_is_still_not_a_stamp(self):
+        page = _page(body="We measured this on 2026-11-02 00:25 CST in the body.")
+        stripped = re.sub(r"<footer\b.*?</footer>", "", page, flags=re.S)
+        stripped = re.sub(r'<div class="eyebrow">.*?</div>', "", stripped, flags=re.S)
+        findings = lint.check_stamp(stripped)
+        assert findings and "not in the footer" in findings[0]
+        assert lint.stamp_of(stripped) is None
+
+    @pytest.mark.parametrize("label", ["EST", "CDT", "PST", "CSTX", "MSTX"])
+    def test_another_label_is_still_refused(self, label):
+        page = _page(stamp=f"2026-11-02 00:25 {label}")
+        findings = lint.check_stamp(page)
+        assert findings and "no America/Edmonton timestamp" in findings[0]
+        assert lint.stamp_of(page) is None
 
 
 class TestTitle:
